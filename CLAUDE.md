@@ -173,6 +173,26 @@ The principles that have already earned their place here:
   matched a live 422 exactly — on a form with zero conditional rules, so the match validated only
   the trivial half. See `TODO.md` C1.
 
+## Testing tiers
+
+Three, not two (ADR-004):
+
+- **unit** — every path, against `FakeBackend`, offline, gates CI.
+- **integration** — reads and reversible writes, live, opt-in.
+- **observational** — irreversible operations, verified by measuring **the platform's own
+  instances** of them, read-only. An operation qualifies when the platform performs it routinely
+  under its own rules and leaves evidence we can read.
+
+Observational verification answers a different question from a write-test. A write-test asks
+*did my call work?*; observation asks *how does this behave here, including through paths I did
+not know about?* Its first run established that the closure automation works as configured **and**
+that a large share of closures come from somewhere else entirely — most likely merges, which
+close the source ticket.
+
+An operation with **no observable instances and no safe test** is excluded under ADR-001 rather
+than shipped untested. The observational suite must report *insufficient evidence* distinctly
+from *pass*; a check that cannot fail is theatre.
+
 ## Commands
 
 **Always work inside a virtual environment.** Never `pip install` into a system Python.
