@@ -42,6 +42,7 @@ Status: `open` · `in progress` · `blocked` · `done`
 | C2 | **`required_on_statuses.type` is not enumerated.** `SOME_STATUSES` observed; `ALL_STATUSES` inferred and unverified. The whole `agent_conditions` structure is undocumented. | open | Keep the compute-vs-422 comparison as a conformance test so upstream shape changes fail loudly. |
 | C3 | ~~Confirm `status: "closed"` is rejected~~ | **done** | It is **accepted**, and terminal. See `API-SURFACE.md` §5.4d. The earlier claim that it was automation-only was wrong. |
 | C4 | ~~Confirm the default for `comment.public` when omitted~~ | **done** | There is no fixed default: it **inherits from the ticket's first comment**, so email-originated tickets default to public. `API-SURFACE.md` §5.4f. Answered from docs + read-only observation rather than by emailing four uninvolved people. |
+| C6 | **`merge_tickets` is a closing operation** — merging closes the source ticket, which observational sampling suggests is a significant real-world path to the irreversible state. It needs a gate at `ticket.close` level, not `ticket.write`, and a tool description that says so. | open | Found by ADR-004's technique, not by reading docs. |
 | C5 | **Seed a cursor-capability table** from the Ruby client's path list, then verify each against live probes. Single-sourced today. | open | |
 
 ## D. Repo and process
