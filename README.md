@@ -75,6 +75,9 @@ the same guarantee an MCP client does.
 | `analysis/family-probe.json` | 49 live availability probes |
 | `scripts/inventory.py` | Regenerates the inventory from `specs/` |
 | `scripts/probe_families.py` | Re-runs the live probes (GET only) |
+| `scripts/probe_access.py` | Access audit: what the credential actually reaches |
+| `DECISIONS-ADR.md` | Decision log index; entries in `DECISIONS-ADR/` |
+| `WAITING-FOR.md` | Conditions with observable triggers; entries in `WAITING-FOR/` |
 
 Zendesk publishes the OpenAPI specs but links to none of them; all three were found by probing
 URL shapes. They are snapshots of someone else's moving target — re-fetch and diff before
@@ -96,6 +99,19 @@ written:
 3. **Pagination cannot be generated from the specs.** The Help Center spec declares paging on 0
    of 96 GET operations, yet cursor paging demonstrably works. The generator must not read
    silence as "unpaginated".
+
+## Deliberate exclusions
+
+Six families — 47 operations, 5% of the surface — are **out of scope and will not be built**:
+IT Asset Management, Group SLA Policies, Workspaces, Ticket Form Statuses, Audit Logs, and
+Help Center Service Catalog Items. The development account cannot reach them (403: a plan
+boundary), so they cannot be tested, and this project does not ship API code it has never
+called. See [ADR-001](DECISIONS-ADR/ADR-001.md) for the reasoning and
+[WAITING-FOR-001](WAITING-FOR/WAITING-FOR-001.md) for what would reopen it.
+
+This does not relax the error layer: plan boundaries differ per account, so any deployment can
+meet a 403 on an endpoint we *did* implement, and the taxonomy must say "your plan does not
+include this" rather than "this is broken".
 
 ## Configuration
 
