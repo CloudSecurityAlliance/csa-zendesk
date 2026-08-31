@@ -74,10 +74,17 @@ plausible answer while being wrong.
    cursor-sortable, so "newest tickets" has no direct expression — `sort=-id` is the proxy and
    translating it is the tool layer's job.
 5. **Offset paging dies at 10,000 records** with a typed `InvalidPaginationDepth`.
-6. **Errors arrive in four incompatible envelopes.** On a validation refusal everything useful
-   is in `details.base[]` — field id and type per violation. A parser reading only `error` and
-   `description` gets "RecordInvalid / Record validation errors" and discards the diagnosis.
-   Zendesk's own Ruby client reads `details` first, then falls back across four keys.
+6. **Errors arrive in four incompatible envelopes**, and on a validation refusal everything
+   useful is in `details` — which is a **map from field name to a list of problems**, not a
+   fixed shape. Whole-record problems land under `base`; field-scoped ones land under the field
+   (`details.status[]`). **Iterate the keys of `details`; never index one** — a parser hardcoded
+   to `details.base` finds nothing on a field-scoped error. A parser reading only `error` and
+   `description` gets "RecordInvalid / Record validation errors" and discards the diagnosis
+   entirely. Zendesk's own Ruby client reads `details` first, then falls back across four keys.
+12. **`status: "closed"` is accepted by the API and is terminal.** A closed ticket refuses every
+   further write, including reopening, and the web UI does not offer Closed in its status picker
+   at all. It must be gated separately from both writes and `solve`, and its tool description
+   must say it cannot be undone.
 7. **`404` means two different things.** `InvalidEndpoint` is "not on this account";
    `RecordNotFound` is "wrong id". Collapsing them loses the plan-versus-id distinction.
    Similarly a `403` is a plan boundary, not an outage — the official clients get this wrong.
