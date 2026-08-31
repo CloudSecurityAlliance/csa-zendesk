@@ -35,6 +35,11 @@ experiments/**/*_response.json
 # was the wrong line. The right line is whose facts these are, and these are CSA's.
 tenant-config/
 
+# --- candidate dependency clones -------------------------------------------
+# Existing Zendesk client libraries, cloned for build-vs-adopt evaluation.
+# Other people's code under their own licences; findings go in analysis/.
+other-zendesk-libraries/
+
 # --- prior-art survey ------------------------------------------------------
 # Clones of other people's Zendesk MCP servers, for comparison. Other people's
 # code under their own licences - never committed here. What we LEARNED from
