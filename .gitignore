@@ -1,0 +1,62 @@
+# --- credentials: never commit -------------------------------------------
+# A public repo must not depend on any contributor's *global* gitignore for
+# this. The file below holds a live Zendesk admin credential.
+.env
+.env.*
+!.env.example
+*token*.json
+*secret*.json
+credentials.json
+*.pem
+
+# --- Zendesk data ----------------------------------------------------------
+# Ticket bodies are customer correspondence: real names, email addresses, and
+# whatever a requester chose to paste in. Probe output records COUNTS AND
+# SHAPES ONLY - never rows. Anything below is extracted data, not analysis.
+probe-output/
+*.probe.json
+analysis/*-response.json
+analysis/*-sample.json
+# Probe artifacts describing THIS tenant rather than the Zendesk product.
+analysis/family-probe.json
+analysis/ui-action-vocabulary.json
+# Experiment captures hold real ticket state. The RESULTS.md write-up and the
+# scripts are committed; the raw captures they produce are not.
+experiments/**/before.json
+experiments/**/*-response.json
+experiments/**/*_response.json
+
+# --- tenant configuration extract -----------------------------------------
+# The rules CSA's Zendesk runs on: groups, SLA policies, trigger rules, routing,
+# support addresses, installed apps. Infrastructure detail, and this repo goes
+# public. The committed artifact is the structural SUMMARY, not the extract.
+# EVERYTHING here is private, the summary included. An earlier version tracked
+# tenant-config/SUMMARY.md on the grounds that counts and shapes are harmless; that
+# was the wrong line. The right line is whose facts these are, and these are CSA's.
+tenant-config/
+
+# --- prior-art survey ------------------------------------------------------
+# Clones of other people's Zendesk MCP servers, for comparison. Other people's
+# code under their own licences - never committed here. What we LEARNED from
+# them belongs in analysis/, in our own words, with attribution.
+other-zendesk-mcp-servers/
+
+# --- python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- editors / os ----------------------------------------------------------
+.DS_Store
+*.swp
+.idea/
+.vscode/

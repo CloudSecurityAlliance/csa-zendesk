@@ -1,0 +1,14 @@
+#!/bin/sh
+# Refuse a commit that would put tenant-specific material in this public repo.
+# Enable with:  git config core.hooksPath .githooks
+#
+# This runs against tracked files, so it catches content already staged. It is a
+# backstop, not the control - the control is knowing the line. See
+# scripts/check_public_safe.py for what the line is and why.
+python3 scripts/check_public_safe.py || {
+    echo
+    echo "pre-commit: refused. Fix the findings, or move the material to the"
+    echo "private tenant repo. To override for a deliberate exception:"
+    echo "    git commit --no-verify"
+    exit 1
+}

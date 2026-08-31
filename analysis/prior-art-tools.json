@@ -1,0 +1,1149 @@
+{
+ "note": "Twelve public Zendesk MCP servers, surveyed from source. Aliased deliberately: this is a survey of an ecosystem, not a review of anyone's project. The alias map is kept privately.",
+ "servers": {
+  "Server A": {
+   "tools": 51,
+   "naming": "bare",
+   "surface": [
+    "add_private_note",
+    "add_public_comment",
+    "archive_article",
+    "compare_translations",
+    "create_article",
+    "create_article_attachment",
+    "create_article_translation",
+    "create_content_tag",
+    "create_ticket",
+    "find_translation_gaps",
+    "get_article",
+    "get_article_outline",
+    "get_article_section",
+    "get_current_user",
+    "get_linked_incidents",
+    "get_organization",
+    "get_ticket",
+    "get_ticket_attachments",
+    "get_ticket_history",
+    "get_user",
+    "get_view_tickets",
+    "list_article_attachments",
+    "list_article_translations",
+    "list_articles",
+    "list_categories",
+    "list_category_translations",
+    "list_content_tags",
+    "list_labels",
+    "list_macros",
+    "list_organizations",
+    "list_permission_groups",
+    "list_section_translations",
+    "list_sections",
+    "list_sla_policies",
+    "list_ticket_fields",
+    "list_tickets",
+    "list_user_segments",
+    "list_views",
+    "manage_tags",
+    "preview_macro_diff",
+    "reload_tools",
+    "reorder_article",
+    "search_articles",
+    "search_tickets",
+    "search_users",
+    "set_category_translation",
+    "set_section_translation",
+    "update_article",
+    "update_article_section",
+    "update_article_translation",
+    "update_ticket"
+   ]
+  },
+  "Server B": {
+   "tools": 48,
+   "naming": "bare",
+   "surface": [
+    "create_article",
+    "create_automation",
+    "create_group",
+    "create_macro",
+    "create_organization",
+    "create_ticket",
+    "create_trigger",
+    "create_user",
+    "create_view",
+    "delete_article",
+    "delete_automation",
+    "delete_group",
+    "delete_macro",
+    "delete_organization",
+    "delete_ticket",
+    "delete_trigger",
+    "delete_user",
+    "delete_view",
+    "get_article",
+    "get_automation",
+    "get_group",
+    "get_macro",
+    "get_organization",
+    "get_talk_stats",
+    "get_ticket",
+    "get_trigger",
+    "get_user",
+    "get_view",
+    "list_articles",
+    "list_automations",
+    "list_chats",
+    "list_groups",
+    "list_macros",
+    "list_organizations",
+    "list_tickets",
+    "list_triggers",
+    "list_users",
+    "list_views",
+    "support_info",
+    "update_article",
+    "update_automation",
+    "update_group",
+    "update_macro",
+    "update_organization",
+    "update_ticket",
+    "update_trigger",
+    "update_user",
+    "update_view"
+   ]
+  },
+  "Server C": {
+   "tools": 33,
+   "naming": "bare",
+   "surface": [
+    "delete_cached_attachment",
+    "download_and_extract_attachment",
+    "download_attachment",
+    "download_attachment_to_disk",
+    "get_article",
+    "get_attachment",
+    "get_automation",
+    "get_group",
+    "get_macro",
+    "get_organization",
+    "get_talk_stats",
+    "get_ticket",
+    "get_trigger",
+    "get_user",
+    "get_view",
+    "list_articles",
+    "list_attachment_files",
+    "list_automations",
+    "list_chats",
+    "list_groups",
+    "list_macros",
+    "list_organizations",
+    "list_ticket_comments",
+    "list_tickets",
+    "list_triggers",
+    "list_users",
+    "list_views",
+    "read_attachment_file",
+    "search",
+    "search_attachment_files",
+    "store_and_extract_attachment",
+    "store_attachment",
+    "support_info"
+   ]
+  },
+  "Server D": {
+   "tools": 29,
+   "naming": "prefixed",
+   "surface": [
+    "add_tag",
+    "apply_macro",
+    "assign_ticket",
+    "create_ticket",
+    "download_attachment",
+    "get_comments",
+    "get_git_zen_links",
+    "get_group_users",
+    "get_groups",
+    "get_organization",
+    "get_ticket",
+    "get_tickets",
+    "get_time_tracking",
+    "get_view",
+    "get_view_tickets",
+    "list_attachments",
+    "list_custom_statuses",
+    "list_macros",
+    "list_views",
+    "log_time",
+    "post_comment",
+    "post_internal_note",
+    "preview_macro",
+    "remove_tag",
+    "search_tickets",
+    "search_users",
+    "set_ticket_status",
+    "ticket_to_gitlab_context",
+    "update_ticket"
+   ]
+  },
+  "Server E": {
+   "tools": 27,
+   "naming": "bare",
+   "surface": [
+    "add_comment",
+    "add_ticket_tags",
+    "bulk_solve_tickets_by_type",
+    "count_tickets",
+    "count_view",
+    "create_ticket",
+    "edit_ticket",
+    "get_agent_performance_today",
+    "get_organization",
+    "get_ticket",
+    "get_ticket_audits",
+    "get_ticket_comments",
+    "get_trigger",
+    "get_user",
+    "get_view",
+    "list_automations",
+    "list_groups",
+    "list_macros",
+    "list_ticket_fields",
+    "list_triggers",
+    "list_view_tickets",
+    "remove_ticket_tags",
+    "search_organizations",
+    "search_tickets",
+    "search_triggers",
+    "search_users",
+    "solve_ticket"
+   ]
+  },
+  "Server F": {
+   "tools": 26,
+   "naming": "prefixed",
+   "surface": [
+    "add_private_note",
+    "add_public_note",
+    "auth_status",
+    "create_ticket",
+    "get_attachment",
+    "get_current_user",
+    "get_linked_incidents",
+    "get_organization",
+    "get_satisfaction_rating",
+    "get_satisfaction_ratings",
+    "get_ticket",
+    "get_ticket_details",
+    "get_ticket_metrics",
+    "get_user",
+    "get_view_count",
+    "get_view_tickets",
+    "list_groups",
+    "list_sla_policies",
+    "list_tags",
+    "list_ticket_metrics",
+    "list_views",
+    "query_stored",
+    "search",
+    "search_organizations",
+    "search_users",
+    "update_ticket"
+   ]
+  },
+  "Server G": {
+   "tools": 19,
+   "naming": "prefixed",
+   "surface": [
+    "add_comment",
+    "apply_macro",
+    "download_attachment",
+    "fetch_view_tickets",
+    "get_ticket",
+    "get_user",
+    "list_macros",
+    "list_views",
+    "login",
+    "organization_tickets",
+    "request",
+    "requester_tickets",
+    "search",
+    "search_users",
+    "session_status",
+    "ticket_audits",
+    "ticket_fields",
+    "ticket_metrics",
+    "update_ticket"
+   ]
+  },
+  "Server H": {
+   "tools": 9,
+   "naming": "bare",
+   "surface": [
+    "begin_oauth_authorization",
+    "complete_oauth_authorization",
+    "create_ticket",
+    "create_ticket_comment",
+    "get_ticket",
+    "get_ticket_attachment",
+    "get_ticket_comments",
+    "get_tickets",
+    "update_ticket"
+   ]
+  },
+  "Server I": {
+   "tools": 8,
+   "naming": "prefixed",
+   "surface": [
+    "add_private_note",
+    "add_public_note",
+    "create_ticket",
+    "get_linked_incidents",
+    "get_ticket",
+    "get_ticket_details",
+    "search",
+    "update_ticket"
+   ]
+  },
+  "Server J": {
+   "tools": 7,
+   "naming": "bare",
+   "surface": [
+    "create_ticket",
+    "create_ticket_comment",
+    "get_ticket",
+    "get_ticket_attachment",
+    "get_ticket_comments",
+    "get_tickets",
+    "update_ticket"
+   ]
+  },
+  "Server K": {
+   "tools": 4,
+   "naming": "bare",
+   "surface": [
+    "get_ticket",
+    "get_ticket_comments",
+    "list_tickets",
+    "search_tickets"
+   ]
+  },
+  "Server L": {
+   "tools": 2,
+   "naming": "bare",
+   "surface": [
+    "getarticle",
+    "searcharticles"
+   ]
+  }
+ },
+ "frequency": {
+  "get_ticket": 11,
+  "create_ticket": 8,
+  "update_ticket": 8,
+  "get_organization": 6,
+  "get_user": 6,
+  "list_macros": 6,
+  "list_views": 6,
+  "search_users": 5,
+  "get_ticket_comments": 4,
+  "list_tickets": 4,
+  "search_tickets": 4,
+  "get_view": 4,
+  "list_groups": 4,
+  "search": 4,
+  "get_trigger": 3,
+  "list_automations": 3,
+  "list_triggers": 3,
+  "add_private_note": 3,
+  "get_linked_incidents": 3,
+  "get_view_tickets": 3,
+  "get_tickets": 3,
+  "get_article": 3,
+  "list_articles": 3,
+  "list_organizations": 3,
+  "download_attachment": 3,
+  "add_comment": 2,
+  "list_ticket_fields": 2,
+  "search_organizations": 2,
+  "add_public_note": 2,
+  "get_attachment": 2,
+  "get_current_user": 2,
+  "get_ticket_details": 2,
+  "list_sla_policies": 2,
+  "create_ticket_comment": 2,
+  "get_ticket_attachment": 2,
+  "create_article": 2,
+  "update_article": 2,
+  "get_automation": 2,
+  "get_group": 2,
+  "get_macro": 2,
+  "get_talk_stats": 2,
+  "list_chats": 2,
+  "list_users": 2,
+  "support_info": 2,
+  "apply_macro": 2,
+  "add_ticket_tags": 1,
+  "bulk_solve_tickets_by_type": 1,
+  "count_tickets": 1,
+  "count_view": 1,
+  "edit_ticket": 1,
+  "get_agent_performance_today": 1,
+  "get_ticket_audits": 1,
+  "list_view_tickets": 1,
+  "remove_ticket_tags": 1,
+  "search_triggers": 1,
+  "solve_ticket": 1,
+  "auth_status": 1,
+  "get_satisfaction_rating": 1,
+  "get_satisfaction_ratings": 1,
+  "get_ticket_metrics": 1,
+  "get_view_count": 1,
+  "list_tags": 1,
+  "list_ticket_metrics": 1,
+  "query_stored": 1,
+  "begin_oauth_authorization": 1,
+  "complete_oauth_authorization": 1,
+  "add_public_comment": 1,
+  "archive_article": 1,
+  "compare_translations": 1,
+  "create_article_attachment": 1,
+  "create_article_translation": 1,
+  "create_content_tag": 1,
+  "find_translation_gaps": 1,
+  "get_article_outline": 1,
+  "get_article_section": 1,
+  "get_ticket_attachments": 1,
+  "get_ticket_history": 1,
+  "list_article_attachments": 1,
+  "list_article_translations": 1,
+  "list_categories": 1,
+  "list_category_translations": 1,
+  "list_content_tags": 1,
+  "list_labels": 1,
+  "list_permission_groups": 1,
+  "list_section_translations": 1,
+  "list_sections": 1,
+  "list_user_segments": 1,
+  "manage_tags": 1,
+  "preview_macro_diff": 1,
+  "reload_tools": 1,
+  "reorder_article": 1,
+  "search_articles": 1,
+  "set_category_translation": 1,
+  "set_section_translation": 1,
+  "update_article_section": 1,
+  "update_article_translation": 1,
+  "getarticle": 1,
+  "searcharticles": 1,
+  "create_automation": 1,
+  "create_group": 1,
+  "create_macro": 1,
+  "create_organization": 1,
+  "create_trigger": 1,
+  "create_user": 1,
+  "create_view": 1,
+  "delete_article": 1,
+  "delete_automation": 1,
+  "delete_group": 1,
+  "delete_macro": 1,
+  "delete_organization": 1,
+  "delete_ticket": 1,
+  "delete_trigger": 1,
+  "delete_user": 1,
+  "delete_view": 1,
+  "update_automation": 1,
+  "update_group": 1,
+  "update_macro": 1,
+  "update_organization": 1,
+  "update_trigger": 1,
+  "update_user": 1,
+  "update_view": 1,
+  "add_tag": 1,
+  "assign_ticket": 1,
+  "get_comments": 1,
+  "get_git_zen_links": 1,
+  "get_group_users": 1,
+  "get_groups": 1,
+  "get_time_tracking": 1,
+  "list_attachments": 1,
+  "list_custom_statuses": 1,
+  "log_time": 1,
+  "post_comment": 1,
+  "post_internal_note": 1,
+  "preview_macro": 1,
+  "remove_tag": 1,
+  "set_ticket_status": 1,
+  "ticket_to_gitlab_context": 1,
+  "delete_cached_attachment": 1,
+  "download_and_extract_attachment": 1,
+  "download_attachment_to_disk": 1,
+  "list_attachment_files": 1,
+  "list_ticket_comments": 1,
+  "read_attachment_file": 1,
+  "search_attachment_files": 1,
+  "store_and_extract_attachment": 1,
+  "store_attachment": 1,
+  "fetch_view_tickets": 1,
+  "login": 1,
+  "organization_tickets": 1,
+  "request": 1,
+  "requester_tickets": 1,
+  "session_status": 1,
+  "ticket_audits": 1,
+  "ticket_fields": 1,
+  "ticket_metrics": 1
+ },
+ "by_domain": {
+  "ticket read": [
+   [
+    11,
+    "get_ticket"
+   ],
+   [
+    4,
+    "search_tickets"
+   ],
+   [
+    4,
+    "list_tickets"
+   ],
+   [
+    4,
+    "get_ticket_comments"
+   ],
+   [
+    3,
+    "get_tickets"
+   ],
+   [
+    3,
+    "get_linked_incidents"
+   ],
+   [
+    2,
+    "list_ticket_fields"
+   ],
+   [
+    2,
+    "get_ticket_details"
+   ],
+   [
+    2,
+    "get_ticket_attachment"
+   ],
+   [
+    1,
+    "ticket_metrics"
+   ],
+   [
+    1,
+    "ticket_fields"
+   ],
+   [
+    1,
+    "ticket_audits"
+   ],
+   [
+    1,
+    "set_ticket_status"
+   ],
+   [
+    1,
+    "list_ticket_metrics"
+   ],
+   [
+    1,
+    "list_ticket_comments"
+   ],
+   [
+    1,
+    "get_ticket_metrics"
+   ],
+   [
+    1,
+    "get_ticket_history"
+   ],
+   [
+    1,
+    "get_ticket_audits"
+   ],
+   [
+    1,
+    "get_ticket_attachments"
+   ],
+   [
+    1,
+    "count_tickets"
+   ]
+  ],
+  "comments/notes": [
+   [
+    3,
+    "add_private_note"
+   ],
+   [
+    2,
+    "add_public_note"
+   ],
+   [
+    2,
+    "add_comment"
+   ],
+   [
+    1,
+    "get_comments"
+   ],
+   [
+    1,
+    "add_public_comment"
+   ]
+  ],
+  "ticket write": [
+   [
+    8,
+    "update_ticket"
+   ],
+   [
+    8,
+    "create_ticket"
+   ],
+   [
+    2,
+    "create_ticket_comment"
+   ],
+   [
+    1,
+    "solve_ticket"
+   ],
+   [
+    1,
+    "remove_ticket_tags"
+   ],
+   [
+    1,
+    "remove_tag"
+   ],
+   [
+    1,
+    "delete_ticket"
+   ],
+   [
+    1,
+    "bulk_solve_tickets_by_type"
+   ],
+   [
+    1,
+    "assign_ticket"
+   ],
+   [
+    1,
+    "add_ticket_tags"
+   ],
+   [
+    1,
+    "add_tag"
+   ]
+  ],
+  "views/queues": [
+   [
+    6,
+    "list_views"
+   ],
+   [
+    4,
+    "get_view"
+   ],
+   [
+    3,
+    "get_view_tickets"
+   ],
+   [
+    1,
+    "update_view"
+   ],
+   [
+    1,
+    "list_view_tickets"
+   ],
+   [
+    1,
+    "get_view_count"
+   ],
+   [
+    1,
+    "fetch_view_tickets"
+   ],
+   [
+    1,
+    "delete_view"
+   ],
+   [
+    1,
+    "create_view"
+   ],
+   [
+    1,
+    "count_view"
+   ]
+  ],
+  "other": [
+   [
+    2,
+    "support_info"
+   ],
+   [
+    2,
+    "list_chats"
+   ],
+   [
+    1,
+    "ticket_to_gitlab_context"
+   ],
+   [
+    1,
+    "request"
+   ],
+   [
+    1,
+    "reload_tools"
+   ],
+   [
+    1,
+    "manage_tags"
+   ],
+   [
+    1,
+    "login"
+   ],
+   [
+    1,
+    "list_tags"
+   ],
+   [
+    1,
+    "list_content_tags"
+   ],
+   [
+    1,
+    "get_git_zen_links"
+   ],
+   [
+    1,
+    "edit_ticket"
+   ],
+   [
+    1,
+    "create_content_tag"
+   ]
+  ],
+  "users": [
+   [
+    6,
+    "get_user"
+   ],
+   [
+    5,
+    "search_users"
+   ],
+   [
+    2,
+    "list_users"
+   ],
+   [
+    2,
+    "get_current_user"
+   ],
+   [
+    1,
+    "update_user"
+   ],
+   [
+    1,
+    "requester_tickets"
+   ],
+   [
+    1,
+    "list_user_segments"
+   ],
+   [
+    1,
+    "get_group_users"
+   ],
+   [
+    1,
+    "get_agent_performance_today"
+   ],
+   [
+    1,
+    "delete_user"
+   ],
+   [
+    1,
+    "create_user"
+   ]
+  ],
+  "orgs": [
+   [
+    6,
+    "get_organization"
+   ],
+   [
+    3,
+    "list_organizations"
+   ],
+   [
+    2,
+    "search_organizations"
+   ],
+   [
+    1,
+    "update_organization"
+   ],
+   [
+    1,
+    "organization_tickets"
+   ],
+   [
+    1,
+    "delete_organization"
+   ],
+   [
+    1,
+    "create_organization"
+   ]
+  ],
+  "automation rules": [
+   [
+    3,
+    "list_triggers"
+   ],
+   [
+    3,
+    "list_automations"
+   ],
+   [
+    3,
+    "get_trigger"
+   ],
+   [
+    2,
+    "list_sla_policies"
+   ],
+   [
+    2,
+    "get_automation"
+   ],
+   [
+    1,
+    "update_trigger"
+   ],
+   [
+    1,
+    "update_automation"
+   ],
+   [
+    1,
+    "search_triggers"
+   ],
+   [
+    1,
+    "delete_trigger"
+   ],
+   [
+    1,
+    "delete_automation"
+   ],
+   [
+    1,
+    "create_trigger"
+   ],
+   [
+    1,
+    "create_automation"
+   ]
+  ],
+  "groups": [
+   [
+    4,
+    "list_groups"
+   ],
+   [
+    2,
+    "get_group"
+   ],
+   [
+    1,
+    "update_group"
+   ],
+   [
+    1,
+    "list_permission_groups"
+   ],
+   [
+    1,
+    "get_groups"
+   ],
+   [
+    1,
+    "delete_group"
+   ],
+   [
+    1,
+    "create_group"
+   ]
+  ],
+  "macros": [
+   [
+    6,
+    "list_macros"
+   ],
+   [
+    2,
+    "get_macro"
+   ],
+   [
+    2,
+    "apply_macro"
+   ],
+   [
+    1,
+    "update_macro"
+   ],
+   [
+    1,
+    "preview_macro_diff"
+   ],
+   [
+    1,
+    "preview_macro"
+   ],
+   [
+    1,
+    "delete_macro"
+   ],
+   [
+    1,
+    "create_macro"
+   ]
+  ],
+  "time/reporting": [
+   [
+    2,
+    "get_talk_stats"
+   ],
+   [
+    1,
+    "session_status"
+   ],
+   [
+    1,
+    "log_time"
+   ],
+   [
+    1,
+    "list_custom_statuses"
+   ],
+   [
+    1,
+    "get_time_tracking"
+   ],
+   [
+    1,
+    "get_satisfaction_ratings"
+   ],
+   [
+    1,
+    "get_satisfaction_rating"
+   ],
+   [
+    1,
+    "auth_status"
+   ]
+  ],
+  "attachments": [
+   [
+    3,
+    "download_attachment"
+   ],
+   [
+    2,
+    "get_attachment"
+   ],
+   [
+    1,
+    "store_attachment"
+   ],
+   [
+    1,
+    "store_and_extract_attachment"
+   ],
+   [
+    1,
+    "search_attachment_files"
+   ],
+   [
+    1,
+    "read_attachment_file"
+   ],
+   [
+    1,
+    "list_attachments"
+   ],
+   [
+    1,
+    "list_attachment_files"
+   ],
+   [
+    1,
+    "download_attachment_to_disk"
+   ],
+   [
+    1,
+    "download_and_extract_attachment"
+   ],
+   [
+    1,
+    "delete_cached_attachment"
+   ]
+  ],
+  "search": [
+   [
+    4,
+    "search"
+   ],
+   [
+    1,
+    "query_stored"
+   ]
+  ],
+  "auth/meta": [
+   [
+    1,
+    "complete_oauth_authorization"
+   ],
+   [
+    1,
+    "begin_oauth_authorization"
+   ]
+  ],
+  "help center": [
+   [
+    3,
+    "list_articles"
+   ],
+   [
+    3,
+    "get_article"
+   ],
+   [
+    2,
+    "update_article"
+   ],
+   [
+    2,
+    "create_article"
+   ],
+   [
+    1,
+    "update_article_translation"
+   ],
+   [
+    1,
+    "update_article_section"
+   ],
+   [
+    1,
+    "set_section_translation"
+   ],
+   [
+    1,
+    "set_category_translation"
+   ],
+   [
+    1,
+    "searcharticles"
+   ],
+   [
+    1,
+    "search_articles"
+   ],
+   [
+    1,
+    "reorder_article"
+   ],
+   [
+    1,
+    "post_internal_note"
+   ],
+   [
+    1,
+    "post_comment"
+   ],
+   [
+    1,
+    "list_sections"
+   ],
+   [
+    1,
+    "list_section_translations"
+   ],
+   [
+    1,
+    "list_labels"
+   ],
+   [
+    1,
+    "list_category_translations"
+   ],
+   [
+    1,
+    "list_categories"
+   ],
+   [
+    1,
+    "list_article_translations"
+   ],
+   [
+    1,
+    "list_article_attachments"
+   ],
+   [
+    1,
+    "getarticle"
+   ],
+   [
+    1,
+    "get_article_section"
+   ],
+   [
+    1,
+    "get_article_outline"
+   ],
+   [
+    1,
+    "find_translation_gaps"
+   ],
+   [
+    1,
+    "delete_article"
+   ],
+   [
+    1,
+    "create_article_translation"
+   ],
+   [
+    1,
+    "create_article_attachment"
+   ],
+   [
+    1,
+    "compare_translations"
+   ],
+   [
+    1,
+    "archive_article"
+   ]
+  ]
+ }
+}
