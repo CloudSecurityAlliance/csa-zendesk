@@ -177,3 +177,57 @@ misses a requirement reports "ready to solve" and is then refused.
   locales, brands, custom roles, SLA and routing definitions, macro/trigger/view definitions,
   account settings. Enough to describe an account's setup without touching a single ticket, which
   is a capability worth exposing on its own.
+
+---
+
+# Addendum, 2026-08-31: closing the test ticket, and what it cost
+
+Two verification gaps were probed together. The first destroyed the means of answering the
+second.
+
+## What was run
+
+```
+PUT /api/v2/tickets/{id}  {"ticket": {"status": "closed"}}    -> 200
+PUT /api/v2/tickets/{id}  {"ticket": {"comment": {...}}}      -> 422
+   {"details": {"status": [{"description": "closed prevents ticket update"}]}}
+```
+
+The first call was framed as *"confirm `closed` is rejected"*. It was not rejected. The ticket
+closed, and closed is terminal — reopening returns the same 422, as does any other write. The
+second call, which was to establish whether `comment.public` defaults to public or private, could
+not run, and that question is now blocked on provisioning another disposable ticket.
+
+## Findings, which are real and worth having
+
+1. **`status: "closed"` is accepted through the API.** An earlier assertion in
+   `API-SURFACE.md` — that Closed was automation-only and unreachable by an agent — was wrong.
+2. **Closed is terminal.** Every subsequent write is refused. There is no reopen; the platform's
+   answer is a follow-up ticket. Reads still work.
+3. **The web UI does not offer Closed** in its status picker. This is an action the API permits
+   and the interface declines to expose — the opposite of the usual direction.
+4. **`details` is a map from field name to problems**, not a fixed shape. Required-fields
+   refusals use `details.base[]`; this one uses `details.status[]`. Iterate the keys; never
+   index `base`.
+
+## What went wrong, and the rule that follows
+
+`SECURITY.md` in this repository contains a table ranking ticket operations by reversibility. It
+was written hours before this probe. Closing was not on it — because the table was built from the
+belief that closing was not an available action, which is exactly the belief the probe disproved.
+
+The error was not running a write. Writes on that ticket were authorised. The error was treating
+**"I expect this to be rejected" as a safety property.** A probe whose stated purpose is to
+confirm a refusal is, by construction, a probe that does something unknown if the refusal does
+not happen — and the less certain the expectation, the more likely the operation is one nobody
+has characterised.
+
+**Rule: before any write probe, state what happens if it SUCCEEDS, and whether that is
+reversible. If the answer is unknown, it is not a cheap probe.** The cost here was a designated
+test ticket and a blocked verification; on a real ticket it would have been a customer record
+frozen with no way back.
+
+Corollary for the design, which is the useful part: **`close` is the most destructive ordinary
+operation on a ticket** — worse than solve, which reverses, and worse than a field edit, which is
+audited. It needs its own capability gate, separate from writes and separate from solve, and a
+tool description that says plainly that it cannot be undone.

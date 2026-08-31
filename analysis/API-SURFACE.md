@@ -338,6 +338,52 @@ cursor paging. Only `id` is common to both.
 anyone will make — has no direct expression under the pagination style we default to.
 `sort=-id` is the proxy, and translating it is the tool layer's job, not the caller's.
 
+### 5.4d `status: "closed"` is accepted, and it is terminal
+
+An earlier draft of this document asserted that Closed could not be set through the API and was
+reachable only by automation some days after Solved. **That was wrong.** The API accepts it:
+
+```
+PUT /api/v2/tickets/{id}   {"ticket": {"status": "closed"}}   ->  200
+```
+
+And a closed ticket is then **frozen against every subsequent write**:
+
+```
+PUT .../{id}  {"ticket": {"status": "open"}}     -> 422  status: "closed prevents ticket update"
+PUT .../{id}  {"ticket": {"status": "solved"}}   -> 422  same
+PUT .../{id}  {"ticket": {"comment": {...}}}     -> 422  same
+```
+
+Reads still work. There is no reopen: the platform's answer to a closed ticket is a follow-up
+ticket, so **closing is the single most destructive ordinary operation on a ticket** — more so
+than solving, which reverses, and more than a field edit, which is audited.
+
+**Design consequences.**
+
+1. `close` must be gated separately from ordinary writes, and separately from `solve`. Grouping
+   it with "update the ticket" would put an irreversible action behind a reversible-sounding
+   capability.
+2. The tool description must say it cannot be undone. A model that treats `closed` as the
+   natural end state of "finish this ticket" will freeze tickets that should have been solved.
+3. The agent web interface does **not** offer Closed in its status picker — only New, Open,
+   Pending, On-hold, Solved. So this is an action the API permits and the UI declines to expose,
+   which is the opposite of the usual direction and worth stating loudly.
+
+### 5.4e `details` is keyed by field name, not always `base`
+
+The required-fields refusal returns `details.base[]`. This one returns `details.status[]`:
+
+```json
+{"error":"RecordInvalid","description":"Record validation errors",
+ "details":{"status":[{"description":"closed prevents ticket update"}]}}
+```
+
+So `details` is a **map from field name to a list of problems**, and `base` is simply the key
+used for whole-record problems that belong to no single field. An error parser that reads
+`details.base` specifically will silently find nothing on any field-scoped validation error.
+**Iterate the keys of `details`; never index one.**
+
 ### 5.5 Errors arrive in three incompatible envelopes
 
 ```
