@@ -384,6 +384,34 @@ used for whole-record problems that belong to no single field. An error parser t
 `details.base` specifically will silently find nothing on any field-scoped validation error.
 **Iterate the keys of `details`; never index one.**
 
+### 5.4f `comment.public` has no fixed default — it inherits from the ticket
+
+Zendesk's ticket-comments reference: *"The initial value set on ticket creation persists for any
+additional comment unless you change it."* The OpenAPI schema declares **no default** for the
+property, which is consistent — there isn't one to declare.
+
+Verified read-only against two tickets that arrived **via email**, whose first comment is
+therefore `public: true`. A subsequent comment omitting the flag inherits that.
+
+This is worse than either fixed default would be:
+
+- **It cannot be known from the request.** Predicting it requires reading the ticket's history.
+- **It varies per ticket**, so identical code behaves differently on different tickets.
+- **The common case is the dangerous one.** Most tickets arrive by email, so most default to
+  public — and a public comment emails the requester and every collaborator.
+- **It is invisible in testing.** A tool exercised against an agent-created internal ticket looks
+  safe, then emails a customer in production.
+
+**Invariant: never omit `public`.** Either require it explicitly at the tool boundary, or set
+`false` explicitly and make publishing opt-in. Omission is the one option that must not exist,
+because the resulting behaviour is a property of the ticket rather than of the call — and the
+failure is irreversible, since the email has already gone.
+
+*Established from the vendor's documentation plus read-only observation consistent with it. Not
+confirmed by writing a comment with the flag omitted: on the available test ticket that would
+have emailed four uninvolved people, and the design conclusion is the same whichever way the
+mechanism resolves.*
+
 ### 5.5 Errors arrive in three incompatible envelopes
 
 ```
