@@ -24,7 +24,10 @@ coverage**.
 | Voice (Talk) | 60 | post-1.0 |
 | Live Chat, Messaging, AI Agents, Custom Data, Sales CRM | no published spec | post-1.0 |
 
-**825 of 882 machine-readable operations at 1.0.0.**
+**825 of 882 machine-readable operations at 1.0.0** — which is coverage of the published
+specs, not of the API. The Help Center spec describes roughly 18 of ~30 documented families;
+about a dozen, several of them live, have no spec entry and need hand-written methods. See
+`analysis/API-SURFACE.md` §4b.
 
 ## Why this exists
 

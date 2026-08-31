@@ -56,6 +56,10 @@ Per <https://developer.zendesk.com/api-reference/>, with our disposition.
 **1.0.0 = 825 of 882 machine-readable operations (94%), plus the 3 Status
 endpoints.** The 57 deferred are Voice.
 
+But read that as *coverage of the specs*, not coverage of the API. The Help Center spec turns out
+to describe about 18 of roughly 30 documented families — see §4b. The percentage is honest about
+what can be generated; it overstates what is reachable.
+
 ---
 
 ## 3. Ticketing — 90 families, 640 operations
@@ -149,6 +153,59 @@ Every family probed returned 200. The knowledge base is live at
 | Help Center Sessions | 1 | 1/0 | — |
 
 ---
+
+## 4b. Help Center coverage is narrower than the operation count suggests
+
+**The published Help Center spec is incomplete.** It declares 18 families and 182 operations;
+the Help Center API reference documents roughly **30**. The spec is missing about a dozen,
+including several that are live on this account.
+
+Probed 2026-08-31 — documented in the reference, absent from the OAS:
+
+| Family | Reachable here | Notes |
+|---|---|---|
+| Management Permission Groups | **yes** | who may author what; one surveyed server exposes it |
+| Themes | **yes** | Guide theming; has its own `themes:read` / `themes:write` scopes |
+| Content Tags | **yes** | cross-cutting content tagging, distinct from article labels |
+| Redirect Rules | **yes** | empty here |
+| Federated Search — external content sources / types / records | **yes** | all empty here; indexes non-Zendesk content into HC search |
+| Badges · Badge Categories · Badge Assignments | no (404) | community gamification |
+| Guide Media Objects | no (404) | |
+| Account Custom Claims · Help Center JWTs | no (404) | JWT-authenticated HC access |
+
+**The six 404s are ambiguous and should not be read as "unavailable".** Most returned a bare 404
+with no body, so they are indistinguishable between *not on this plan*, *not enabled*, and *the
+path was guessed wrongly* — these are undocumented in the OAS, so the paths came from inference.
+Only Help Center JWTs returned the typed `InvalidEndpoint`. Resolving each needs the reference
+page for that family, not another guess.
+
+### There is a whole `/api/v2/guide/` namespace
+
+The HC spec declares exactly **three** `/api/v2/guide/` paths — `search`, `user_images`, and
+`user_images/uploads`. At least four more answer 200: `permission_groups`, `theming/themes`,
+`content_tags`, `redirect_rules`. So `help_center/` and `guide/` are two prefixes over one
+product, and only one of them is described.
+
+### Two search endpoints, and the older one is the working one
+
+- `GET /api/v2/help_center/articles/search.json?query=…` — works, offset-paginated envelope
+  (`count`, `page`, `page_count`, `per_page`, `next_page`, `results`).
+- `GET /api/v2/guide/search?query=…` — **400s** without a `filter` object, and then again
+  without `filter[locales]`. A newer, stricter interface that demands filters up front.
+
+Anything built against `guide/search` needs its filter contract established first; the
+article-search endpoint is the one to start from.
+
+### What this means for scope
+
+1.0.0 still covers Help Center, but **"182 operations" is the size of the *spec*, not of the
+API.** Roughly a dozen families need hand-written backend methods, because there is nothing to
+generate them from — the same position the whole project is in for Live Chat and Messaging, just
+inside a capability we had assumed was fully described.
+
+The four confirmed-and-empty families (Redirect Rules, and the three Federated Search ones) are
+worth deferring on evidence rather than principle: they exist, they are reachable, and nothing
+uses them here.
 
 ## 5. Probe-verified behaviour — the findings that constrain the design
 
