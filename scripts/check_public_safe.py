@@ -43,6 +43,14 @@ PRIVATE_TERMS = ROOT / "tenant-config/private-terms.txt"
 EXEMPT_SUFFIXES = (".yaml",)          # upstream vendor specs
 EXEMPT_PATHS = {"analysis/operation-inventory.csv"}   # derived from those specs
 
+# Addresses that are DELIBERATELY published. A SECURITY.md without a contact is
+# useless, so the check has to permit the one address it exists to advertise -
+# but by exact value, never by exempting the file, so an unrelated address
+# appearing in SECURITY.md is still caught.
+PUBLISHED_CONTACTS = frozenset({
+    "security@cloudsecurityalliance.org",
+})
+
 # Documented Zendesk PRODUCT limits. These are comma-formatted counts, but they
 # describe the API's behaviour rather than any tenant's data.
 PRODUCT_LIMITS = re.compile(r"\b(?:10,000|1,000|100,000|20,000|2,500)\b")
@@ -104,6 +112,8 @@ def main() -> int:
         for label, pat in STRUCTURAL.items():
             for m in pat.finditer(text):
                 if label == "tenant volume figure" and PRODUCT_LIMITS.match(m.group()):
+                    continue
+                if label == "email address" and m.group() in PUBLISHED_CONTACTS:
                     continue
                 findings.append((path, label,
                                  text.count("\n", 0, m.start()) + 1, m.group()[:48]))

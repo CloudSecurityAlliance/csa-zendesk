@@ -134,4 +134,4 @@ python3 scripts/probe_families.py    # 43/49 families reachable
 
 ## License
 
-Apache 2.0.
+[Apache 2.0](LICENSE).
