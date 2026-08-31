@@ -303,6 +303,41 @@ organizations, groups, views, macros, triggers, automations, tags,
 ticket_fields). **Cursor is the default we ship**; offset is reachable only when
 a caller asks for it explicitly.
 
+### 5.4b Mixing pagination styles returns 200 and silently drops the sort
+
+A request carrying both a cursor page parameter and the older sort parameters is accepted, and
+the sort is discarded:
+
+```
+sort=updated_at                    & page[size]=3  ->  ascending by updated_at
+sort=-updated_at                   & page[size]=3  ->  descending by updated_at
+sort_by=updated_at&sort_order=desc & page[size]=3  ->  DEFAULT ORDER - sort ignored
+page[size]=3   (no sort at all)                    ->  identical to the line above
+sort_by=updated_at&sort_order=desc & per_page=3    ->  correct, under offset paging
+```
+
+HTTP 200 throughout. A caller who migrates pagination but not sorting gets plausible data in
+the wrong order forever. Zendesk's own PHP client strips `page`, `per_page`, `sort_by` and
+`sort_order` before every cursor request, which says the hazard is known internally — see
+`OFFICIAL-CLIENTS.md` §2.
+
+**Invariant: never emit both pagination styles on one request. Refuse, rather than trusting
+the caller to keep them apart.**
+
+### 5.4c Cursor paging restricts what you can sort by
+
+| | Sortable |
+|---|---|
+| offset | `assignee`, `assignee.name`, `created_at`, `group`, `id`, `locale`, `requester` |
+| cursor | `updated_at`, `id`, `status` |
+
+Verified live: every offset-only attribute returns **400 `InvalidPaginationParameter`** under
+cursor paging. Only `id` is common to both.
+
+`created_at` is **not** cursor-sortable, so "the newest tickets" — the most natural request
+anyone will make — has no direct expression under the pagination style we default to.
+`sort=-id` is the proxy, and translating it is the tool layer's job, not the caller's.
+
 ### 5.5 Errors arrive in three incompatible envelopes
 
 ```
