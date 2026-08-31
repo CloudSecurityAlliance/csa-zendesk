@@ -101,28 +101,63 @@ Also reachable, empty: Targets, Sharing Agreements, Resource Collections,
 Omnichannel Routing Queues, Deletion Schedules, Bookmarks. Webhooks: 5
 configured. Apps: 4 installed.
 
-### Refused on this account
+### Access audit — what this credential actually reaches
 
-| Family | Ops | Probe | Why |
-|---|---:|---|---|
-| Audit Logs | 3 | **403** | Enterprise-plan feature. Not a scope problem. |
-| Task Lists | 9 | **404** | `InvalidEndpoint` — in the spec, not on this account |
-| ITAM Assets (+ Types/Fields/Locations/Statuses) | 28 | **404** | same |
+`scripts/probe_access.py` walks every family in the inventory, probing one
+collection-level GET each and classifying the answer. Run 2026-08-31.
 
-**37 spec operations are unreachable here.** They stay in the library — the
-spec declares them and another Zendesk account may have them — but they must
-fail with a message that distinguishes *"your plan does not include this"* from
-*"this is broken"*.
+| Verdict | Families | Operations | Share |
+|---|---:|---:|---:|
+| available | 90 | 733 | 83% |
+| needs args (400/422 — endpoint exists, wants parameters) | 5 | 15 | 2% |
+| **plan- or feature-gated (403)** | **8** | **44** | **5%** |
+| absent (404) | 1 | 3 | <1% |
+| untestable — no instance of that type exists to address | 5 | 38 | 4% |
+| unmeasured — id-addressed only, mostly Voice and write-only | 16 | 49 | 6% |
 
-### Not probed (49 remaining families)
+**748 of 882 operations (85%) are confirmed reachable.** 47 are refused. The rest are
+unmeasured rather than unavailable.
 
-Group Memberships (14), Organization Memberships (14), User Identities (14),
-Requests (12), User Fields (11), Object Triggers (10), Custom Object
-Permissions (9), Sessions (8), Custom Object Fields (7), Dynamic Content Item
-Variants (7), Group SLA Policies (7), Incremental Export (7), OAuth Clients (7),
-Ticket Comments (7), Workspaces (7), Attachments (6), Brand Agents (6), Locales
-(6), Organization Fields (6), Organization Subscriptions (6), Support Addresses
-(6), Task List Templates (6), and 27 smaller ones. See the CSV.
+Refused, and worth naming because each is a product boundary rather than a bug:
+
+| Family | Ops | |
+|---|---:|---|
+| IT Asset Management (assets, types, locations, statuses) | 23 | 403 — an add-on |
+| Group SLA Policies | 7 | 403 |
+| Workspaces (contextual workspaces) | 7 | 403 |
+| Ticket Form Statuses | 4 | 403 — needs non-default custom statuses to exist |
+| Audit Logs | 3 | 403 — Enterprise |
+| Help Center Service Catalog Items | 3 | 404 |
+
+A 403 here means *authenticated and refused*: a feature boundary, not a credential problem.
+The library keeps all of these — another account will have them — but they must fail with a
+message that distinguishes "your plan does not include this" from "this is broken".
+
+### Correction: two earlier "not on this account" claims were wrong
+
+An earlier pass reported **Task Lists** and **ITAM Assets** as absent (404 `InvalidEndpoint`).
+Both were wrong, for the same reason: **the paths were guessed from memory rather than read
+from the operation inventory in this repository.**
+
+| Claimed | Path used | Actual path | Actual result |
+|---|---|---|---|
+| ITAM Assets absent | `/api/v2/assets` | `/api/v2/it_asset_management/assets` | **403, plan-gated** |
+| Task Lists absent | `/api/v2/task_lists` | `/api/v2/tickets/{id}/task_lists` | **200, available** |
+
+The failure mode is worth keeping because it is the same one this document warns about
+elsewhere: **a 404 from a guessed path is not evidence of anything.** `analysis/operation-inventory.csv`
+is the authoritative path list; probes should be generated from it, which is what
+`scripts/probe_access.py` now does.
+
+### Still unmeasured
+
+Sixteen families expose only id-addressed GETs and were not resolved: mostly Voice
+(Availabilities, Calls, Callback Requests, Digital lines, IVR Menus, IVR Routes, Recordings),
+which is post-1.0 anyway, plus write-only surfaces (Ticket Import, User Passwords, User Images)
+and the channel framework. Five more are untestable here because no instance of the type exists
+to address — the custom-object sub-resources, and dynamic-content variants.
+
+Unmeasured is not unavailable. See the CSV for the full path list.
 
 ---
 
