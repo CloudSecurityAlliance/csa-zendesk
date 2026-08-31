@@ -51,9 +51,18 @@ share their architecture.
    server already, and the survey settled it.
 5. **Six names are fixed by the field** and must not be renamed: `get_ticket`, `create_ticket`,
    `update_ticket`, `get_user`, `get_organization`, `get_ticket_comments`.
-6. **`update_ticket` is deliberately broad.** The web UI stages every field edit, the comment
-   and the status change and applies them in one `PUT`. One tool matching that is faithful to
-   both the UI and the API, not a lumping-together.
+6. **`update_ticket` is deliberately broad — but it cannot go public.** The web UI stages every
+   field edit, the comment and the status change and applies them in one `PUT`, and one tool
+   matching that is faithful to both. The exception is outward-facing text: `update_ticket`'s
+   comment is **always internal**, and `add_public_reply` is the only path to a public comment
+   (ADR-003). Annotations are per-tool, so one tool cannot honestly advertise both a routine
+   field edit and an irreversible email.
+7. **Authority is ordered by reversibility** (ADR-003): `ticket.read` < `ticket.note` <
+   `ticket.write` < `ticket.reply` < `ticket.solve` < `ticket.close`. The default profile is
+   everything that can be undone — read, note, write. Reply, solve and close are opt-in, and no
+   profile grants close. Solving is not itself terminal but it is the **on-ramp** to terminal: a
+   tenant automation closes solved tickets after a fixed period, and solving also removes the
+   ticket from active views, which is why nobody notices before the timer expires.
 
 ## Invariants that fail silently — check these when editing
 
@@ -81,12 +90,12 @@ plausible answer while being wrong.
    to `details.base` finds nothing on a field-scoped error. A parser reading only `error` and
    `description` gets "RecordInvalid / Record validation errors" and discards the diagnosis
    entirely. Zendesk's own Ruby client reads `details` first, then falls back across four keys.
-12. **Never omit `comment.public`.** It has no fixed default — it *inherits from the ticket's
+13. **Never omit `comment.public`.** It has no fixed default — it *inherits from the ticket's
    first comment*, so on the common email-originated ticket it is **public**, which emails the
    requester and every collaborator irreversibly. Require it explicitly, or set `false` and make
    publishing opt-in. A tool tested on an internal ticket will look safe and then email a
    customer in production.
-13. **`status: "closed"` is accepted by the API and is terminal.** A closed ticket refuses every
+14. **`status: "closed"` is accepted by the API and is terminal.** A closed ticket refuses every
    further write, including reopening, and the web UI does not offer Closed in its status picker
    at all. It must be gated separately from both writes and `solve`, and its tool description
    must say it cannot be undone.

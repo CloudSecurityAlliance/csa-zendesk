@@ -32,6 +32,7 @@ Status: `open` · `in progress` · `blocked` · `done`
 | B4 | **Decide the bulk / async story.** Job statuses are modelled by exactly one client anywhere, as a bare resource with no polling or partial-failure handling. | open | One of the four real gaps. |
 | B5 | **Decide on the store-and-query pattern** — writing large responses to disk and querying them out of band, rather than through the model's context. | open | Dissolves the tension between full coverage and small context. |
 | B6 | **Decide the escape-hatch question** — whether to ship a policy-gated generic request tool, and if so how narrowly gated. | open | |
+| B7 | **Decide the toolset model** — named groups selected by the operator at launch (GitHub's approach: static, no runtime enabling), with per-toolset instructions that compose based on what is enabled. Orthogonal to capabilities: toolsets say which tools *exist*, capabilities say what they may *do*. | open | Leaning yes. Default would be `context` + `tickets`. |
 
 ## C. Verification gaps
 
