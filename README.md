@@ -76,6 +76,7 @@ the same guarantee an MCP client does.
 | `scripts/inventory.py` | Regenerates the inventory from `specs/` |
 | `scripts/probe_families.py` | Re-runs the live probes (GET only) |
 | `scripts/probe_access.py` | Access audit: what the credential actually reaches |
+| `TODO.md` | **The index of all open work.** Start here for what is unfinished |
 | `DECISIONS-ADR.md` | Decision log index; entries in `DECISIONS-ADR/` |
 | `WAITING-FOR.md` | Conditions with observable triggers; entries in `WAITING-FOR/` |
 
