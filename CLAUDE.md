@@ -81,7 +81,12 @@ plausible answer while being wrong.
    to `details.base` finds nothing on a field-scoped error. A parser reading only `error` and
    `description` gets "RecordInvalid / Record validation errors" and discards the diagnosis
    entirely. Zendesk's own Ruby client reads `details` first, then falls back across four keys.
-12. **`status: "closed"` is accepted by the API and is terminal.** A closed ticket refuses every
+12. **Never omit `comment.public`.** It has no fixed default — it *inherits from the ticket's
+   first comment*, so on the common email-originated ticket it is **public**, which emails the
+   requester and every collaborator irreversibly. Require it explicitly, or set `false` and make
+   publishing opt-in. A tool tested on an internal ticket will look safe and then email a
+   customer in production.
+13. **`status: "closed"` is accepted by the API and is terminal.** A closed ticket refuses every
    further write, including reopening, and the web UI does not offer Closed in its status picker
    at all. It must be gated separately from both writes and `solve`, and its tool description
    must say it cannot be undone.

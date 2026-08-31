@@ -40,7 +40,7 @@ Status: `open` · `in progress` · `blocked` · `done`
 | C1 | **The requirements model over-reports on conditional forms.** It matched a live 422 exactly — but on a form with *zero* conditional rules, so the match validated the easy half. On a conditional form it lists mutually exclusive branches as both required. | open | Needs a ticket on a conditional form. `experiments/solve-required-fields/RESULTS.md`. |
 | C2 | **`required_on_statuses.type` is not enumerated.** `SOME_STATUSES` observed; `ALL_STATUSES` inferred and unverified. The whole `agent_conditions` structure is undocumented. | open | Keep the compute-vs-422 comparison as a conformance test so upstream shape changes fail loudly. |
 | C3 | ~~Confirm `status: "closed"` is rejected~~ | **done** | It is **accepted**, and terminal. See `API-SURFACE.md` §5.4d. The earlier claim that it was automation-only was wrong. |
-| C4 | **Confirm the default for `comment.public` when omitted.** The failure is irreversible and lands in a requester's inbox. | **blocked** | Still the most consequential unknown. Needs a **new** disposable ticket: the previous one was closed by the C3 probe and closed tickets refuse all writes. |
+| C4 | ~~Confirm the default for `comment.public` when omitted~~ | **done** | There is no fixed default: it **inherits from the ticket's first comment**, so email-originated tickets default to public. `API-SURFACE.md` §5.4f. Answered from docs + read-only observation rather than by emailing four uninvolved people. |
 | C5 | **Seed a cursor-capability table** from the Ruby client's path list, then verify each against live probes. Single-sourced today. | open | |
 
 ## D. Repo and process
