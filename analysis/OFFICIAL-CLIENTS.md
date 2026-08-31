@@ -185,3 +185,83 @@ finding: Help Center is under-served by Zendesk's own tooling, not just by the c
 
 And what we deliberately do **not** take: their status-to-error mapping, which collapses
 `403` and every other 4xx into a network error.
+
+---
+
+## 8. Do the two official clients agree? No — they diverge substantially
+
+Compared by resource surface, normalising Ruby's singular CamelCase against PHP's plural file
+names, and excluding base classes, middleware and transport.
+
+| | |
+|---|---:|
+| Ruby resources | 65 |
+| PHP resources | 65 |
+| **present in both** | **33** |
+| union | 97 |
+| overlap of the union | **34%** |
+| of PHP's surface, present in Ruby | 51% |
+| of Ruby's surface, present in PHP | 51% |
+
+Identical size, half the content. Each official client reaches about **half** of what the other
+does.
+
+### Some of that is modelling, not capability
+
+A resource absent as a *class* may still be reachable as a *method*. Checked by grep:
+
+| Capability | Missing as a class from | Actually reachable there? |
+|---|---|---|
+| incremental export | PHP has it, Ruby lacks the class | **yes** — methods on resources |
+| ticket comments | PHP class, no Ruby class | **yes** — via `Comment` / `Event` |
+| locales | PHP class, no Ruby class | **yes** |
+| agents | Ruby class, no PHP class | **yes** — methods |
+| user identities | Ruby class, no PHP class | **yes** |
+| settings | Ruby class, no PHP class | **yes** |
+
+### But several gaps are real
+
+Nothing found in the whole library, not as a class and not as a method:
+
+| Capability | Ruby | PHP |
+|---|---|---|
+| **Job statuses** | **absent** | present |
+| SLA policies | **absent** | present |
+| Help Center translations | **absent** | present |
+| User / organization custom fields | **absent** | present |
+| Custom roles | **absent** | present |
+| Talk greetings | present | **absent** |
+| Deleted tickets | present | **absent** |
+| Community topics | present | **absent** (one incidental hit) |
+| Schedules | present | **absent** (one incidental hit) |
+
+*Caveat: cross-language name normalisation is approximate, and a grep returning nothing is
+strong evidence rather than proof. The direction and rough magnitude are reliable; individual
+rows may be off.*
+
+### Three things worth taking from the comparison
+
+**1. Neither client is authoritative on its own.** Where they were used above as evidence — the
+cursor-pagination path list, the error-envelope handling — that evidence is stronger where both
+agree and weaker where only one speaks. Their *union* is a better map of the API than either,
+and even the union is a **floor, not a ceiling**: our inventory has 125 families against their
+combined 97 resources.
+
+**2. PHP is the only client in anything we have surveyed that models job statuses.** Not the
+Ruby client, and none of the twelve MCP servers. But it models it as a bare `Find`/`FindMany`
+resource — **no polling, no completion semantics, no partial-failure handling.** So the async
+bulk lifecycle is genuinely unsolved everywhere, and remains one of the four real gaps.
+
+**3. Even PHP's incremental export uses the older interface.** Its routes are
+`incremental/tickets.json`, `ticket_events`, `organizations`, `users` — the **time-based** form,
+not the `incremental/tickets/cursor.json` variant Zendesk now documents as preferred and which
+our probing confirmed works. So on the one bulk primitive an official client does model, it
+models the superseded version.
+
+### What this means for us
+
+The divergence removes a temptation. There is no canonical client surface to mirror, so the
+question "what does a good Zendesk client expose?" has no established answer to defer to — the
+two official ones disagree with each other about half of it. That makes our own inventory the
+better organising principle, with the clients as corroboration on specific behaviours rather
+than as a template for scope.
