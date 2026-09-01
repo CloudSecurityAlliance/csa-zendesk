@@ -12,3 +12,5 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 | [ADR-003](DECISIONS-ADR/ADR-003.md) | Capability gates are drawn on reversibility, and public replies are their own tool | Active | 2026-08-31 |
 | [ADR-004](DECISIONS-ADR/ADR-004.md) | Verify irreversible operations by observation, not by performing them | Active | 2026-08-31 |
 | [ADR-005](DECISIONS-ADR/ADR-005.md) | Aggregate in memory for the model; export to disk for people; persist neither | Active | 2026-09-01 |
+| [ADR-006](DECISIONS-ADR/ADR-006.md) | Toolsets select surface; capabilities grant authority; the operator decides both | Active | 2026-09-01 |
+| [ADR-007](DECISIONS-ADR/ADR-007.md) | Surface Zendesk's async jobs; do not invent our own | Active | 2026-09-01 |
