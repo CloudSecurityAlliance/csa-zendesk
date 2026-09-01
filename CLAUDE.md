@@ -173,6 +173,39 @@ The principles that have already earned their place here:
   matched a live 422 exactly — on a form with zero conditional rules, so the match validated only
   the trivial half. See `TODO.md` C1.
 
+## Surface vs authority
+
+Two orthogonal dimensions (ADR-006), and the field conflates them:
+
+- **Toolset** — does the tool *exist*? Operator config at launch. `context`, `tickets`,
+  `help_center`, `people`, `queues`, `reporting`, `export`, `admin`. Default `context` + `tickets`.
+  **`context` is always registered** — a model that has not called `describe_ticket_form` is
+  guessing at which fields are required to solve, and that varies per form.
+- **Capability** — may an existing tool *act*? The fail-closed `PolicyBackend` (ADR-003).
+
+So a deployment can register `tickets` while granting only `ticket.read`: the write tools are
+visible and described, and refuse. That is a better failure than an absent tool, because the model
+can see the capability exists and say what an operator would have to change.
+
+**Instructions are per-toolset and compose** based on what else is enabled, so a deployment
+without `reporting` never spends context on aggregation guidance. **Nothing enables a toolset at
+runtime** — surface breadth is an operator decision, and a model that can turn on `admin` because
+it decided it needed to has inverted who is in charge.
+
+## Async: surface Zendesk's, bound ours
+
+ADR-007. Two different problems, one answer each.
+
+**Zendesk's jobs are durable.** Bulk writes return a job id, not a result; the outcome comes from
+`/job_statuses/{id}`, and up to 30 jobs may be in flight account-wide before `TooManyJobs`. A bulk
+tool submits, **polls briefly**, and returns the outcome if it finished or the job id if not.
+`get_job_status` retrieves it later. **Always report per-record outcomes** — a job that half
+succeeded must never read as success.
+
+**Our aggregation is a loop in our process.** No handles: it is bounded work that reports its own
+limits. A handle would be a key into memory a stdio server loses on restart, and persisting it is
+what ADR-005 declined.
+
 ## Bulk reads: aggregate, never persist
 
 ADR-005. The questions this tool exists to answer are aggregate ones, and the volumes do not fit

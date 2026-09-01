@@ -29,11 +29,11 @@ Status: `open` · `in progress` · `blocked` · `done`
 | B1 | **Architecture options, with trade-offs and a recommendation.** The live question is how ~700 reachable in-scope operations map onto a tool surface a model can choose from. | open | The blocker for everything else. |
 | B2 | **Design spec**, then an implementation plan. | blocked | On B1. |
 | B3 | **`CLAUDE.md`** — the behavioural contract. The probe-verified invariants are the "fails silently" section and will otherwise be re-derived the hard way. | open | High leverage, low effort. |
-| B4 | **Decide the bulk / async story.** Job statuses are modelled by exactly one client anywhere, as a bare resource with no polling or partial-failure handling. | open | One of the four real gaps. |
+| B4 | ~~Decide the bulk / async story~~ | **done** | ADR-007: surface Zendesk's jobs with brief polling then a handle; bound our own aggregation instead of deferring it; hold no job state. |
 | B5 | ~~Decide on the store-and-query pattern~~ | **done** | ADR-005: aggregate in memory for the model, export to disk for people, persist neither. Store-and-query rejected — it reverses `SECURITY.md`'s no-persistence position and its benefit is covered twice over. |
 | B6 | **Decide the escape-hatch question** — whether to ship a policy-gated generic request tool, and if so how narrowly gated. | open | |
 | B8 | **A queryable mirror of Zendesk data in a database** — post-1.0 and large. Would make analytical questions instant and bulk operations straightforward, instead of streaming pages under a rate limit. Requires: an incremental-export sync pipeline, a schema, staleness handling, PII retention decisions, and access control — and it *is* persistence at scale, so it needs its own ADR superseding ADR-005's position rather than an extension of it. **Check first whether Customer360's existing Zendesk mirror can be queried instead of building a second one**; duplicating a mirror that already exists is the expensive mistake here. | open | Not 1.0. Recorded so the aggregation design in ADR-005 is understood as the answer *for now*, not the permanent one. |
-| B7 | **Decide the toolset model** — named groups selected by the operator at launch (GitHub's approach: static, no runtime enabling), with per-toolset instructions that compose based on what is enabled. Orthogonal to capabilities: toolsets say which tools *exist*, capabilities say what they may *do*. | open | Leaning yes. Default would be `context` + `tickets`. |
+| B7 | ~~Decide the toolset model~~ | **done** | ADR-006: eight toolsets, default `context` + `tickets`, `context` always on, per-toolset composing instructions, no runtime enabling. |
 
 ## C. Verification gaps
 
