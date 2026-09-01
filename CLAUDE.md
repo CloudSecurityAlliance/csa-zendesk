@@ -173,6 +173,26 @@ The principles that have already earned their place here:
   matched a live 422 exactly — on a form with zero conditional rules, so the match validated only
   the trivial half. See `TODO.md` C1.
 
+## Bulk reads: aggregate, never persist
+
+ADR-005. The questions this tool exists to answer are aggregate ones, and the volumes do not fit
+in a context window — search caps at 1000 results while reporting far more, and incremental
+export runs at ten requests a minute.
+
+- **`summarise_*`** streams pages, folds each into an aggregate, and **discards it**. Rows never
+  reach the model and never touch disk. The answer is a small table, which is what was wanted —
+  nobody wants ten thousand tickets, they want the distribution.
+- **`export_*`** writes a file for a *person*, to an operator-configured directory. The model
+  gets a summary and a path and **does not query the file**. There is no query tool over exports.
+- **Nothing is cached.** No response persistence, no attachment cache, no token file.
+
+Two rules the aggregation path must keep: **scope is mandatory** — an unbounded `summarise_*` is
+refused, not silently run for an hour — and it **reports how much it sampled**, so a truncated
+answer is never presented as a complete one.
+
+Aggregation is also the strongest available prompt-injection mitigation on the bulk path:
+untrusted ticket bodies are counted, not read aloud.
+
 ## Testing tiers
 
 Three, not two (ADR-004):
