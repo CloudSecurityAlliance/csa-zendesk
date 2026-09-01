@@ -11,3 +11,4 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 | [ADR-002](DECISIONS-ADR/ADR-002.md) | Build the client from scratch; do not chase parity with the official SDKs | Active | 2026-08-31 |
 | [ADR-003](DECISIONS-ADR/ADR-003.md) | Capability gates are drawn on reversibility, and public replies are their own tool | Active | 2026-08-31 |
 | [ADR-004](DECISIONS-ADR/ADR-004.md) | Verify irreversible operations by observation, not by performing them | Active | 2026-08-31 |
+| [ADR-005](DECISIONS-ADR/ADR-005.md) | Aggregate in memory for the model; export to disk for people; persist neither | Active | 2026-09-01 |
