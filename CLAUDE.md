@@ -192,6 +192,26 @@ without `reporting` never spends context on aggregation guidance. **Nothing enab
 runtime** — surface breadth is an operator decision, and a model that can turn on `admin` because
 it decided it needed to has inverted who is in charge.
 
+## The escape hatch
+
+ADR-008. `zendesk_read` (GET, `read_only_hint`) and `zendesk_request` (any verb,
+`destructive_hint`) exist so an unanticipated task has a route. Both are **off by default**
+(`raw.read` / `raw.write`, granted by no profile).
+
+**Both refuse any path a curated tool already covers**, naming the tool to use instead. That is
+the load-bearing constraint: without it a model prefers one flexible tool over choosing among
+forty, and thereby routes around every warning this design exists to carry — that closing is
+terminal, that `comment.public` inherits, that mixing pagination styles silently drops the sort.
+The hatch is for surface we do **not** cover.
+
+**Every refusal names its own remedy** — the missing capability and what an operator changes to
+grant it. That is the point rather than a nicety: the model attempts, is refused informatively,
+and reports what to enable. Refusals are logged (method and path, never the body) so the
+operations people actually reach for become visible and can inform later curation.
+
+It skips nothing else: injection wrapping, the both-pagination-styles refusal, rate limiting and
+the error taxonomy all still apply.
+
 ## Async: surface Zendesk's, bound ours
 
 ADR-007. Two different problems, one answer each.

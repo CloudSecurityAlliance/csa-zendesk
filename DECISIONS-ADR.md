@@ -14,3 +14,4 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 | [ADR-005](DECISIONS-ADR/ADR-005.md) | Aggregate in memory for the model; export to disk for people; persist neither | Active | 2026-09-01 |
 | [ADR-006](DECISIONS-ADR/ADR-006.md) | Toolsets select surface; capabilities grant authority; the operator decides both | Active | 2026-09-01 |
 | [ADR-007](DECISIONS-ADR/ADR-007.md) | Surface Zendesk's async jobs; do not invent our own | Active | 2026-09-01 |
+| [ADR-008](DECISIONS-ADR/ADR-008.md) | A generic request tool exists, refuses what curated tools cover, and names its own remedy | Active | 2026-09-01 |
