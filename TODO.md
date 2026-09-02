@@ -26,9 +26,9 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 | | Item | Status | Notes |
 |---|---|---|---|
-| B1 | **Architecture options, with trade-offs and a recommendation.** The live question is how ~700 reachable in-scope operations map onto a tool surface a model can choose from. | open | The blocker for everything else. |
-| B2 | **Design spec**, then an implementation plan. | blocked | On B1. |
-| B3 | **`CLAUDE.md`** — the behavioural contract. The probe-verified invariants are the "fails silently" section and will otherwise be re-derived the hard way. | open | High leverage, low effort. |
+| B1 | ~~Architecture options~~ | **done** | Settled across ADR-002/003/005/006/007/008 and assembled in `docs/superpowers/specs/2026-09-01-csa-zendesk-design.md`. |
+| B2 | **Implementation plan** for Block 0, from the design spec. | open | Spec written; the plan is the next artifact. |
+| B3 | ~~`CLAUDE.md`~~ | **done** | Fourteen invariants, the public/private line, testing tiers, and the surface/authority split. |
 | B4 | ~~Decide the bulk / async story~~ | **done** | ADR-007: surface Zendesk's jobs with brief polling then a handle; bound our own aggregation instead of deferring it; hold no job state. |
 | B5 | ~~Decide on the store-and-query pattern~~ | **done** | ADR-005: aggregate in memory for the model, export to disk for people, persist neither. Store-and-query rejected — it reverses `SECURITY.md`'s no-persistence position and its benefit is covered twice over. |
 | B6 | ~~Decide the escape-hatch question~~ | **done** | ADR-008: `zendesk_read` and `zendesk_request`, both off by default, both refusing any path a curated tool covers, every refusal naming its own remedy. |
