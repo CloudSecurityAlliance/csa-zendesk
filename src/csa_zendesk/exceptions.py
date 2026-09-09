@@ -20,6 +20,7 @@ __all__ = [
     "NotFound",
     "ValidationError",
     "PaginationError",
+    "InvalidPath",
     "SearchLimitExceeded",
     "RateLimited",
     "ServiceUnavailable",
@@ -75,6 +76,20 @@ class PaginationError(ZendeskError):
     Covers Zendesk's `InvalidPaginationDepth` (offset past 10,000 records) and
     `InvalidPaginationParameter` (a sort field the chosen style cannot honour),
     and our own refusal to emit two pagination styles on one request.
+    """
+
+
+class InvalidPath(ZendeskError):
+    """A `path` argument refused before any request was built or sent.
+
+    Two shapes trigger this, both caught in `HttpClient` before the credentialed
+    request touches the wire: a path shaped to move this request to a different
+    host (no leading `/`, a leading `//`, an `@`, or a construction that resolves
+    to a host other than the tenant's), and a path carrying its own `?` or `#` -
+    which this client's own request building silently discards rather than sends,
+    the exact defect class `check_params` exists to prevent, arriving through the
+    one parameter it cannot see. Refused rather than sanitised: a caller who passed
+    a hostile or malformed path should be told, not quietly corrected.
     """
 
 

@@ -435,3 +435,104 @@ def test_the_budget_exhausted_message_names_the_budget_as_the_reason(monkeypatch
     # A caller reading this must be told it was this client giving up, not a further
     # refusal from Zendesk.
     assert "not because Zendesk refused again" in message
+
+
+# --- path validation: a hostile or malformed `path` must never reach the wire ----
+#
+# Not reachable while every caller interpolates an int (get_ticket and friends), but
+# it becomes reachable the moment a model-supplied path exists (ADR-008's
+# zendesk_request), and prompt injection through ticket content is this project's
+# named primary risk. Probe-verified live against the pre-fix code: three of the
+# five shapes below actually redirected the credentialed request to a different
+# host under this client's `f"{base}{path}"` construction; the other two do not
+# redirect under that specific construction but are refused anyway, since a path
+# shaped like this is hostile regardless of whether today's string concatenation
+# happens to defeat it.
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "@evil.example.net/x",  # tenant host becomes URL userinfo; evil host becomes the host
+        ".evil.example.net/x",  # host becomes "<tenant>.zendesk.com.evil.example.net"
+        "https://evil.example.net/x",  # host becomes "<tenant>.zendesk.comhttps", still resolvable
+        "//evil.example.net/x",  # does not redirect under plain concatenation, refused anyway
+        "/api/v2/tickets/1.json@evil.example.net",  # '@' mid-path, refused regardless of position
+    ],
+)
+def test_a_hostile_path_is_refused_before_any_request_is_made(path):
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath):
+        client(handler).get(path)
+    assert calls["n"] == 0  # the credentialed request must never reach the transport
+
+
+def test_an_ordinary_path_is_unaffected_by_the_validation():
+    def handler(request):
+        assert request.url.host == "example.zendesk.com"
+        return httpx.Response(200, json={"ok": True})
+
+    assert client(handler).get("/api/v2/tickets/1.json") == {"ok": True}
+
+
+def test_a_query_string_embedded_in_path_is_refused_not_silently_dropped():
+    # Precisely the defect class check_params exists to prevent, arriving through
+    # the one parameter check_params cannot see: with a params= dict (even an
+    # empty one) also passed to httpx, a '?' embedded in path is dropped rather
+    # than sent - so a mixed-pagination query in path would evade check_params
+    # entirely were it not refused here first.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath):
+        client(handler).get("/api/v2/tickets.json?page[after]=abc&sort_by=created_at")
+    assert calls["n"] == 0
+
+
+def test_a_fragment_embedded_in_path_is_also_refused():
+    with pytest.raises(exc.InvalidPath):
+        client(lambda request: httpx.Response(200, json={})).get("/api/v2/tickets.json#section")
+
+
+def test_the_built_url_is_verified_against_the_tenant_host_not_just_the_pattern():
+    # Belt-and-braces (CLAUDE.md invariant-style reasoning): no path shape has been
+    # found that passes _validate_path's patterns and still resolves to a
+    # different host under this client's construction, so this exercises the
+    # second, independent check directly by making the two disagree - the failure
+    # mode is a credential sent to an attacker, and the cost of checking is one
+    # comparison per request.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, json={})
+
+    c = client(handler)
+    c._host = "acme.zendesk.com"  # deliberately not "example.zendesk.com", the real tenant host here
+    with pytest.raises(exc.InvalidPath):
+        c.get("/api/v2/tickets.json")
+    assert calls["n"] == 0
+
+
+def test_a_path_httpx_itself_refuses_to_parse_becomes_a_typed_apierror():
+    # httpx.InvalidURL is not an httpx.HTTPError subclass and would otherwise
+    # escape this module untyped. This path passes _validate_path (single leading
+    # slash, no '@', no '?' or '#') - it fails later, when httpx itself parses the
+    # URL and rejects the embedded control character.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.ApiError):
+        client(handler).get("/api/v2/tickets/\x00.json")
+    assert calls["n"] == 0

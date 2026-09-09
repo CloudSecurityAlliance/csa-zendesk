@@ -108,7 +108,8 @@ class HttpClient:
             raise ValueError(
                 "API-token auth needs both an email and a token; set CINO_CSA_ZENDESK_EMAIL and CINO_CSA_ZENDESK."
             )
-        self._base = f"https://{subdomain}.zendesk.com"
+        self._host = f"{subdomain}.zendesk.com"
+        self._base = f"https://{self._host}"
 
         # The credential lives only in this closure's cell, never in self.__dict__.
         # `header` is a local variable of __init__ - once __init__ returns, the only
@@ -183,6 +184,52 @@ class HttpClient:
 
             raise error
 
+    @staticmethod
+    def _validate_path(path: str) -> None:
+        """Refuse a `path` shaped to redirect this credentialed request, or to
+        carry a query string that would be silently discarded.
+
+        Probe-verified live: with `path` built into the URL by simple
+        concatenation (`f"{base}{path}"`), each of these sends the credentialed
+        request to a DIFFERENT host, not the tenant's - `@evil.example.net/x`
+        (the tenant host becomes URL userinfo, `evil.example.net` becomes the
+        host), `.evil.example.net/x` (host becomes
+        `<tenant>.zendesk.com.evil.example.net`), and `https://evil.example.net/x`
+        (host becomes `<tenant>.zendesk.comhttps`, still resolvable, still wrong).
+        Not reachable while every caller interpolates an int; it becomes reachable
+        the moment a model-supplied path exists, and ticket content is this
+        project's named primary risk. Rejected outright rather than sanitised - a
+        caller who passed a hostile path should be told, not quietly corrected -
+        and `HttpClient._send` additionally verifies the *built* URL resolves to
+        the tenant host, so this check is pattern-based defense first, not the
+        only defense.
+
+        A `?` or `#` embedded in `path` is a separate hazard: it is silently
+        discarded the moment a `params=` dict (even an empty one) is also passed
+        to httpx, which is precisely the mixed-pagination defect class
+        `check_params` exists to prevent, arriving through the one parameter
+        `check_params` cannot see. Refused rather than merged - merging would
+        create two ways to say the same thing and a silent precedence rule.
+        """
+        if not path.startswith("/") or path.startswith("//"):
+            raise exc.InvalidPath(
+                f"refusing path {path!r}: it must start with exactly one '/'. A path with "
+                f"no leading slash, or a leading '//', can resolve to a host other than the "
+                f"tenant's - pass an absolute, single-origin path instead."
+            )
+        if "@" in path:
+            raise exc.InvalidPath(
+                f"refusing path {path!r}: it contains '@', which can move the tenant host "
+                f"into the URL's userinfo and hand this request's credential to whatever "
+                f"host follows it instead."
+            )
+        if "?" in path or "#" in path:
+            raise exc.InvalidPath(
+                f"refusing path {path!r}: it contains '?' or '#'. A query string or "
+                f"fragment embedded in `path` is silently dropped rather than sent - pass "
+                f"query parameters via params= instead, so they can be checked."
+            )
+
     def _send(
         self,
         method: str,
@@ -203,10 +250,33 @@ class HttpClient:
         exception is being handled, so the interpreter attaches no context at all.
         The exception's class name, plus the method and path - never the query
         string, never a header - go into the message instead.
+
+        The Authorization header is attached by an event hook that fires inside
+        `Client.send`, not inside `Client.build_request` - so building the request
+        first and checking its resolved host before calling `send` means a request
+        that fails the host check never carries the credential in the first place,
+        not merely "the credential is discarded after being attached".
+
+        `httpx.InvalidURL` (a malformed `path` that survives `_validate_path` but
+        that httpx itself refuses to parse, e.g. a control character) is not an
+        `httpx.HTTPError` subclass and would otherwise escape this module untyped -
+        folded into the same handling as a transport failure, since both mean the
+        request could not be formed or sent.
         """
+        self._validate_path(path)
+        url = f"{self._base}{path}"
         try:
-            response = self._client.request(method, f"{self._base}{path}", params=params, json=json)
-        except httpx.HTTPError as e:
+            request = self._client.build_request(method, url, params=params, json=json)
+            if request.url.host != self._host:
+                # Belt-and-braces: verify by construction, not just by pattern. The
+                # cost is one comparison per request; the failure mode this catches
+                # is a credential sent to an attacker.
+                raise exc.InvalidPath(
+                    f"refusing to send {method} {path}: it resolves to host "
+                    f"{request.url.host!r}, not the tenant host {self._host!r}."
+                )
+            response = self._client.send(request)
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
             kind = type(e).__name__
         else:
             return response
