@@ -17,6 +17,7 @@ hardcoded to `details.base` silently finds nothing on a field-scoped error.
 Never interpolate a credential into a message here: only response bodies and
 headers pass through this module, and embedders log the exceptions it returns.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -87,15 +88,11 @@ def parse_error(status: int, body: object, *, headers: Mapping[str, str] | None 
     if status == 429:
         return exc.RateLimited("Zendesk rate limit reached", retry_after=_retry_after(headers))
     if status == 503:
-        return exc.ServiceUnavailable(
-            "Zendesk is unavailable, likely maintenance", retry_after=_retry_after(headers)
-        )
+        return exc.ServiceUnavailable("Zendesk is unavailable, likely maintenance", retry_after=_retry_after(headers))
 
     # ZD-2: a body that is not a JSON object is an error, not something to hand on.
     if not isinstance(body, dict):
-        return exc.ApiError(
-            f"Zendesk returned HTTP {status} with a body that is not a JSON object", status=status
-        )
+        return exc.ApiError(f"Zendesk returned HTTP {status} with a body that is not a JSON object", status=status)
 
     code, message = _code(body), _message(body)
 
@@ -116,8 +113,7 @@ def parse_error(status: int, body: object, *, headers: Mapping[str, str] | None 
     if status == 422:
         if "Search Response Limit" in message:
             return exc.SearchLimitExceeded(
-                "search refuses past 1000 results, however large the reported count; "
-                "use the export path for more"
+                "search refuses past 1000 results, however large the reported count; use the export path for more"
             )
         problems = extract_problems(body)
         if code == "RecordInvalid" or problems:

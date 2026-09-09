@@ -10,6 +10,12 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -e ".[dev]"
       - run: ruff check src tests scripts
+      # Formatting is gated on the shipped package and its tests only. scripts/ is
+      # excluded deliberately: check_public_safe.py is the publication gate, its
+      # regexes and STRUCTURAL table are hand-aligned for readability, and CLAUDE.md
+      # requires re-mutation-testing that guard after any change to its patterns.
+      # Reformatting it would mean re-verifying a safety-critical file for cosmetics.
+      - run: ruff format --check src tests
       - run: mypy
 
   test:
