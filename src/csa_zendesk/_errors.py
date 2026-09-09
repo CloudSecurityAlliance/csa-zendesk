@@ -109,9 +109,11 @@ def parse_error(status: int, body: object, *, headers: Mapping[str, str] | None 
     code, message = _code(body), _message(body)
 
     if status == 401:
+        # Not "or re-run authorisation" - there is no re-auth flow to run yet (this
+        # is a static API token, not OAuth), so naming one would advertise a remedy
+        # that does not exist. Check the two env vars that actually are read.
         return exc.CredentialsRejected(
-            f"Zendesk rejected the credential ({message}). Check CINO_CSA_ZENDESK and "
-            f"CINO_CSA_ZENDESK_EMAIL, or re-run authorisation."
+            f"Zendesk rejected the credential ({message}). Check CINO_CSA_ZENDESK and CINO_CSA_ZENDESK_EMAIL."
         )
     if status == 403:
         return exc.PlanBoundary(

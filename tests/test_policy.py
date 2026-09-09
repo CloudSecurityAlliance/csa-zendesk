@@ -38,7 +38,9 @@ def test_a_profile_without_the_capability_is_refused_with_a_remedy():
         pb.get_ticket(ticket_id=1)
     msg = str(ei.value)
     assert "ticket.read" in msg  # names the missing capability
-    assert "CSA_ZENDESK_PROFILE" in msg  # names what an operator changes
+    # Generic on purpose: no code reads CSA_ZENDESK_PROFILE or CSA_ZENDESK_CAPABILITIES
+    # today, so naming either would advertise a remedy that does not exist yet.
+    assert "cannot be changed from here" in msg
 
 
 def test_the_default_profile_holds_only_reversible_capabilities():
@@ -64,21 +66,58 @@ def test_no_profile_grants_purge_close_merge_or_raw():
         assert not (caps & never), f"profile {name!r} grants {sorted(caps & never)}"
 
 
+def test_a_profile_granting_solve_can_also_discover_what_solving_requires():
+    # A ticket form's required fields vary per ticket_form_id, and reading a
+    # form (GET /api/v2/ticket_forms{,/…}) is classified admin.read in
+    # analysis/operation-classification.csv - so a profile that can solve but
+    # cannot read the form it is solving against is guessing at a requirement
+    # it is about to violate. This is a property over every profile, not a
+    # restatement of any one profile's contents: it would still catch a future
+    # profile that grants ticket.solve without also granting admin.read.
+    for name, caps in pol.PROFILES.items():
+        if pol.TICKET_SOLVE in caps:
+            assert pol.ADMIN_READ in caps, f"profile {name!r} grants ticket.solve but not admin.read"
+
+
 def test_an_unknown_profile_is_a_loud_error_listing_the_real_ones():
     with pytest.raises(ValueError, match="unknown profile"):
         pol.Policy.from_profile("nope")
 
 
-def test_a_callable_gate_computes_capabilities_from_the_kwargs():
-    # ADR-003: one PUT, several authorities. Simulated here because update_ticket
-    # itself arrives in Block 2.
+def test_a_callable_gates_kwargs_reach_it_through_the_wrapper(monkeypatch):
+    # ADR-003: one PUT, several authorities - update_ticket itself arrives in
+    # Block 2, but the wiring this depends on must be proven now. A test that
+    # only calls `gate(...)` directly (as an earlier version of this test did)
+    # asserts nothing about PolicyBackend: it would still pass with _dispatch
+    # deleted, since nothing routes the call's actual kwargs through a gate.
+    # This installs a real callable gate under policy._GATES, materialises a
+    # real gated method the same way _materialise_gated_methods() does for
+    # every production entry, and calls it through PolicyBackend - so what is
+    # asserted is that a call's kwargs reach its gate, not that a lambda
+    # computes what it was written to compute.
     def gate(kw: dict) -> frozenset:
         return frozenset({pol.TICKET_WRITE}) | (
             frozenset({pol.TICKET_SOLVE}) if kw.get("status") == "solved" else frozenset()
         )
 
-    assert gate({"priority": "high"}) == {pol.TICKET_WRITE}
-    assert gate({"status": "solved"}) == {pol.TICKET_WRITE, pol.TICKET_SOLVE}
+    monkeypatch.setitem(pol._GATES, "fake_update_ticket", gate)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_update_ticket", pol._make_gated("fake_update_ticket"), raising=False)
+
+    class BackendWithFakeUpdate(FakeBackend):
+        def fake_update_ticket(self, **kwargs):
+            return {"ok": True, **kwargs}
+
+    write_only = pol.Policy(frozenset({pol.TICKET_WRITE}))
+    pb = pol.PolicyBackend(BackendWithFakeUpdate(), write_only)
+
+    # Only ticket.write is needed for a plain field edit, and write_only grants it.
+    assert pb.fake_update_ticket(priority="high") == {"ok": True, "priority": "high"}
+
+    # Solving needs ticket.write AND ticket.solve - write_only grants only the
+    # first, so this specific kwarg must be refused even though the same policy
+    # just permitted a different call to the very same method.
+    with pytest.raises(exc.PolicyError, match=pol.TICKET_SOLVE):
+        pb.fake_update_ticket(status="solved")
 
 
 def test_missing_reports_every_absent_capability_not_just_the_first():
@@ -310,3 +349,32 @@ def test_an_incomplete_embedder_backend_raises_a_typed_error_not_a_raw_attribute
     pb = pol.PolicyBackend(IncompleteBackend(), pol.Policy.from_profile("full"))
     with pytest.raises(exc.PolicyError, match="no such method"):
         pb.get_ticket(ticket_id=1)
+
+
+def test_an_unpickled_policybackend_refuses_gated_calls_with_a_typed_error() -> None:
+    # Unpickling reconstructs an instance via __new__ and never calls __init__,
+    # so the unpickled wrapper has no entry in _state. That already fails
+    # closed (verified: nothing delegated, no capability granted) - this
+    # asserts it fails as a typed PolicyError, not a raw KeyError escaping
+    # from inside the security layer.
+    #
+    # pickle.loads here round-trips an object this same test just built
+    # in-process; nothing crosses a trust boundary.
+    import pickle
+
+    pb = pol.PolicyBackend(FakeBackend({1: {"id": 1}}), pol.Policy.from_profile("full"))
+    unpickled = pickle.loads(pickle.dumps(pb))
+    with pytest.raises(exc.PolicyError, match="unpickled"):
+        unpickled.get_ticket(ticket_id=1)
+
+
+def test_an_unpickled_policybackends_policy_property_is_also_a_typed_refusal() -> None:
+    # The same defect, same fix, at the second (and only other) call site that
+    # reads _state directly: the .policy property. Same in-process round-trip,
+    # nothing crosses a trust boundary.
+    import pickle
+
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy.from_profile("full"))
+    unpickled = pickle.loads(pickle.dumps(pb))
+    with pytest.raises(exc.PolicyError, match="unpickled"):
+        unpickled.policy  # noqa: B018

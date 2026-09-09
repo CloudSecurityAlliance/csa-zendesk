@@ -107,11 +107,25 @@ PROFILES: dict[str, frozenset[str]] = {
     "readonly": frozenset({TICKET_READ, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}),
     "default": frozenset({TICKET_READ, TICKET_NOTE, TICKET_WRITE, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}),
     "agent": frozenset(
-        {TICKET_READ, TICKET_NOTE, TICKET_WRITE, TICKET_REPLY, TICKET_SOLVE, HC_READ, PEOPLE_READ, REPORTING_READ}
+        {
+            TICKET_READ,
+            TICKET_NOTE,
+            TICKET_WRITE,
+            TICKET_REPLY,
+            TICKET_SOLVE,
+            HC_READ,
+            PEOPLE_READ,
+            REPORTING_READ,
+            # A form's required fields vary per ticket_form_id (CLAUDE.md: "context is
+            # always registered"), and GET /api/v2/ticket_forms{,/…} is classified
+            # admin.read in analysis/operation-classification.csv - so the one profile
+            # that can solve must also be able to discover what solving requires.
+            ADMIN_READ,
+        }
     ),
-    "editor": frozenset({HC_READ, HC_WRITE, TICKET_READ, PEOPLE_READ}),
+    "editor": frozenset({HC_READ, HC_WRITE, TICKET_READ, PEOPLE_READ, ADMIN_READ}),
     "analyst": frozenset({TICKET_READ, PEOPLE_READ, HC_READ, REPORTING_READ, REPORTING_EXPORT, ADMIN_READ}),
-    # `full` is everything EXCEPT the four nobody should get by naming a word.
+    # `full` is everything EXCEPT the six nobody should get by naming a word.
     "full": frozenset(ALL_CAPABILITIES) - {TICKET_CLOSE, TICKET_PURGE, PEOPLE_PURGE, PEOPLE_MERGE, RAW_READ, RAW_WRITE},
 }
 
@@ -218,6 +232,29 @@ class Policy:
 _state: weakref.WeakKeyDictionary[PolicyBackend, tuple[Backend, Policy]] = weakref.WeakKeyDictionary()
 
 
+def _lookup(pb: PolicyBackend) -> tuple[Backend, Policy]:
+    """The wrapped `(backend, policy)` pair for `pb`, or a typed refusal.
+
+    `_state` is keyed by wrapper identity and populated only by `__init__`.
+    An instance that reaches here without `__init__` ever having run - the
+    practical way is unpickling, which reconstructs an instance via `__new__`
+    and never calls `__init__` at all - has no entry, and this already fails
+    closed: nothing is delegated, no capability is granted (verified live).
+    But left as a bare dict lookup it fails with a raw `KeyError`, which is
+    the same defect class as an incomplete embedder `Backend` raising a raw
+    `AttributeError` from inside this security layer - so it is refused here
+    the same way, with a typed error naming the remedy.
+    """
+    try:
+        return _state[pb]
+    except KeyError:
+        raise exc.PolicyError(
+            "this PolicyBackend has no wrapped backend or policy to consult - most "
+            "likely it was unpickled, which reconstructs an instance without ever "
+            "calling __init__. Construct a new one instead: PolicyBackend(backend, policy)."
+        ) from None
+
+
 def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     """The one gating implementation, shared by every materialised method.
 
@@ -231,17 +268,15 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     the backend actually implements the method, since the capability refusal
     is the one that matters for authority, not implementation completeness.
     """
-    backend, policy = _state[pb]
+    backend, policy = _lookup(pb)
     gate = _GATES[name]
     absent = policy.missing(_required(name, gate, kwargs))
     if absent:
         log.warning("refused %s: missing %s", name, ", ".join(sorted(absent)))
         raise exc.PolicyError(
             f"`{name}` needs {', '.join(sorted(absent))}, which this install does "
-            f"not grant. Set CSA_ZENDESK_PROFILE to a profile that includes it — or "
-            f"for a capability no profile grants, list it explicitly in "
-            f"CSA_ZENDESK_CAPABILITIES — then restart. The policy cannot be changed "
-            f"from here."
+            f"not grant. The capability must be granted in the server's own "
+            f"configuration; it cannot be changed from here."
         )
     if not hasattr(backend, name):
         # Independent of _GATES drift (which the cross-check in test_policy.py
@@ -310,7 +345,7 @@ class PolicyBackend:
 
     @property
     def policy(self) -> Policy:
-        return _state[self][1]
+        return _lookup(self)[1]
 
     def __getattr__(self, name: str) -> Any:
         # Reached only for names NOT materialised below - i.e. anything absent
