@@ -53,13 +53,31 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 | | Item | Status | Notes |
 |---|---|---|---|
-| D1 | **Create the public GitHub repo** once there is working code, and push. | blocked | On having something to show. |
+| D1 | **Create the public GitHub repo** once there is working code, and push. | done | Repo exists; Block 0 is the first working code. |
 | D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | blocked | On D1; the URLs would 404 today. |
 | D3 | **Decide whether `SECURITY-RESOURCES.md` is owed.** This project has no external surface of its own but handles an admin credential and untrusted ticket text. | open | |
 | D4 | **Add the definitions endpoints to the Zendesk config backup.** Four endpoints; the backup covers 19 config objects and not these. | blocked | Parked deliberately — that repo is politically sensitive. |
 | D6 | **The CI publication gate runs with structural patterns only.** `tenant-config/private-terms.txt` is gitignored, so CI cannot check literal tenant terms — it reports `STRUCTURAL ONLY`, which is the designed behaviour, but the literal tier is enforced only by the local pre-commit hook. Decide whether to ship the term list as a CI secret or accept the split. | open | Found while writing the Block 0 plan. |
 | D7 | **`tenant-config/private-terms.txt` has no reconstitution path.** It is gitignored by design (the denylist is the disclosure), so a fresh clone silently loses the literal tier. Document how it is rebuilt, or where the canonical copy lives. | open | |
 | D5 | Run `scripts/check_upstream`-equivalent periodically: re-fetch the specs, re-run `inventory.py` and `probe_access.py`, diff. | open | No `OPERATIONAL-RESOURCES.md` yet; create one if this becomes recurring. |
+
+## E. Block 0 debts — owed before or during Block 1
+
+Every one of these is a thing Block 0 got away with because it has **one** operation. Each
+becomes wrong, misleading, or invisible at fifty.
+
+| | Item | Status | Notes |
+|---|---|---|---|
+| E1 | **Read the capability configuration.** Refusals used to name `CSA_ZENDESK_PROFILE` and `CSA_ZENDESK_CAPABILITIES`; no code reads either, so the messages were rephrased generically. The server entry point must actually read config, and the refusal text should name the real variables once they work. | open | "Every refusal names its own remedy" is false until this lands. |
+| E2 | **Defend stdout at the server entry point.** The package never writes to stdout (enforced by ruff T20 plus an import-time guard), but an *embedder* calling `logging.basicConfig(stream=sys.stdout)` reroutes this library's records onto the MCP protocol channel and corrupts the session. The entry point should install a stderr handler on the package logger and/or refuse to start if a stdout handler is attached. | open | Not fixable inside the library — it cannot see the embedder's config. |
+| E3 | **`BULK` is declared and enforced nowhere.** ADR-003 makes it a cross-cutting additive capability, but no gate composes it and there is no helper. Add the composition (`bulk_of(base)` or similar) while there are **zero** call sites to migrate. | open | Cheapest now, most expensive after Block 1's bulk tools. |
+| E4 | **A `None` gate means "ungated" and nothing enumerates the set.** With one entry that is readable; with fifty, an accidentally-ungated read is invisible. Make the ungated set explicit and assert it. | open | |
+| E5 | **No rate-limit accounting at all** (invariant 9). Retries honour `Retry-After` and a cumulative budget, but nothing tracks the account limit or the much tighter per-endpoint buckets. Incremental export is an order of magnitude stricter. | open | Bites hardest on the export and reporting toolsets. |
+| E6 | **`ZendeskClient` will need ~50 `cast(Envelope, ...)` calls.** `PolicyBackend`'s methods are materialised with `setattr`, so mypy sees `Any` through `__getattr__`. Ship a `.pyi`, or give the wrapper an explicitly-typed dispatch handle, before the cast count grows. | open | Decide before the second operation, not the fiftieth. |
+| E7 | **`ZendeskClient(bare_backend)` is legal and ungated.** Correct for a library embedder who opted out; wrong for the MCP server, which must never construct one. The entry point needs the assertion the library deliberately does not make. | open | |
+| E8 | **`_http.py` is approaching ADR-002's 400-line tripwire** with three known additions owed (rate limiting, OAuth refresh, pagination following). Plan the split rather than discovering it. | open | |
+| E9 | **An unpickled `PolicyBackend` refuses with a typed error, but pickling one is meaningless.** Consider a `__reduce__` that refuses outright — a security wrapper arguably should not be picklable. | open | Fails closed today; cosmetic. |
+| E10 | **`test_capability_constants_and_the_all_tuple_agree` filters by upper-case name** and will misfire on the first non-capability upper-case constant added to `policy.py`. | open | Well-commented, but fragile by construction. |
 
 ---
 

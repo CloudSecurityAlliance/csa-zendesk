@@ -10,9 +10,15 @@ project_source: github:CloudSecurityAlliance-Internal/CINO-Projects/projects/Clo
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
-> **Status: API surface enumerated. Nothing implemented.** There is no `src/` yet. This
-> repository currently holds the upstream API snapshots, the operation inventory, and the probe
-> findings that will constrain the design. Do not describe any feature below as working.
+> **Status: Block 0 complete — foundations only, one operation end to end.** `src/` now holds
+> the typed error hierarchy, the error parser, the pagination guard, the HTTP client, the
+> `Backend` seam with an offline `FakeBackend`, the fail-closed capability policy, and a thin
+> `ZendeskClient`. One operation — `get_ticket` — reaches through every layer, proven by
+> `tests/test_vertical.py`.
+>
+> **There is no MCP server and no tools yet, and OAuth is not implemented** (Block 0b). Of the
+> 54 tools in the design, **one** backend method exists. Do not describe any tool below as
+> working: the table is the plan, not the state.
 
 ## Scope
 

@@ -9,3 +9,4 @@ Status: Open | Triggered | Resolved | Cancelled
 | ID | Title | Status | Type | Date |
 |---|---|---|---|---|
 | [WAITING-FOR-001](WAITING-FOR/WAITING-FOR-001.md) | Testable access to the six excluded families | Open | Cost | 2026-08-31 |
+| [WAITING-FOR-002](WAITING-FOR/WAITING-FOR-002.md) | Required status checks on `main` | Open | Sequencing | 2026-09-08 |
