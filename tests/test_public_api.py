@@ -51,14 +51,47 @@ def test_the_types_an_embedder_needs_are_exported():
         assert name in csa_zendesk.__all__, name
 
 
-def test_nothing_writes_to_stdout_on_import():
-    # Under stdio MCP, stdout IS the JSON-RPC channel. One stray byte corrupts the
-    # session and the server looks alive while answering nothing.
+def test_nothing_writes_to_stdout_when_any_module_is_imported_fresh():
+    # Under stdio MCP, stdout IS the JSON-RPC channel: one stray byte AT IMPORT
+    # TIME corrupts the session before a single tool call happens, and the server
+    # looks alive while answering nothing.
+    #
+    # `importlib.reload(csa_zendesk)` re-executes only __init__.py - every module
+    # it imports is already cached in sys.modules and is NOT re-executed, so a
+    # print() at module scope in any of the other seven modules left an earlier
+    # version of this test green even though a real cold start (the only import a
+    # freshly launched server ever does) would have printed it. Genuinely removing
+    # every module of this package from sys.modules before each import is what
+    # makes the test see what a cold start sees, one module at a time so a failure
+    # names which module misbehaved.
+    #
+    # This is an IMPORT-TIME guard ONLY. A print() called from inside a function
+    # is not exercised here at all - it only runs, and would only be caught, when
+    # that function actually executes. Verified live: a print() at module scope
+    # in _http.py makes this test fail; a print() inside one of _http.py's
+    # functions does not, because nothing here ever calls that function.
     import contextlib
     import importlib
     import io
+    import pkgutil
+    import sys
 
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        importlib.reload(csa_zendesk)
-    assert buf.getvalue() == ""
+    # Discovered from the files on disk, not from any list this package
+    # maintains about itself - an import-time guard that only checked modules
+    # the package already claims to have would not be independent of the thing
+    # it is guarding.
+    module_names = sorted(f"csa_zendesk.{info.name}" for info in pkgutil.iter_modules(csa_zendesk.__path__))
+    module_names.append("csa_zendesk")  # the package's own __init__.py
+    # If this count ever changes, a module was added or removed - update the
+    # number, but do not delete the assertion: without it, a module quietly
+    # excluded from the loop below would leave this guard passing while
+    # covering less than it claims to.
+    assert len(module_names) == 8, f"expected 8 modules, found {module_names}"
+
+    for name in module_names:
+        for cached in [n for n in sys.modules if n == "csa_zendesk" or n.startswith("csa_zendesk.")]:
+            del sys.modules[cached]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            importlib.import_module(name)
+        assert buf.getvalue() == "", f"{name} wrote to stdout on import: {buf.getvalue()!r}"
