@@ -12,6 +12,7 @@ so `tests/test_backend.py` compares their signatures.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Protocol, runtime_checkable
 
 from . import exceptions as exc
@@ -55,13 +56,21 @@ class FakeBackend:
     It returns full envelopes (`{"ticket": {...}}`), not inner objects, and it
     raises the same typed errors the real backend does - a fake that fails
     differently is worse than no fake.
+
+    Both the constructor and every getter deep-copy: a real ticket envelope is
+    nested nearly everywhere (`via`, `satisfaction_rating`, `custom_fields`,
+    `fields`), and a shallow `dict(...)` only protects the top level - a caller
+    mutating a nested field through a returned envelope would otherwise corrupt
+    both this fixture's backing store and the dict the constructor was given.
+    Envelopes are JSON, so `copy.deepcopy` is exactly the right semantics, and
+    the cost is irrelevant in a test double.
     """
 
     def __init__(self, tickets: dict[int, dict[str, Any]] | None = None) -> None:
-        self.tickets: dict[int, dict[str, Any]] = dict(tickets or {})
+        self.tickets: dict[int, dict[str, Any]] = copy.deepcopy(tickets) if tickets else {}
 
     def get_ticket(self, *, ticket_id: int) -> Envelope:
         try:
-            return {"ticket": dict(self.tickets[ticket_id])}
+            return {"ticket": copy.deepcopy(self.tickets[ticket_id])}
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
