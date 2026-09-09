@@ -27,7 +27,8 @@ Status: `open` · `in progress` · `blocked` · `done`
 | | Item | Status | Notes |
 |---|---|---|---|
 | B1 | ~~Architecture options~~ | **done** | Settled across ADR-002/003/005/006/007/008 and assembled in `docs/superpowers/specs/2026-09-01-csa-zendesk-design.md`. |
-| B2 | **Implementation plan** for Block 0, from the design spec. | open | Spec written; the plan is the next artifact. |
+| B2 | ~~Implementation plan for Block 0~~ | **done** | `docs/superpowers/plans/2026-09-08-block-0-foundations.md` — 8 tasks, 46 steps, TDD throughout. |
+| B11 | **Block 0b plan** — OAuth public client, PKCE, the token store, refresh, `whoami` (ADR-009). | open | Deliberately separate: Block 0 stays reviewable, and OAuth deserves its own review. |
 | B3 | ~~`CLAUDE.md`~~ | **done** | Fourteen invariants, the public/private line, testing tiers, and the surface/authority split. |
 | B4 | ~~Decide the bulk / async story~~ | **done** | ADR-007: surface Zendesk's jobs with brief polling then a handle; bound our own aggregation instead of deferring it; hold no job state. |
 | B5 | ~~Decide on the store-and-query pattern~~ | **done** | ADR-005: aggregate in memory for the model, export to disk for people, persist neither. Store-and-query rejected — it reverses `SECURITY.md`'s no-persistence position and its benefit is covered twice over. |
@@ -56,6 +57,8 @@ Status: `open` · `in progress` · `blocked` · `done`
 | D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | blocked | On D1; the URLs would 404 today. |
 | D3 | **Decide whether `SECURITY-RESOURCES.md` is owed.** This project has no external surface of its own but handles an admin credential and untrusted ticket text. | open | |
 | D4 | **Add the definitions endpoints to the Zendesk config backup.** Four endpoints; the backup covers 19 config objects and not these. | blocked | Parked deliberately — that repo is politically sensitive. |
+| D6 | **The CI publication gate runs with structural patterns only.** `tenant-config/private-terms.txt` is gitignored, so CI cannot check literal tenant terms — it reports `STRUCTURAL ONLY`, which is the designed behaviour, but the literal tier is enforced only by the local pre-commit hook. Decide whether to ship the term list as a CI secret or accept the split. | open | Found while writing the Block 0 plan. |
+| D7 | **`tenant-config/private-terms.txt` has no reconstitution path.** It is gitignored by design (the denylist is the disclosure), so a fresh clone silently loses the literal tier. Document how it is rebuilt, or where the canonical copy lives. | open | |
 | D5 | Run `scripts/check_upstream`-equivalent periodically: re-fetch the specs, re-run `inventory.py` and `probe_access.py`, diff. | open | No `OPERATIONAL-RESOURCES.md` yet; create one if this becomes recurring. |
 
 ---

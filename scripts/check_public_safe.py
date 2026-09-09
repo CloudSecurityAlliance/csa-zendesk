@@ -51,6 +51,12 @@ PUBLISHED_CONTACTS = frozenset({
     "security@cloudsecurityalliance.org",
 })
 
+# RFC 2606 / RFC 6761 reserve these for documentation and testing. An address in
+# one of them cannot belong to anybody, so it is a fixture by construction - a
+# structural exemption, not a list of literals to maintain.
+RESERVED_DOMAINS = re.compile(r"@(?:[a-z0-9-]+\.)*(?:example\.(?:com|org|net)|"
+                              r"test|invalid|localhost|local)$", re.I)
+
 # Documented Zendesk PRODUCT limits. These are comma-formatted counts, but they
 # describe the API's behaviour rather than any tenant's data.
 PRODUCT_LIMITS = re.compile(r"\b(?:10,000|1,000|100,000|20,000|2,500)\b")
@@ -113,7 +119,9 @@ def main() -> int:
             for m in pat.finditer(text):
                 if label == "tenant volume figure" and PRODUCT_LIMITS.match(m.group()):
                     continue
-                if label == "email address" and m.group() in PUBLISHED_CONTACTS:
+                if label == "email address" and (
+                        m.group() in PUBLISHED_CONTACTS
+                        or RESERVED_DOMAINS.search(m.group())):
                     continue
                 findings.append((path, label,
                                  text.count("\n", 0, m.start()) + 1, m.group()[:48]))
