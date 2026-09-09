@@ -41,6 +41,16 @@ def check_params(params: Mapping[str, Any]) -> None:
 
     Raises `PaginationError` naming the conflicting keys and the remedy;
     returns `None` when the query is safe to send as-is.
+
+    One gap is irreducible here and is not an oversight: a FIRST request carries
+    no page parameter yet, so there is no cursor key to detect, and a
+    `sort=created_at` sent to an endpoint that answers cursor-shaped regardless
+    cannot be caught locally. Catching it would need an endpoint-capability
+    table, which belongs to an endpoint-aware layer rather than a params
+    validator. It is also the benign direction: that request fails as a typed
+    HTTP 400 `InvalidPaginationParameter`, which `_errors.parse_error` maps to
+    `PaginationError` anyway - loud, not the silent-200 class this module exists
+    to prevent.
     """
     present = {k for k, v in params.items() if v is not None}
     cursor_present = present & CURSOR_KEYS
@@ -94,11 +104,17 @@ def next_cursor(body: Mapping[str, Any]) -> str | None:
 
 
 def translate_sort(sort: str) -> str:
-    """Map a caller's sort intent onto something cursor paging can serve.
+    """Substitute `created_at` for `id`, the one sort intent that HAS a cursor equivalent.
 
     `created_at` becomes `id`: not an alias, a proxy that happens to be exact,
     because Zendesk ids ascend with creation. Doing the substitution here means
     no caller has to know cursor paging cannot honour `created_at` directly.
+
+    Everything else passes through UNCHANGED, including fields cursor paging
+    cannot serve at all (`assignee`, `group`, `locale`, `requester`, `priority`).
+    That is deliberate rather than incomplete: no proxy exists for those, so
+    inventing one would silently answer a different question than the caller
+    asked. They pass through to `check_params`, which refuses them by name.
     """
     descending = sort.startswith("-")
     field = sort.lstrip("-")
