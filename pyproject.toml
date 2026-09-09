@@ -45,10 +45,23 @@ where = ["src"]
 [tool.ruff]
 line-length = 120
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+# T20 (flake8-print) is here for one reason: this is a stdio MCP server, so stdout
+# is the protocol channel and a single stray `print` corrupts the session. The
+# runtime guard in tests/test_public_api.py can only observe output at IMPORT time;
+# a `print` inside a function is invisible to it and fires in production instead.
+# Static analysis catches both, which makes this the stronger of the two guards -
+# they are kept together because neither subsumes the other (T20 cannot see a write
+# through `sys.stdout`, which the runtime guard can).
+select = ["E", "F", "W", "I", "B", "UP", "T20"]
 # E702 is deliberately ignored in the sibling repos - one-line `a = ...; b = ...`
 # is house style there. Adopted here for consistency.
 ignore = ["E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# scripts/ are operator-facing CLIs whose entire output contract is stdout. The
+# stdout prohibition binds the PACKAGE, which is what gets imported into an MCP
+# server; it was never meant to bind the tooling around it.
+"scripts/*" = ["T20"]
 
 [tool.mypy]
 files = ["src"]
