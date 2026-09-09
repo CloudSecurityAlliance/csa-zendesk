@@ -12,9 +12,24 @@ The retry rules are not symmetric, and the asymmetry is the point:
 A `Retry-After` the server hands back is honoured, not trusted blindly: it can be
 enormous (999999 has been observed live), and a stdio MCP server that blocks for
 days is indistinguishable from a hung one. `MAX_RETRY_AFTER_SECONDS` is the ceiling
-we will actually wait on. When the server asks for longer than that we do not sleep
-and do not silently shorten the wait - we stop retrying and raise the error we were
-handed, exactly as `_errors.parse_error` reported it.
+we will actually wait on for any *one* sleep. When the server asks for longer than
+that we do not sleep and do not silently shorten the wait - we stop retrying and
+raise the error we were handed, exactly as `_errors.parse_error` reported it.
+
+That per-sleep ceiling is not enough by itself: `MAX_RETRIES` retries at up to
+`MAX_RETRY_AFTER_SECONDS` each still allows one logical call to sleep for
+`MAX_RETRIES * MAX_RETRY_AFTER_SECONDS` seconds in total, and Zendesk's account rate
+limit resets on a per-minute window, so a `Retry-After` at or near the per-sleep cap
+three times in a row is an ordinary production sequence, not a pathological one.
+`MAX_TOTAL_RETRY_SECONDS` bounds the *sum* of every sleep this client performs across
+one logical call, so the two ceilings answer different questions: the per-sleep cap
+asks "is this one wait absurd?" and the budget asks "have we, cumulatively, been
+silent for too long?" - and a caller can hit either first depending on the shape of
+the responses it gets.
+
+The retry schedule is exercised in tests by monkeypatching `time.sleep` on this
+module (`monkeypatch.setattr(_http.time, "sleep", ...)`), not through a constructor
+parameter - there is deliberately no `sleep=` argument on `HttpClient`.
 """
 
 from __future__ import annotations
@@ -40,6 +55,15 @@ MAX_RETRIES = 3
 #: The longest `Retry-After` this client will actually sleep for. A value larger than
 #: this is honoured in the exception (never shortened) but not waited out.
 MAX_RETRY_AFTER_SECONDS = 60
+
+#: The longest total time this client will spend sleeping across every retry of one
+#: logical call. 90s: enough headroom for one full per-sleep-cap wait (60s) plus a
+#: second, more modest one, while staying well short of MAX_RETRIES * MAX_RETRY_AFTER_SECONDS
+#: (180s) - a wait most interactive MCP callers' own client-side timeouts will not
+#: survive, and this module's own reasoning about MAX_RETRY_AFTER_SECONDS applies just
+#: as much to the sum as to any one term of it: a client silent for three minutes is
+#: indistinguishable from a hung one.
+MAX_TOTAL_RETRY_SECONDS = 90
 
 #: 429 means the request was refused outright - nothing was applied, so retrying a
 #: write is safe.
@@ -125,6 +149,7 @@ class HttpClient:
         retryable = _IDEMPOTENT_RETRYABLE if idempotent else _NON_IDEMPOTENT_RETRYABLE
 
         attempt = 0
+        slept = 0  # cumulative seconds actually spent sleeping in this call, so far
         while True:
             response = self._send(method, path, params=sendable, json=json)
 
@@ -140,16 +165,21 @@ class HttpClient:
             ):
                 wait = error.retry_after
                 if wait <= MAX_RETRY_AFTER_SECONDS:
-                    attempt += 1
-                    log.warning(
-                        "HTTP %s from Zendesk; retrying in %ss (attempt %s/%s)",
-                        response.status_code,
-                        wait,
-                        attempt,
-                        MAX_RETRIES,
-                    )
-                    time.sleep(wait)
-                    continue
+                    if slept + wait <= MAX_TOTAL_RETRY_SECONDS:
+                        attempt += 1
+                        slept += wait
+                        log.warning(
+                            "HTTP %s from Zendesk; retrying in %ss (attempt %s/%s, %ss/%ss of retry budget spent)",
+                            response.status_code,
+                            wait,
+                            attempt,
+                            MAX_RETRIES,
+                            slept,
+                            MAX_TOTAL_RETRY_SECONDS,
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise self._budget_exhausted(error, slept, wait)
 
             raise error
 
@@ -181,6 +211,28 @@ class HttpClient:
         else:
             return response
         raise exc.ApiError(f"could not reach Zendesk ({kind}) requesting {method} {path}")
+
+    @staticmethod
+    def _budget_exhausted(
+        error: exc.RateLimited | exc.ServiceUnavailable, slept: int, next_wait: int
+    ) -> exc.RateLimited | exc.ServiceUnavailable:
+        """Re-raise the same typed error - same type, same `retry_after` - with a
+        message that names the real reason for giving up.
+
+        Not `raise error` unmodified: a caller who waited most of a minute needs to
+        know this client gave up on its own retry budget, not that Zendesk itself
+        refused a third or fourth time - those call for different remedies, and this
+        project's rule is that every refusal names its own. The remedy here is
+        exactly that distinction: wait longer than this client will, then retry.
+        """
+        cls = type(error)
+        message = (
+            f"{error} - giving up after a cumulative retry budget of {MAX_TOTAL_RETRY_SECONDS}s "
+            f"of sleeping (already spent {slept}s; the next wait would be {next_wait}s more). "
+            f"This client gave up on its own budget, not because Zendesk refused again - "
+            f"wait longer than this client will, then retry."
+        )
+        return cls(message, retry_after=error.retry_after)
 
     @staticmethod
     def _body_or_none(response: httpx.Response) -> object:

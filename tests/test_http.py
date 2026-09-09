@@ -371,3 +371,67 @@ def test_a_transport_error_does_not_chain_to_an_exception_carrying_the_auth_head
     assert ei.value.__cause__ is None
     assert ei.value.__context__ is None
     assert "tok" not in str(ei.value)
+
+
+# --- fix round 2: cumulative retry budget ------------------------------------
+#
+# MAX_RETRIES x MAX_RETRY_AFTER_SECONDS alone still allows 180s of real sleeping in
+# one logical call. See .superpowers/sdd/2026-09-08-block-0-foundations/task-5-fix-2.md.
+
+
+def test_a_sustained_59s_retry_after_stops_on_the_budget_not_on_max_retries(monkeypatch):
+    # A Retry-After of 59s stays under the per-sleep cap (60s) every single time, so
+    # nothing here is ever refused for being an absurd single wait - only the sum
+    # across attempts trips the budget.
+    slept = []
+    monkeypatch.setattr(_http.time, "sleep", lambda seconds: slept.append(seconds))
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(429, json={}, headers={"Retry-After": "59"})
+
+    with pytest.raises(exc.RateLimited) as ei:
+        client(handler).get("/api/v2/tickets.json")
+
+    assert sum(slept) <= _http.MAX_TOTAL_RETRY_SECONDS
+    assert calls["n"] < 1 + _http.MAX_RETRIES  # gave up before exhausting MAX_RETRIES
+    assert "budget" in str(ei.value)
+    assert ei.value.retry_after == 59  # the underlying fact is preserved, not altered
+
+
+def test_a_small_retry_after_still_gets_the_full_max_retries(monkeypatch):
+    # The budget must not quietly become the binding limit for ordinary retries: a
+    # server that keeps saying "retry in 1s" should still be retried MAX_RETRIES
+    # times, exactly as it was before the budget existed.
+    slept = []
+    monkeypatch.setattr(_http.time, "sleep", lambda seconds: slept.append(seconds))
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(429, json={}, headers={"Retry-After": "1"})
+
+    with pytest.raises(exc.RateLimited) as ei:
+        client(handler).get("/api/v2/tickets.json")
+
+    assert calls["n"] == 1 + _http.MAX_RETRIES
+    assert slept == [1] * _http.MAX_RETRIES
+    assert "budget" not in str(ei.value)  # gave up on MAX_RETRIES, not the budget
+
+
+def test_the_budget_exhausted_message_names_the_budget_as_the_reason(monkeypatch):
+    monkeypatch.setattr(_http.time, "sleep", lambda seconds: None)
+
+    def handler(request):
+        return httpx.Response(503, json={}, headers={"Retry-After": "59"})
+
+    with pytest.raises(exc.ServiceUnavailable) as ei:
+        client(handler).request("GET", "/api/v2/tickets.json")
+
+    message = str(ei.value)
+    assert "retry budget" in message
+    assert str(_http.MAX_TOTAL_RETRY_SECONDS) in message
+    # A caller reading this must be told it was this client giving up, not a further
+    # refusal from Zendesk.
+    assert "not because Zendesk refused again" in message
