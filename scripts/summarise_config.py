@@ -64,7 +64,7 @@ def main() -> int:
         w(f"| {label} | {c} | {note} |")
 
     w("\n### Empty — configured-but-unused, or unavailable\n")
-    empties = [l for k, l in ORDER if (idx.get(k) or {}).get("count") == 0]
+    empties = [lbl for k, lbl in ORDER if (idx.get(k) or {}).get("count") == 0]
     w(", ".join(empties) + ".\n")
     w("**No SLA policies exist.** Catherine's March 2026 analysis proposed implementing a")
     w("tiered SLA as action 12; the extract confirms it has not happened. Any tool")

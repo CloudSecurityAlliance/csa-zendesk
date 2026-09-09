@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import os
 import pathlib
+import re
 import sys
 import urllib.request
 
@@ -61,7 +61,8 @@ def dig(doc: dict, path: tuple[str, ...]):
         if not isinstance(doc, dict) or key not in doc:
             # The envelope key differs per endpoint and has changed before; say so
             # rather than returning [] and reporting "no actions defined".
-            raise KeyError(f"expected key {key!r}, got {list(doc)[:6] if isinstance(doc, dict) else type(doc).__name__}")
+            got = list(doc)[:6] if isinstance(doc, dict) else type(doc).__name__
+            raise KeyError(f"expected key {key!r}, got {got}")
         doc = doc[key]
     return doc
 

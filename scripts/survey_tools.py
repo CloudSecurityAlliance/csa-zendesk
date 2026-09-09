@@ -43,8 +43,10 @@ SKIP_DIRS = {"node_modules", ".git", "dist", "build", "vendor", "test", "tests",
 # Domain buckets, matched in order. First hit wins.
 DOMAINS = [
     ("help center", r"article|section|categor|translat|label|help_?center|knowledge|post|topic"),
-    ("ticket read", r"^(get|list|show|read|count|search)_?ticket|ticket_?(detail|audit|metric|field|form|status)|linked_incident|^get_tickets$"),
-    ("ticket write", r"ticket.*(creat|updat|delet|solv|clos|assign|merg|spam|tag|edit)|^(creat|updat|delet|solv|clos|assign|merg)e?_?ticket|bulk_solve|set_ticket|add_tag|remove_tag"),
+    ("ticket read", r"^(get|list|show|read|count|search)_?ticket|"
+                    r"ticket_?(detail|audit|metric|field|form|status)|linked_incident|^get_tickets$"),
+    ("ticket write", r"ticket.*(creat|updat|delet|solv|clos|assign|merg|spam|tag|edit)|"
+                     r"^(creat|updat|delet|solv|clos|assign|merg)e?_?ticket|bulk_solve|set_ticket|add_tag|remove_tag"),
     ("comments/notes", r"comment|note|repl"),
     ("attachments", r"attach|upload|download"),
     ("users", r"user|requester|agent|identit"),

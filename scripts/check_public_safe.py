@@ -35,7 +35,6 @@ from __future__ import annotations
 import pathlib
 import re
 import subprocess
-import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRIVATE_TERMS = ROOT / "tenant-config/private-terms.txt"
@@ -149,7 +148,7 @@ def main() -> int:
                 if label in seen:
                     continue
                 seen.add(label)
-                n = sum(1 for l, _, _ in items if l == label)
+                n = sum(1 for lbl, _, _ in items if lbl == label)
                 print(f"      {label} x{n}  (first at line {line}: {snip!r})")
         print("\nThese identify a tenant or a third party. Keep them out of the public repo.")
         return 1
