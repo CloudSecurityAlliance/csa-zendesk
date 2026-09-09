@@ -1,4 +1,5 @@
 import inspect
+from typing import Any
 
 import httpx
 import pytest
@@ -6,6 +7,11 @@ import pytest
 from csa_zendesk import exceptions as exc
 from csa_zendesk._http import HttpClient
 from csa_zendesk.backend import ApiBackend, Backend, FakeBackend
+
+
+def _public_methods(cls: Any) -> set[str]:
+    """Public callables declared on a class, Protocol machinery and dunders excluded."""
+    return {n for n in dir(cls) if not n.startswith("_") and callable(getattr(cls, n, None))}
 
 
 def test_fake_backend_satisfies_the_protocol():
@@ -34,23 +40,42 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
     assert isinstance(NameOnlyImpostor(), Backend)
 
 
-def test_the_two_backends_have_identical_signatures():
-    # FakeBackend powers every unit test, so a method that drifts from ApiBackend
-    # would leave the whole suite exercising a stale double.
-    for name in [n for n in dir(Backend) if not n.startswith("_")]:
+def test_the_protocol_and_both_backends_declare_exactly_the_same_methods() -> None:
+    # The union, not the Protocol's own members: a method added to ApiBackend and not
+    # declared on the Protocol is invisible to a guard that only walks the Protocol,
+    # which is the half that cannot drift. FakeBackend powers every unit test, so a
+    # method it lacks leaves the suite exercising a stale double and passing.
+    protocol, real, fake = _public_methods(Backend), _public_methods(ApiBackend), _public_methods(FakeBackend)
+    assert protocol == real == fake, (
+        f"backend drift - only on Protocol: {sorted(protocol - real - fake)}; "
+        f"only on ApiBackend: {sorted(real - protocol - fake)}; "
+        f"only on FakeBackend: {sorted(fake - protocol - real)}"
+    )
+
+
+def test_the_two_backends_have_identical_signatures() -> None:
+    names = _public_methods(Backend) | _public_methods(ApiBackend) | _public_methods(FakeBackend)
+    assert names, "signature guard has gone vacuous - no public backend methods found"
+    for name in sorted(names):
+        assert hasattr(FakeBackend, name), f"{name} is missing from FakeBackend"
+        assert hasattr(ApiBackend, name), f"{name} is missing from ApiBackend"
         fake = inspect.signature(getattr(FakeBackend, name))
         real = inspect.signature(getattr(ApiBackend, name))
         assert fake == real, f"{name}: fake {fake} != real {real}"
 
 
-def test_every_backend_method_takes_keyword_only_arguments():
-    # PolicyBackend wraps uniformly; positional args would break that.
-    for name in [n for n in dir(Backend) if not n.startswith("_")]:
-        sig = inspect.signature(getattr(ApiBackend, name))
-        for pname, p in sig.parameters.items():
-            if pname == "self":
-                continue
-            assert p.kind is inspect.Parameter.KEYWORD_ONLY, f"{name}.{pname}"
+def test_every_backend_method_takes_keyword_only_arguments() -> None:
+    # PolicyBackend wraps uniformly; a positional argument would break that.
+    names = _public_methods(Backend) | _public_methods(ApiBackend) | _public_methods(FakeBackend)
+    assert names, "keyword-only guard has gone vacuous - no public backend methods found"
+    for name in sorted(names):
+        for cls in (ApiBackend, FakeBackend):
+            if not hasattr(cls, name):
+                continue  # the set-equality test above is what reports a missing method
+            for pname, p in inspect.signature(getattr(cls, name)).parameters.items():
+                if pname == "self":
+                    continue
+                assert p.kind is inspect.Parameter.KEYWORD_ONLY, f"{cls.__name__}.{name}.{pname}"
 
 
 def test_get_ticket_returns_the_raw_envelope():
