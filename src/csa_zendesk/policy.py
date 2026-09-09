@@ -123,7 +123,6 @@ Gate = str | None | Callable[[dict[str, Any]], frozenset[str]]
 #: Every Backend method needs an entry. Missing means REFUSED.
 _GATES: dict[str, Gate] = {
     "get_ticket": TICKET_READ,
-    "get_user": PEOPLE_READ,
 }
 
 
@@ -169,13 +168,58 @@ class Policy:
 # consulted, so a real `self._backend` would make `pb._backend` return the raw
 # backend directly and defeat every gate downstream. Keeping the pair fully out
 # of the instance's own namespace means there is nothing there to find by
-# guessing a private name - the only way to the backend is through `__getattr__`,
-# which is the gate.
+# guessing a private name - the only way to the backend is through the gate.
+# Entries are per-wrapper-instance (keyed by identity, not shared), so two
+# `PolicyBackend`s never see each other's backend or policy.
 _state: weakref.WeakKeyDictionary[PolicyBackend, tuple[Backend, Policy]] = weakref.WeakKeyDictionary()
 
 
+def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
+    """The one gating implementation, shared by every materialised method.
+
+    Looks up the wrapped backend and policy for `pb`, checks `name`'s gate
+    against the call's kwargs, and either refuses (logging method + missing
+    capability, never the arguments - they may carry ticket content) or
+    delegates to the real backend method.
+    """
+    backend, policy = _state[pb]
+    gate = _GATES[name]
+    absent = policy.missing(_required(gate, kwargs))
+    if absent:
+        log.warning("refused %s: missing %s", name, ", ".join(sorted(absent)))
+        raise exc.PolicyError(
+            f"`{name}` needs {', '.join(sorted(absent))}, which this install does "
+            f"not grant. Set CSA_ZENDESK_PROFILE to a profile that includes it — or "
+            f"for a capability no profile grants, list it explicitly in "
+            f"CSA_ZENDESK_CAPABILITIES — then restart. The policy cannot be changed "
+            f"from here."
+        )
+    return getattr(backend, name)(**kwargs)
+
+
 class PolicyBackend:
-    """Wraps a Backend and refuses anything the policy does not permit."""
+    """Wraps a Backend and refuses anything the policy does not permit.
+
+    Every name in `_GATES` is materialised onto this class as a real method
+    (see the generation loop below the class body), so `PolicyBackend` passes
+    `isinstance(pb, Backend)` and `dir(PolicyBackend)` tells the truth - on
+    Python 3.12+, `typing.Protocol`'s `isinstance` check uses
+    `inspect.getattr_static()`, which does not consult `__getattr__`, so a
+    method that existed only dynamically would satisfy `hasattr` but fail
+    `isinstance` (and would do so inconsistently across the 3.10-3.13 floor,
+    since `getattr_static` is the 3.12 change). `__getattr__` remains the
+    fail-closed catch-all for every name absent from `_GATES`: the generation
+    loop covers what is declared, `__getattr__` covers what is not, and a
+    forgotten `_GATES` entry still turns a method off rather than leaving it
+    ungoverned.
+
+    The wrapped backend and policy are never instance attributes: they live in
+    the module-level `_state` `WeakKeyDictionary` above, keyed by wrapper
+    identity. An instance attribute (even one written via
+    `object.__setattr__`) would be found by ordinary attribute lookup before
+    `__getattr__` is ever consulted, which would make `pb._backend` return the
+    raw, ungated backend directly.
+    """
 
     def __init__(self, backend: Backend, policy: Policy) -> None:
         _state[self] = (backend, policy)
@@ -189,29 +233,38 @@ class PolicyBackend:
         return _state[self][1]
 
     def __getattr__(self, name: str) -> Any:
+        # Reached only for names NOT materialised below - i.e. anything absent
+        # from _GATES (or a private-name guess). THE fail-closed guard: a
+        # Backend method with no _GATES entry has no generated method either,
+        # so it lands here and is refused rather than silently delegated.
         if name.startswith("_"):
             raise AttributeError(name)
-        if name not in _GATES:
-            log.warning("refused %s: no declared capability gate", name)
-            raise exc.PolicyError(
-                f"`{name}` has no declared capability gate, so it is refused. This is a "
-                f"programming error in csa-zendesk, not a configuration problem: add an "
-                f"entry to policy._GATES."
-            )
-        backend, policy = _state[self]
-        gate, method = _GATES[name], getattr(backend, name)
+        log.warning("refused %s: no declared capability gate", name)
+        raise exc.PolicyError(
+            f"`{name}` has no declared capability gate, so it is refused. This is a "
+            f"programming error in csa-zendesk, not a configuration problem: add an "
+            f"entry to policy._GATES."
+        )
 
-        def guarded(**kwargs: Any) -> Any:
-            absent = policy.missing(_required(gate, kwargs))
-            if absent:
-                log.warning("refused %s: missing %s", name, ", ".join(sorted(absent)))
-                raise exc.PolicyError(
-                    f"`{name}` needs {', '.join(sorted(absent))}, which this install does "
-                    f"not grant. Set CSA_ZENDESK_PROFILE to a profile that includes it — or "
-                    f"for a capability no profile grants, list it explicitly in "
-                    f"CSA_ZENDESK_CAPABILITIES — then restart. The policy cannot be changed "
-                    f"from here."
-                )
-            return method(**kwargs)
 
-        return guarded
+def _make_gated(name: str) -> Callable[..., Any]:
+    """Build one materialised, gated method bound to `name` in `_GATES`.
+
+    A factory rather than a function defined directly in the loop below: each
+    call captures its own `name` as a parameter, so every generated method
+    dispatches on the name it was built for rather than on whatever the loop
+    variable happens to hold last.
+    """
+
+    def gated(self: PolicyBackend, **kwargs: Any) -> Any:
+        return _dispatch(self, name, kwargs)
+
+    gated.__name__ = name
+    gated.__qualname__ = f"PolicyBackend.{name}"
+    gated.__doc__ = f"Gated `{name}`. Refuses unless the policy grants its capability."
+    return gated
+
+
+for _name in _GATES:
+    setattr(PolicyBackend, _name, _make_gated(_name))
+del _name

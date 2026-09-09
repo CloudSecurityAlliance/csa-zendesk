@@ -1,3 +1,5 @@
+import inspect
+
 import pytest
 
 from csa_zendesk import exceptions as exc
@@ -155,3 +157,19 @@ def test_dunder_attribute_access_on_the_wrapper_is_unaffected():
     # not collaterally break normal object machinery.
     pb = wrapped()
     assert pb.__class__ is pol.PolicyBackend
+
+
+def test_the_policy_wrapper_is_itself_a_backend() -> None:
+    # Property 2: an embedder holding a PolicyBackend has what an MCP client has.
+    # This must hold on every supported Python: 3.12 changed protocol isinstance to
+    # use inspect.getattr_static(), which does not consult __getattr__, so a
+    # dynamically-provided method satisfies hasattr and fails isinstance.
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy.from_profile("default"))
+    assert isinstance(pb, Backend)
+    assert inspect.getattr_static(pb, "get_ticket") is not None
+
+
+def test_the_wrapper_exposes_exactly_the_gated_methods() -> None:
+    # The generated surface and the gate table cannot drift apart.
+    exposed = {n for n in dir(pol.PolicyBackend) if not n.startswith("_") and n != "policy"}
+    assert exposed == set(pol._GATES), f"exposed {sorted(exposed)} != gates {sorted(pol._GATES)}"
