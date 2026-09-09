@@ -173,3 +173,21 @@ def test_the_wrapper_exposes_exactly_the_gated_methods() -> None:
     # The generated surface and the gate table cannot drift apart.
     exposed = {n for n in dir(pol.PolicyBackend) if not n.startswith("_") and n != "policy"}
     assert exposed == set(pol._GATES), f"exposed {sorted(exposed)} != gates {sorted(pol._GATES)}"
+
+
+def test_every_gate_names_a_real_backend_method_and_every_method_has_a_gate() -> None:
+    # backend.py's docstring promises adding a Backend method obliges three things: an
+    # ApiBackend implementation, a FakeBackend implementation, and a _GATES entry.
+    # tests/test_backend.py enforces the first two against each other. This enforces the
+    # third - and it must compare _GATES against the PROTOCOL, not against itself. A
+    # guard that checks `exposed == set(_GATES)` passes happily when both sides carry the
+    # same bogus name, which is exactly how a stray gate once shipped green.
+    protocol = {n for n in dir(Backend) if not n.startswith("_") and callable(getattr(Backend, n, None))}
+    gates = set(pol._GATES)
+    assert gates, "gate guard has gone vacuous - _GATES is empty"
+    assert gates == protocol, (
+        f"gate table and Backend disagree - gates for no such method: "
+        f"{sorted(gates - protocol)} (delete them, or add the method); "
+        f"methods with no gate: {sorted(protocol - gates)} "
+        f"(add a _GATES entry - they are refused until you do)"
+    )

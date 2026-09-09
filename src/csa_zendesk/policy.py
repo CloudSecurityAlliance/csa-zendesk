@@ -265,6 +265,12 @@ def _make_gated(name: str) -> Callable[..., Any]:
     return gated
 
 
-for _name in _GATES:
-    setattr(PolicyBackend, _name, _make_gated(_name))
-del _name
+def _materialise_gated_methods() -> None:
+    # A function, not a bare module-level loop: keeps the loop variable out of
+    # the module namespace without a trailing `del`, which would raise
+    # NameError if _GATES were ever empty (the loop body would never bind it).
+    for name in _GATES:
+        setattr(PolicyBackend, name, _make_gated(name))
+
+
+_materialise_gated_methods()
