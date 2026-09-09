@@ -74,6 +74,12 @@ def test_the_policy_refuses_before_any_http_call_is_made():
 
 
 def test_a_pagination_conflict_is_refused_before_any_request_is_sent():
+    # NOTE: this one exercises HttpClient DIRECTLY, not through ZendeskClient, and
+    # deliberately so - `get_ticket` takes no pagination parameters, so in Block 0
+    # there is no way to express this conflict from the top of the stack. It proves
+    # the guard fires before the network, NOT that it is reachable through the
+    # client. When a paginating operation lands (list/search in Block 1), this test
+    # should move up to go through ZendeskClient like its neighbours.
     calls = {"n": 0}
 
     def handler(request):

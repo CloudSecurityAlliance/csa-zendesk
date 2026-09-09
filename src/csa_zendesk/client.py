@@ -25,8 +25,16 @@ class ZendeskClient:
 
     @property
     def policy(self) -> Policy | None:
-        """The active policy, or None for an ungated backend."""
-        return getattr(self._backend, "policy", None)
+        """The active policy, or None for an ungated backend.
+
+        `Backend` is a structural Protocol, so an embedder's implementation may
+        carry an unrelated attribute called `policy`. Duck-typing on the name
+        alone would return it and quietly break this property's own annotation,
+        so the type is checked: anything that is not a `Policy` reads as
+        "unpoliced", which is the safe answer and a true one.
+        """
+        found = getattr(self._backend, "policy", None)
+        return found if isinstance(found, Policy) else None
 
     def get_ticket(self, *, ticket_id: int) -> Envelope:
         """One ticket, as the raw upstream envelope: `{"ticket": {...}}`."""
