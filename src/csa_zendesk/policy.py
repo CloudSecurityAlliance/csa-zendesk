@@ -135,12 +135,32 @@ def _required(gate: Gate, kwargs: dict[str, Any]) -> frozenset[str]:
 
 
 class Policy:
-    """An immutable set of granted capabilities."""
+    """An immutable set of granted capabilities.
+
+    Immutable against ordinary use, not against deliberate bypass. `__setattr__`
+    refuses attribute assignment, and `__init__` refuses to run a second time
+    against an already-constructed instance - closing `pb.policy.__init__(...)`,
+    which would otherwise silently re-grant every capability through nothing
+    more exotic than calling a public method twice (`.policy` hands back the
+    live object, and without this guard `__init__` writes through
+    `object.__setattr__` the same way the constructor legitimately does).
+
+    This is not protection against `object.__setattr__(p, "capabilities", ...)`
+    itself, called directly rather than through `__init__` - that always works
+    in Python and cannot be prevented from inside the class, the same category
+    of residual, unavoidable path as reaching `HttpClient`'s credential through
+    `_authorize.__closure__`. Both require the caller to already have arbitrary
+    code execution in this process, which is a different threat model from "a
+    tool call decided to grant itself `ticket.close`." What this guard closes
+    is the route that looks like ordinary use: calling `__init__` again.
+    """
 
     __slots__ = ("capabilities",)
     capabilities: frozenset[str]
 
     def __init__(self, capabilities: frozenset[str]) -> None:
+        if hasattr(self, "capabilities"):
+            raise AttributeError("Policy is immutable; construct a new one to change capabilities")
         object.__setattr__(self, "capabilities", frozenset(capabilities))
 
     def __setattr__(self, name: str, value: Any) -> None:

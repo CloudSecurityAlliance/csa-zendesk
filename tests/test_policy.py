@@ -191,3 +191,26 @@ def test_every_gate_names_a_real_backend_method_and_every_method_has_a_gate() ->
         f"methods with no gate: {sorted(protocol - gates)} "
         f"(add a _GATES entry - they are refused until you do)"
     )
+
+
+def test_reinvoking_init_on_a_live_policy_is_refused_and_leaves_it_unchanged() -> None:
+    # CRITICAL: pb.policy.__init__(...) is calling an ordinary public method a
+    # second time, not an exotic bypass. A guard that raises after already
+    # having mutated capabilities would be worse than no guard, so both are
+    # asserted: the raise, and that capabilities are the ORIGINAL ones after it.
+    p = pol.Policy(frozenset({pol.TICKET_READ}))
+    with pytest.raises(AttributeError):
+        p.__init__(frozenset(pol.ALL_CAPABILITIES))  # type: ignore[misc]
+    assert p.capabilities == frozenset({pol.TICKET_READ})
+
+
+def test_widening_through_policy_dunder_init_is_refused_end_to_end() -> None:
+    # The end-to-end reproduction: pb.policy hands back the live Policy, and
+    # without the reinvocation guard this call silently re-granted every
+    # capability with no restart and no operator. Both the widening attempt
+    # and the subsequent call must still be refused.
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset()))
+    with pytest.raises(AttributeError):
+        pb.policy.__init__(frozenset(pol.ALL_CAPABILITIES))  # type: ignore[misc]
+    with pytest.raises(exc.PolicyError):
+        pb.get_ticket(ticket_id=1)
