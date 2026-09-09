@@ -7,29 +7,33 @@ The hierarchy is deliberately finer than the official Zendesk clients', which
 collapse everything outside 404/422 into a network error - so a 403 plan boundary
 reads as an outage and the caller cannot tell "your plan" from "we are down".
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 __all__ = [
-    "ZendeskError", "CredentialsRejected", "PlanBoundary", "EndpointNotAvailable",
-    "NotFound", "ValidationError", "PaginationError", "SearchLimitExceeded",
-    "RateLimited", "ServiceUnavailable", "PolicyError", "ApiError",
+    "ZendeskError",
+    "CredentialsRejected",
+    "PlanBoundary",
+    "EndpointNotAvailable",
+    "NotFound",
+    "ValidationError",
+    "PaginationError",
+    "SearchLimitExceeded",
+    "RateLimited",
+    "ServiceUnavailable",
+    "PolicyError",
+    "ApiError",
 ]
 
 
 class ZendeskError(Exception):
     """Base for everything this package raises."""
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
 
 class CredentialsRejected(ZendeskError):
     """The credential is absent, wrong, or expired. Not a scope problem."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
 
 
 class PlanBoundary(ZendeskError):
@@ -39,22 +43,13 @@ class PlanBoundary(ZendeskError):
     wrong by mapping it to a generic network error.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
 
 class EndpointNotAvailable(ZendeskError):
     """HTTP 404 `InvalidEndpoint` - the route is not on this account."""
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
 
 class NotFound(ZendeskError):
     """HTTP 404 `RecordNotFound` - the route exists, the record does not."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
 
 
 class ValidationError(ZendeskError):
@@ -82,15 +77,9 @@ class PaginationError(ZendeskError):
     and our own refusal to emit two pagination styles on one request.
     """
 
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-
 
 class SearchLimitExceeded(ZendeskError):
     """Search refuses past 1000 results, however large the reported `count`."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
 
 
 class RateLimited(ZendeskError):
@@ -115,9 +104,6 @@ class PolicyError(ZendeskError):
     The message names the missing capability and what an operator changes to
     grant it - the refusal is the product, not an error path.
     """
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
 
 
 class ApiError(ZendeskError):
