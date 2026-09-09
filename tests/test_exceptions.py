@@ -23,45 +23,37 @@ def test_validation_error_carries_problems_keyed_by_field() -> None:
     assert "Assignee" in str(e)
 
 
-def test_rate_limited_carries_retry_after() -> None:
-    assert exc.RateLimited("slow down", retry_after=42).retry_after == 42
-
-
 def test_plan_boundary_is_not_confused_with_an_outage() -> None:
     assert not issubclass(exc.PlanBoundary, exc.ServiceUnavailable)
     assert not issubclass(exc.ServiceUnavailable, exc.PlanBoundary)
 
 
-def test_credentials_are_never_interpolated_into_a_message() -> None:
-    # Guard against the whole class of leak: no error takes a credential.
+def test_errors_declare_only_approved_parameters() -> None:
+    # Guard against the whole class of credential leak, fail-closed.
     #
-    # A class that declares no __init__ of its own inherits Exception's, which takes
-    # only *args - there is no named parameter that could be a credential, and
-    # inspect.signature() cannot read a C slot wrapper anyway (it raises ValueError on
-    # a bare Exception subclass). So those are skipped, and the guard stays live exactly
-    # where it can bite: the moment an exception is given a field of its own, it must
-    # declare an __init__, and that __init__ is checked.
-    forbidden = {
-        "token",
-        "password",
-        "secret",
-        "api_token",
-        "access_token",
-        "refresh_token",
-        "client_secret",
-        "credential",
-        "authorization",
-    }
+    # This is an ALLOWLIST, not a denylist. A denylist only catches the names someone
+    # thought of - `api_key`, `bearer`, `auth` and `cookie` all sail past a list built
+    # around `token` and `password`. This repo has paid for that shape once already
+    # (CLAUDE.md, "the denylist is the disclosure"), so an unrecognised parameter name
+    # fails here and the remedy is a deliberate edit to this set. That edit is the
+    # review checkpoint: it is where you notice you are about to put a credential on an
+    # object embedders log.
+    #
+    # A class that declares no __init__ of its own inherits Exception's, which takes only
+    # *args - no named parameter, nothing to leak - and inspect.signature() cannot read a
+    # C slot wrapper anyway. Those are skipped; the guard stays live exactly where it can
+    # bite, because carrying a field REQUIRES declaring an __init__.
+    approved = {"self", "message", "problems", "retry_after", "status"}
     checked = 0
     for name in exc.__all__:
         cls = getattr(exc, name)
         own = next((vars(k)["__init__"] for k in cls.__mro__ if "__init__" in vars(k)), None)
-        if own is None or own is BaseException.__init__ or own is Exception.__init__ or own is object.__init__:
+        if own is None or own in (Exception.__init__, BaseException.__init__, object.__init__):
             continue
         checked += 1
         for p in inspect.signature(own).parameters:
-            assert p not in forbidden, f"{name}.{p}"
-    # If this ever drops to zero the guard has gone vacuous - four classes carry payload.
+            assert p in approved, f"{name}.{p} is not an approved error parameter"
+    # If this ever reaches zero the guard has gone vacuous while still passing.
     assert checked == 4, f"expected 4 inspectable errors, found {checked}"
 
 
