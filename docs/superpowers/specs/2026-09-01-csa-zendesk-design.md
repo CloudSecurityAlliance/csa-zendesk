@@ -1,6 +1,11 @@
 # csa-zendesk — design
 
-**Date:** 2026-09-01 · **Status:** proposed, nothing implemented
+**Date:** 2026-09-01 · **Revised:** 2026-09-08 · **Status:** proposed, nothing implemented
+
+> Revision 2 folds in a self-review (twelve findings) and two later decisions —
+> [ADR-009](../../../DECISIONS-ADR/ADR-009.md) authentication, and
+> [ADR-010](../../../DECISIONS-ADR/ADR-010.md) the capability model derived from a
+> classification of all 822 in-scope operations.
 
 The authoritative design. It assembles eight decisions already taken (`DECISIONS-ADR/`) into one
 architecture, and adds the module layout, the tool surface and the build order. It decides
@@ -87,67 +92,109 @@ differentiator.
 Operator config at launch. No runtime enabling.
 
 `context` (always on) · `tickets` · `help_center` · `people` · `queues` · `reporting` ·
-`export` · `admin`
+`export` · `admin` · `status`
 
 **Default: `context` + `tickets`.** Instructions are per-toolset and compose based on what else
 is enabled, so a deployment without `reporting` never spends context on aggregation guidance.
 
 ### Capabilities — may an existing tool act?
 
-Ordered by reversibility (ADR-003). The default profile is everything that can be undone.
+`<domain>.<tier>`, derived from a classification of every in-scope operation
+(ADR-010, evidence in `analysis/operation-classification.csv`) rather than from the ticket
+workflow alone.
 
-| Capability | Action | Reversible? | Default |
-|---|---|---|---|
-| `ticket.read` | read tickets, comments, audits | n/a | yes |
-| `ticket.note` | internal note | yes | yes |
-| `ticket.write` | fields, assignee, tags, form | yes, audited | yes |
-| `ticket.reply` | **public** comment | **no** — emailed | no |
-| `ticket.solve` | set solved | for a window, then no | no |
-| `ticket.close` | set closed, **and merge** | **no** | **no profile** |
-| `hc.read` / `hc.write` | Help Center | — / yes | yes / no |
-| `people.read` / `people.write` | users, orgs, groups | — / yes | yes / no |
-| `reporting.read` | aggregation | n/a | yes |
-| `reporting.export` | write files to disk | n/a | no |
-| `admin.read` / `admin.write` | triggers, automations, SLA, fields | — / yes | no / no |
-| `raw.read` / `raw.write` | the escape hatch | — / varies | **no profile** |
+| Domain | Tiers | Default profile |
+|---|---|---|
+| `ticket` | `read` · `note` · `write` · `reply` · `solve` · `close` · `delete` · `purge` | read, note, write |
+| `people` | `read` · `write` · `suspend` · `merge` · `delete` · `purge` | read |
+| `hc` | `read` · `write` · `delete` | read |
+| `admin` | `read` · `write` · `delete` | read |
+| `reporting` | `read` · `export` | read |
+| `raw` | `read` · `write` | none |
+
+**Cross-cutting: `bulk`.** Required **in addition** to the domain capability for any `_many`,
+`/bulk` or `/import` operation. Granting the power to delete one ticket does not grant the power
+to delete a thousand.
+
+**Granted by no profile:** every `.purge`, `ticket.close`, `people.merge`, `raw.read`, `raw.write`.
+
+Recoverability across the 822 in-scope operations: 425 reads, 269 reversible, 108 recoverable
+with effort, **13 irreversible, 7 irreversible and permanent**. The strictest gates cover twenty
+operations, which is why precision here costs almost nothing in configuration burden.
 
 A registered tool whose capability is not granted **remains visible and refuses**, naming what an
 operator would change. That is a better failure than an absent tool.
 
-**`merge` is a closing operation.** Observational sampling found merges are a significant
-real-world path to the irreversible state (ADR-004), so `merge_tickets` gates at `ticket.close`,
-not `ticket.write`.
+Three re-gatings worth calling out:
 
----
+- **`mark_ticket_as_spam` is `people.suspend`, not `ticket.write`.** Its full name is *"Mark Ticket
+  as Spam and Suspend Requester"* — it suspends a user account, and an earlier draft had it in the
+  default profile.
+- **`merge_tickets` is `ticket.close`** — ADR-004's observational sampling established that merging
+  closes the source ticket.
+- **`admin.write` covers 225 configuration operations**, 27% of the surface. Every tool using it
+  states in its description that the change affects all future tickets. Splitting it per object
+  type is deferred (`TODO.md`), since `admin` is entirely off by default in 1.0.
 
 ## 4. The tool surface
 
 Derived from what the agent web interface offers (`analysis/UI-ACTION-MAP.md`), not from the
-API's shape. **47 tools.** Six names are fixed by the ecosystem survey and must not be
+API's shape. Six names are fixed by the ecosystem survey and must not be
 renamed: `get_ticket`, `create_ticket`, `update_ticket`, `get_user`, `get_organization`,
 `get_ticket_comments`. Naming is bare `verb_noun` throughout.
 
 | Toolset | Tools | Capability |
 |---|---|---|
-| **context** *(always registered)* | `whoami`, `describe_capabilities`, `describe_ticket_form` | none |
-| **tickets** | `get_ticket`, `get_ticket_comments`, `get_ticket_audits`, `list_tickets`, `search_tickets`, `get_ticket_attachment` | `ticket.read` |
-| | `create_ticket` | `ticket.write` |
+| **context** *(always registered)* | `whoami`, `describe_capabilities`, `describe_ticket_form` † | none |
+| **tickets** | `get_ticket`, `get_ticket_comments`, `get_ticket_audits`, `list_tickets`, `search_tickets`, `get_ticket_attachment`, `get_job_status` | `ticket.read` |
+| | `create_ticket`, `take_ticket` | `ticket.write` |
 | | `update_ticket` | `ticket.write` (+`ticket.note` with a comment, +`ticket.solve` when solving) |
-| | `take_ticket`, `mark_ticket_as_spam` | `ticket.write` |
-| | `add_public_reply` | `ticket.reply` |
+| | `add_public_reply`, `create_side_conversation` | `ticket.reply` |
 | | `close_ticket`, `merge_tickets` | `ticket.close` |
-| | `create_side_conversation` | `ticket.reply` |
-| | `get_job_status` | `ticket.read` |
+| | `mark_ticket_as_spam` | **`people.suspend`** |
 | **queues** | `list_views`, `get_view_tickets`, `list_macros`, `describe_ticket_actions` | `ticket.read` |
 | | `apply_macro` | `ticket.write` |
-| **people** | `get_user`, `search_users`, `get_organization`, `list_group_memberships` | `people.read` |
+| **people** | `get_user`, `search_users`, `get_organization`, `list_organizations`, `search_organizations`, `list_group_memberships` | `people.read` |
 | **help_center** | `search_articles`, `get_article`, `list_sections`, `list_categories`, `list_translations` | `hc.read` |
 | | `create_article`, `update_article`, `update_translation` | `hc.write` |
-| **reporting** | `summarise_tickets`, `summarise_ticket_metrics`, `summarise_satisfaction`, `get_ticket_metrics`, `list_satisfaction_ratings` | `reporting.read` |
+| **reporting** | `get_ticket_metrics` *(one ticket)*, `list_satisfaction_ratings` | `reporting.read` |
+| | `summarise_tickets`, `summarise_ticket_metrics`, `summarise_satisfaction` *(all aggregate over a scope)* | `reporting.read` |
 | **export** | `export_tickets`, `export_search` | `reporting.export` |
 | **admin** | `list_triggers`, `list_automations`, `list_sla_policies`, `list_ticket_fields`, `list_ticket_forms` | `admin.read` |
-| **escape hatch** *(always registered, see below)* | `zendesk_read` | `raw.read` |
+| **status** | `get_zendesk_incidents`, `get_zendesk_maintenance`, `get_zendesk_incident` | **none** |
+| **escape hatch** *(always registered)* | `zendesk_read` | `raw.read` |
 | | `zendesk_request` | `raw.write` |
+
+† `describe_ticket_form` computes what a ticket needs in order to be solved. That computation is
+**known to over-report on forms with conditional rules** (`TODO.md` C1) — it matched a live 422
+exactly, but on a form with zero conditions, so the match validated only the unconditional half.
+Since `context` is always registered, this ships in every deployment: the tool description must
+state that the list is a superset on conditional forms and that the API's refusal is authoritative.
+
+**54 tools** (counted from the table by `scripts/check_spec.py`, because the figure has been
+wrong twice by hand). `summarise_*` aggregate over a scope and return a table; `get_ticket_metrics` takes
+one ticket id. Both exist because the questions differ.
+
+**The `status` toolset is unlike every other.** Its three endpoints are on **`status.zendesk.com`**,
+a different host, and require **no authentication** — so `_http` needs a second base URL and a
+credential-free path, and these tools work before any OAuth flow has run. They are not among the
+882 inventoried operations, which are all on the tenant host.
+
+**`create_side_conversation` is not in any published spec.** It is reachable here (probed: 200)
+but absent from all three OpenAPI snapshots, like the ~12 undocumented Help Center families. Its
+`Backend` method is hand-written, and see the covered-path note below.
+
+**`take_ticket` is a deliberate exception to ADR-003's rejection of preset composites.** ADR-003
+turned down `solve_ticket`/`reopen_ticket` as *"the same `PUT` with a preset"*. `take_ticket` is
+`update_ticket(assignee_id=<me>)` — but "me" is not expressible by a caller without a `whoami`
+round-trip, and self-assignment is the single most common agent action. It earns its place on
+those grounds and no others; further preset composites do not.
+
+**`create_ticket_comment` is deliberately not provided**, despite being one of the incumbent
+server's seven tools. ADR-003 splits commenting into `update_ticket` (always internal) and
+`add_public_reply`, because one tool cannot carry two honest annotations. Anyone arriving from
+another server will find the capability, under two names, with the visibility decision made
+explicit rather than defaulted.
 
 `create_side_conversation` gates at `ticket.reply` rather than `ticket.note`: a side conversation
 sends email outward, which is the property `ticket.reply` names.
@@ -173,7 +220,9 @@ Its gate is therefore **a function of its kwargs**: `ticket.write`, plus `ticket
 
 ## 5. Cross-cutting behaviour
 
-Every item here is probe-verified and every one fails *silently* if got wrong.
+Most items here are probe-verified, and each is marked. Those that are not are inherited
+practice from the sibling projects, and say so — the distinction between probed and assumed is
+load-bearing for this project's credibility.
 
 ### Pagination
 
@@ -212,20 +261,63 @@ a network error:
 **Credential validation probes a resource endpoint and asserts a non-null `user.id`.** Never
 `users/me`, which answers 200 with an "Anonymous user" object when wholly unauthenticated.
 
+### Authentication (ADR-009)
+
+**Public OAuth client, `authorization_code` with PKCE (S256), no client secret** — the only
+correct option for a local stdio server, and fully supported. *(Probe-verified: Zendesk's own MCP
+discovery advertises `token_endpoint_auth_methods_supported: ["none"]` and `S256`.)*
+
+Access tokens are short-lived — 30 minutes by default for clients created on or after
+2026-04-30 — so **exactly one artifact is persisted: a token file** at
+`$XDG_CONFIG_HOME/csa-zendesk/tokens.json`, mode `0600` in a `0700` directory, written atomically
+under a lock. It holds the refresh token, the access token and its expiry, and nothing else.
+
+That amends ADR-005: **no response persistence, no attachment cache — and one token file, because
+refresh tokens require it.** A credential is the category `SECURITY.md` already protects; customer
+data is the category ADR-005 keeps off disk. Conflating them produced a contradiction across three
+documents.
+
+Refresh happens before expiry and on rejection, retried once — **only** on `401` with
+`invalid_token`. A `401`/`403` from insufficient scope or from the operator's own Zendesk
+permissions passes through unchanged, so a permissions problem stays visible as one.
+
+API tokens ship as a deprecated path (`CINO_CSA_ZENDESK` + `CINO_CSA_ZENDESK_EMAIL`), warn once,
+and are overridden by OAuth. They stop working on 2027-04-30.
+
 ### Rate limits
 
 Layered: an account limit plus much tighter per-endpoint buckets (incremental export is an order
 of magnitude tighter). Honour both header families and `Retry-After`; default to 10s when absent.
-Retry `429` and `503`. Never retry a non-idempotent write on `5xx` — the mutation may have landed.
+*(Probe-verified.)*
+
+- **`429` — always retryable.**
+- **`503` — retryable for idempotent requests only.**
+- **Never retry a non-idempotent write on any `5xx`**, `503` included: the mutation may already
+  have landed. *(Inherited practice from `csa-google-workspace`, not probed here.)*
 
 ### Untrusted content
 
-Prompt injection through ticket bodies is the named primary risk. Zendesk-origin text is wrapped
+*(Design position, not a probe finding.)* Prompt injection through ticket bodies is the named
+primary risk. Zendesk-origin text is wrapped
 in generated delimiters before it reaches the model, applied **at the boundary** rather than
 per-tool, on by default. Aggregation (§6) is the strongest mitigation on the bulk path, because
 content is counted rather than read aloud.
 
 ---
+
+### The escape hatch's covered-path table
+
+ADR-008 says `zendesk_read` / `zendesk_request` refuse any path a curated tool already covers.
+**That table is built from the tool registry's declared paths, not from the operation inventory.**
+
+ADR-008 originally keyed it on the inventory, which is wrong: the inventory is incomplete — side
+conversations and roughly a dozen Help Center families are absent from all three specs — so any
+curated tool whose endpoint is not inventoried would leave a hole the escape hatch could route
+through, defeating the refusal's whole purpose. The registry knows what it covers; the inventory
+only knows what Zendesk documented.
+
+Each `Backend` method therefore declares its `(method, path template)`, a test asserts every
+curated operation is refused by the hatch, and the refusal names the tool to use instead.
 
 ## 6. Bulk and async
 
@@ -268,7 +360,8 @@ src/csa_zendesk/
   backend.py           Backend protocol · ApiBackend · FakeBackend
   policy.py            capabilities, profiles, _GATES, PolicyBackend
   client.py            ZendeskClient
-  auth.py              OAuth (authorization_code + PKCE); API token, deprecated
+  auth.py              OAuth public client + PKCE; API token, deprecated
+  _tokenstore.py       the one persisted artifact: 0600 file, atomic write under a lock
   _content.py          untrusted-content wrapping
   _aggregate.py        streaming folds for summarise_*
   exceptions.py
@@ -292,7 +385,8 @@ Each block ends green, with tests, and is a PR.
 
 | Block | Content | Proves |
 |---|---|---|
-| **0** | package skeleton, CI (lint, types, tests, coverage, security), `_http`, `_errors`, `_pagination`, `Backend` + `FakeBackend`, `policy` skeleton, `get_ticket` end to end | the whole vertical on one method |
+| **0** | package skeleton, CI (lint, types, tests, coverage, security), `_http`, `_errors`, `_pagination`, `Backend` + `FakeBackend`, `policy` skeleton, **API-token auth**, `get_ticket` end to end | the whole vertical on one method |
+| **0b** | **OAuth: public client, PKCE, the token store, refresh** (ADR-009); `whoami` | the credential path we actually ship |
 | **1** | `context` toolset; ticket read path — comments, audits, list, search; content wrapping | pagination and injection wrapping under real shapes |
 | **2** | ticket write path — `create_ticket`, `update_ticket`, `add_public_reply`, `close_ticket`, `merge_tickets`; the capability ladder; kwargs-dependent gates | **the safety-critical block** |
 | **3** | rest of `tickets`; `queues`; attachments; `get_job_status` and the bulk/async path | ADR-007 |
@@ -315,5 +409,10 @@ Tracked in `TODO.md`; none blocks Block 0.
 - **A2** six Help Center families return ambiguous 404s from inferred paths.
 - **A3** the `guide/search` filter contract.
 - **A4** whether to depend on an injection-wrapping library or implement the pattern.
+- Whether `admin.write` should split per object type — 225 operations behind one gate. Deferred
+  because `admin` is off by default in 1.0 (ADR-010).
+- Whether `bulk` should be complemented by a **magnitude threshold** above which an operation
+  requires confirmation. One surveyed server does this; `bulk` gates authority, a threshold would
+  gate scale, and they are not the same question.
 - **A6** whether Help Center localisation is real work here — 17 translation operations rest on it.
 - **B8** a queryable mirror, post-1.0, which would supersede ADR-005 rather than extend it.
