@@ -55,6 +55,16 @@ class HttpClient:
 
     `transport` is injectable so tests use `httpx.MockTransport` and never touch
     the network - this is the layer `FakeBackend` cannot exercise.
+
+    The credential is deliberately **not** an instance attribute. It is built once
+    inside `__init__` and captured only in an httpx request-hook closure, so
+    `vars(client)`, a `__dict__` walker, `json.dumps(vars(obj))`, a crash-reporter
+    object dump, `copy.copy`, and `pickle` all come up empty - none of them can see
+    inside a closure cell. This is **not** protection against a debugger or against
+    something that specifically walks `__closure__`; that is not achievable for an
+    object that must hold a usable credential to do its job (httpx's own
+    `BasicAuth` holds one too, the same way). The goal is narrower and stated
+    plainly: no *ordinary* observation path reveals it.
     """
 
     def __init__(
@@ -75,9 +85,22 @@ class HttpClient:
                 "API-token auth needs both an email and a token; set CINO_CSA_ZENDESK_EMAIL and CINO_CSA_ZENDESK."
             )
         self._base = f"https://{subdomain}.zendesk.com"
-        # Built once. Never logged, never repr'd, never placed in an exception.
-        self._auth = "Basic " + base64.b64encode(f"{email}/token:{api_token}".encode()).decode()
-        self._client = httpx.Client(transport=transport, timeout=timeout)
+
+        # The credential lives only in this closure's cell, never in self.__dict__.
+        # `header` is a local variable of __init__ - once __init__ returns, the only
+        # way to reach it is through _authorize.__closure__, which is exactly the
+        # residual, unavoidable path the class docstring names.
+        header = "Basic " + base64.b64encode(f"{email}/token:{api_token}".encode()).decode()
+
+        def _authorize(request: httpx.Request) -> None:
+            request.headers["Authorization"] = header
+
+        self._client = httpx.Client(
+            transport=transport,
+            timeout=timeout,
+            headers={"Accept": "application/json"},
+            event_hooks={"request": [_authorize]},
+        )
 
     def __repr__(self) -> str:  # never let a credential reach a log line
         return f"HttpClient(base={self._base!r}, credential=<redacted>)"
@@ -103,17 +126,7 @@ class HttpClient:
 
         attempt = 0
         while True:
-            try:
-                response = self._client.request(
-                    method,
-                    f"{self._base}{path}",
-                    params=sendable,
-                    json=json,
-                    headers={"Authorization": self._auth, "Accept": "application/json"},
-                )
-            except httpx.HTTPError as e:
-                # Chain the cause; keep the message free of anything credential-shaped.
-                raise exc.ApiError(f"could not reach Zendesk: {type(e).__name__}") from e
+            response = self._send(method, path, params=sendable, json=json)
 
             if response.status_code < 400:
                 return self._envelope(response)
@@ -140,6 +153,35 @@ class HttpClient:
 
             raise error
 
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any],
+        json: Mapping[str, Any] | None,
+    ) -> httpx.Response:
+        """Issue one request, translating a transport failure without chaining it.
+
+        `e` here is an httpx exception whose `.request.headers` carries the live
+        `Authorization` header. Neither `__cause__` (an explicit `raise ... from e`)
+        NOR `__context__` (Python's *implicit* chaining, which `from None` alone does
+        not clear - it only clears `__cause__` and a display flag) may end up
+        referencing it: a crash reporter or error tracker commonly walks whichever of
+        the two is set. The fix is structural rather than a `from` clause: this method
+        raises only after its own `except` clause has finished, by which point no
+        exception is being handled, so the interpreter attaches no context at all.
+        The exception's class name, plus the method and path - never the query
+        string, never a header - go into the message instead.
+        """
+        try:
+            response = self._client.request(method, f"{self._base}{path}", params=params, json=json)
+        except httpx.HTTPError as e:
+            kind = type(e).__name__
+        else:
+            return response
+        raise exc.ApiError(f"could not reach Zendesk ({kind}) requesting {method} {path}")
+
     @staticmethod
     def _body_or_none(response: httpx.Response) -> object:
         try:
@@ -149,7 +191,18 @@ class HttpClient:
 
     @staticmethod
     def _envelope(response: httpx.Response) -> dict[str, Any]:
-        """ZD-2: a 200 that looks wrong is an error, not something to hand downstream."""
+        """ZD-2: a 200 that looks wrong is an error - but "no content" is not "wrong".
+
+        Zendesk documents `204 No Content` for deletes (122 of the 882 inventoried
+        operations are DELETE), and a `200` can arrive with a zero-length body too -
+        the same situation by another status code. Both are a success with nothing
+        to report, which is a different answer from a body of the *wrong shape*
+        (an array, a bare string, a number, `null`): that case must keep failing.
+        Judged on the evidence - whether there is any body at all - not on
+        `status == 204` alone, since a 200 can be exactly as empty.
+        """
+        if not response.content.strip():
+            return {}
         try:
             body = response.json()
         except ValueError as e:

@@ -1,4 +1,6 @@
 import base64
+import binascii
+import copy
 
 import httpx
 import pytest
@@ -233,3 +235,139 @@ def test_a_503_retry_after_beyond_the_cap_is_also_refused(monkeypatch):
         client(handler).request("GET", "/api/v2/tickets.json")
     assert ei.value.retry_after == 999999
     assert slept == []
+
+
+# --- fix round 1 -------------------------------------------------------------
+#
+# Two Criticals (both credential leaks), one misclassified success, two boundary
+# gaps. See .superpowers/sdd/2026-09-08-block-0-foundations/task-5-fix-1.md.
+
+
+def test_retry_after_at_exactly_the_cap_is_slept_and_succeeds(monkeypatch):
+    # The boundary itself: MAX_RETRY_AFTER_SECONDS is meant as an inclusive
+    # maximum, so exactly the cap must still be waited out.
+    slept = []
+    monkeypatch.setattr(_http.time, "sleep", lambda seconds: slept.append(seconds))
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, json={}, headers={"Retry-After": str(_http.MAX_RETRY_AFTER_SECONDS)})
+        return httpx.Response(200, json={"ok": True})
+
+    assert client(handler).get("/api/v2/tickets.json") == {"ok": True}
+    assert slept == [_http.MAX_RETRY_AFTER_SECONDS]
+    assert calls["n"] == 2
+
+
+def test_retry_after_one_second_past_the_cap_is_refused_not_shortened(monkeypatch):
+    slept = []
+    monkeypatch.setattr(_http.time, "sleep", lambda seconds: slept.append(seconds))
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(429, json={}, headers={"Retry-After": str(_http.MAX_RETRY_AFTER_SECONDS + 1)})
+
+    with pytest.raises(exc.RateLimited) as ei:
+        client(handler).get("/api/v2/tickets.json")
+    assert ei.value.retry_after == _http.MAX_RETRY_AFTER_SECONDS + 1  # reported, not shortened
+    assert slept == []
+    assert calls["n"] == 1
+
+
+def test_a_200_whose_body_is_a_bare_json_string_is_an_error():
+    def handler(request):
+        return httpx.Response(200, json="just a string")
+
+    with pytest.raises(exc.ApiError, match="not a JSON object"):
+        client(handler).get("/api/v2/tickets.json")
+
+
+def test_a_200_whose_body_is_a_bare_json_number_is_an_error():
+    def handler(request):
+        return httpx.Response(200, json=42)
+
+    with pytest.raises(exc.ApiError, match="not a JSON object"):
+        client(handler).get("/api/v2/tickets.json")
+
+
+def test_a_200_whose_body_is_json_null_is_an_error():
+    # httpx.Response(..., json=None) treats None as "no body provided" (mirroring
+    # Python's own None-as-default convention) and produces an empty response, not
+    # the four bytes b"null" - so the literal JSON `null` has to be built as
+    # explicit content to actually exercise this shape.
+    def handler(request):
+        return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
+
+    with pytest.raises(exc.ApiError, match="not a JSON object"):
+        client(handler).get("/api/v2/tickets.json")
+
+
+def test_a_204_no_content_is_a_success_with_an_empty_envelope():
+    # DeleteTicket and 121 other inventoried DELETE operations document 204.
+    # This is a *different* answer from the wrong-shape tests above: no body at
+    # all is a success, not a malformed response.
+    def handler(request):
+        return httpx.Response(204)
+
+    assert client(handler).request("DELETE", "/api/v2/tickets/1.json") == {}
+
+
+def test_a_200_with_a_zero_length_body_is_also_a_success_with_an_empty_envelope():
+    # The same situation as 204, arriving under a different status code - judged
+    # on the evidence (no content), not on status == 204 specifically.
+    def handler(request):
+        return httpx.Response(200, content=b"")
+
+    assert client(handler).get("/api/v2/tickets.json") == {}
+
+
+def test_the_credential_is_not_reachable_from_the_instance_dict():
+    # repr() was already redacted - that is what made the leak invisible. base64
+    # is not obfuscation, so decode anything string-shaped in __dict__ (and in a
+    # shallow copy's __dict__) before asserting it is clean. This must fail
+    # against the pre-fix code, where `vars(client)['_auth']` is the base64 of
+    # exactly this string.
+    token = "tok"
+    email = "agent@example.com"
+    c = client(lambda request: httpx.Response(200, json={}))
+
+    def leaks_credential(value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        if token in value or email in value:
+            return True
+        # A header value like "Basic <base64>" isn't itself valid base64 (the
+        # scheme name and the space aren't in the alphabet), so try each
+        # whitespace-separated piece rather than the whole string.
+        for piece in value.split():
+            padded = piece + "=" * (-len(piece) % 4)
+            try:
+                decoded = base64.b64decode(padded, validate=False).decode("utf-8", errors="ignore")
+            except (binascii.Error, ValueError):
+                continue
+            if token in decoded or email in decoded:
+                return True
+        return False
+
+    for obj in (c, copy.copy(c)):
+        for name, value in vars(obj).items():
+            assert not leaks_credential(value), f"credential reachable via vars(client)[{name!r}] = {value!r}"
+
+
+def test_a_transport_error_does_not_chain_to_an_exception_carrying_the_auth_header():
+    # __cause__ must be severed, AND Python's *implicit* __context__ chaining -
+    # which a bare `from None` does not clear - must not silently carry the same
+    # reference: either one is a path a crash reporter or error tracker can walk
+    # straight to the live Authorization header on e.request.
+    def handler(request):
+        raise httpx.ConnectError("no route to host", request=request)
+
+    with pytest.raises(exc.ApiError) as ei:
+        client(handler).get("/api/v2/tickets.json")
+
+    assert ei.value.__cause__ is None
+    assert ei.value.__context__ is None
+    assert "tok" not in str(ei.value)
