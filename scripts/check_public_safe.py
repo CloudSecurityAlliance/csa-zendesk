@@ -155,7 +155,12 @@ def main() -> int:
 
     print(f"OK - {len(files)} tracked files, nothing tenant-specific found")
     print(f"coverage: {coverage}")
-    return 0 if have_private else 0
+    # A pass either way: STRUCTURAL ONLY (no private term list present) is a
+    # deliberately reduced-coverage PASS, not a failure - CI runs this way, since
+    # the gitignored tenant term list is absent there by design (see the `coverage`
+    # message above, which says so rather than reporting a clean bill of health it
+    # cannot support).
+    return 0
 
 
 if __name__ == "__main__":

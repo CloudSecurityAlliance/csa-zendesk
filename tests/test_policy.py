@@ -146,17 +146,15 @@ def test_private_attributes_are_not_reachable_through_the_wrapper():
 
 
 def test_capability_constants_and_the_all_tuple_agree():
-    # NOTE: the brief's own version of this test filters on `"." in v`, which
-    # structurally excludes BULK = "bulk" (no dot) even though BULK is a real
-    # capability constant correctly listed in ALL_CAPABILITIES - a test that
-    # could never pass against the brief's own reference implementation. Fixed
-    # here to filter on "is an upper-case module-level string constant", which
-    # is what the test is actually trying to check and which does include BULK.
+    # Filters on "is an upper-case module-level string constant", not on
+    # `"." in v`: BULK = "bulk" carries no dot despite being a real capability
+    # constant correctly listed in ALL_CAPABILITIES, so a dot-based filter would
+    # structurally exclude it and could never pass against a correct policy.py.
     consts = {v for k, v in vars(pol).items() if k.isupper() and isinstance(v, str)}
     assert consts == set(pol.ALL_CAPABILITIES)
 
 
-# --- additional coverage: branches the brief's own test list does not reach ---
+# --- additional coverage: branches not reached by the tests above ------------
 
 
 def test_required_treats_a_none_gate_as_an_ungated_read():
@@ -198,7 +196,7 @@ def test_dunder_attribute_access_on_the_wrapper_is_unaffected():
     assert pb.__class__ is pol.PolicyBackend
 
 
-def test_the_policy_wrapper_is_itself_a_backend() -> None:
+def test_the_policy_wrapper_is_itself_a_backend():
     # Property 2: an embedder holding a PolicyBackend has what an MCP client has.
     # This must hold on every supported Python: 3.12 changed protocol isinstance to
     # use inspect.getattr_static(), which does not consult __getattr__, so a
@@ -208,13 +206,13 @@ def test_the_policy_wrapper_is_itself_a_backend() -> None:
     assert inspect.getattr_static(pb, "get_ticket") is not None
 
 
-def test_the_wrapper_exposes_exactly_the_gated_methods() -> None:
+def test_the_wrapper_exposes_exactly_the_gated_methods():
     # The generated surface and the gate table cannot drift apart.
     exposed = {n for n in dir(pol.PolicyBackend) if not n.startswith("_") and n != "policy"}
     assert exposed == set(pol._GATES), f"exposed {sorted(exposed)} != gates {sorted(pol._GATES)}"
 
 
-def test_every_gate_names_a_real_backend_method_and_every_method_has_a_gate() -> None:
+def test_every_gate_names_a_real_backend_method_and_every_method_has_a_gate():
     # backend.py's docstring promises adding a Backend method obliges three things: an
     # ApiBackend implementation, a FakeBackend implementation, and a _GATES entry.
     # tests/test_backend.py enforces the first two against each other. This enforces the
@@ -232,13 +230,13 @@ def test_every_gate_names_a_real_backend_method_and_every_method_has_a_gate() ->
     )
 
 
-# --- fix round 3 -------------------------------------------------------------
+# --- construct-once: closing in-band widening via __init__ re-invocation -----
 
 
-def test_reinvoking_init_on_a_live_policy_is_refused_and_leaves_it_unchanged() -> None:
-    # CRITICAL: pb.policy.__init__(...) is calling an ordinary public method a
-    # second time, not an exotic bypass. A guard that raises after already
-    # having mutated capabilities would be worse than no guard, so both are
+def test_reinvoking_init_on_a_live_policy_is_refused_and_leaves_it_unchanged():
+    # pb.policy.__init__(...) is calling an ordinary public method a second
+    # time, not an exotic bypass. A guard that raises after already having
+    # mutated capabilities would be worse than no guard, so both are
     # asserted: the raise, and that capabilities are the ORIGINAL ones after it.
     p = pol.Policy(frozenset({pol.TICKET_READ}))
     with pytest.raises(AttributeError):
@@ -246,7 +244,7 @@ def test_reinvoking_init_on_a_live_policy_is_refused_and_leaves_it_unchanged() -
     assert p.capabilities == frozenset({pol.TICKET_READ})
 
 
-def test_widening_through_policy_dunder_init_is_refused_end_to_end() -> None:
+def test_widening_through_policy_dunder_init_is_refused_end_to_end():
     # The end-to-end reproduction: pb.policy hands back the live Policy, and
     # without the reinvocation guard this call silently re-granted every
     # capability with no restart and no operator. Both the widening attempt
@@ -258,8 +256,8 @@ def test_widening_through_policy_dunder_init_is_refused_end_to_end() -> None:
         pb.get_ticket(ticket_id=1)
 
 
-def test_reinvoking_init_on_a_live_policybackend_is_refused_and_leaves_it_unchanged() -> None:
-    # The same defect one level up (fix round 4): PolicyBackend.__init__ writes
+def test_reinvoking_init_on_a_live_policybackend_is_refused_and_leaves_it_unchanged():
+    # The same defect one level up: PolicyBackend.__init__ writes
     # _state[self] = (backend, policy) with no guard against a second call,
     # which would silently swap BOTH the wrapped backend and the policy on a
     # live wrapper - reaching every capability with no restart and no operator,
@@ -274,7 +272,7 @@ def test_reinvoking_init_on_a_live_policybackend_is_refused_and_leaves_it_unchan
     assert pol._state[pb][0] is original_backend
 
 
-def test_widening_through_policybackend_dunder_init_is_refused_end_to_end() -> None:
+def test_widening_through_policybackend_dunder_init_is_refused_end_to_end():
     # The wrapper-level mirror of the Policy end-to-end test: attempting to
     # swap in a fully-permissive policy (and a different backend) through
     # pb.__init__(...) must raise, and the subsequent call must still be
@@ -296,12 +294,13 @@ def test_widening_through_policybackend_dunder_init_is_refused_end_to_end() -> N
     ],
     ids=["Policy", "PolicyBackend"],
 )
-def test_no_construct_once_object_can_be_reinitialised(build_live_instance) -> None:
+def test_no_construct_once_object_can_be_reinitialised(build_live_instance):
     # Policy and PolicyBackend are both construct-once for the same reason:
     # __init__ is an ordinary method that writes through a channel their frozen
-    # __setattr__ cannot see. This is the shape that would have caught round 4's
-    # bug directly from round 3's fix - a single guard covering every class with
-    # this property, so it is still there when a third one is added.
+    # __setattr__ cannot see. One guard covering every class with this property,
+    # parametrized, so it is still there when a third one is added - rather than
+    # a second copy-pasted, class-specific test that a fix to one class's
+    # __init__ guard could leave the other class uncovered by.
     instance = build_live_instance()
     with pytest.raises(AttributeError):
         instance.__init__(*_widened_init_args(instance))
@@ -313,11 +312,11 @@ def _widened_init_args(instance: object) -> tuple:
     return (FakeBackend({1: {"id": 1}}), pol.Policy(frozenset(pol.ALL_CAPABILITIES)))
 
 
-def test_a_callable_gate_returning_a_bare_string_is_refused_not_exploded() -> None:
-    # IMPORTANT 1: a gate bug that returns "ticket" instead of {"ticket"} must
-    # not silently explode through frozenset(str) into {'t','i','c','k','e','t'}
-    # - a required set no policy could ever satisfy, failing closed for a
-    # reason nobody could diagnose from the error alone.
+def test_a_callable_gate_returning_a_bare_string_is_refused_not_exploded():
+    # A gate bug that returns "ticket" instead of {"ticket"} must not silently
+    # explode through frozenset(str) into {'t','i','c','k','e','t'} - a required
+    # set no policy could ever satisfy, failing closed for a reason nobody
+    # could diagnose from the error alone.
     def gate(kw: dict) -> frozenset:
         return "ticket.read"  # type: ignore[return-value]
 
@@ -325,7 +324,7 @@ def test_a_callable_gate_returning_a_bare_string_is_refused_not_exploded() -> No
         pol._required("get_ticket", gate, {})
 
 
-def test_a_callable_gate_that_raises_propagates_unwrapped() -> None:
+def test_a_callable_gate_that_raises_propagates_unwrapped():
     # A raising gate is a bug in OUR code (there is no callable gate that
     # isn't ours), not hostile input, so it propagates rather than being
     # laundered into a PolicyError that would misrepresent a crash as a
@@ -337,12 +336,12 @@ def test_a_callable_gate_that_raises_propagates_unwrapped() -> None:
         pol._required("get_ticket", gate, {})
 
 
-def test_an_incomplete_embedder_backend_raises_a_typed_error_not_a_raw_attributeerror() -> None:
-    # IMPORTANT 2: Backend is a structural Protocol, so an embedder's partial
-    # implementation - missing a method _GATES declares - is legitimate Python
-    # that type-checks fine. This is independent of _GATES drift (_GATES is
-    # ours; the instance is an embedder's), so it needs nothing the drift
-    # cross-check forbids: just a class missing a method.
+def test_an_incomplete_embedder_backend_raises_a_typed_error_not_a_raw_attributeerror():
+    # Backend is a structural Protocol, so an embedder's partial implementation
+    # - missing a method _GATES declares - is legitimate Python that type-checks
+    # fine. This is independent of _GATES drift (_GATES is ours; the instance
+    # is an embedder's), so it needs nothing the drift cross-check forbids:
+    # just a class missing a method.
     class IncompleteBackend:
         pass  # no get_ticket at all
 
@@ -351,7 +350,7 @@ def test_an_incomplete_embedder_backend_raises_a_typed_error_not_a_raw_attribute
         pb.get_ticket(ticket_id=1)
 
 
-def test_an_unpickled_policybackend_refuses_gated_calls_with_a_typed_error() -> None:
+def test_an_unpickled_policybackend_refuses_gated_calls_with_a_typed_error():
     # Unpickling reconstructs an instance via __new__ and never calls __init__,
     # so the unpickled wrapper has no entry in _state. That already fails
     # closed (verified: nothing delegated, no capability granted) - this
@@ -368,7 +367,7 @@ def test_an_unpickled_policybackend_refuses_gated_calls_with_a_typed_error() -> 
         unpickled.get_ticket(ticket_id=1)
 
 
-def test_an_unpickled_policybackends_policy_property_is_also_a_typed_refusal() -> None:
+def test_an_unpickled_policybackends_policy_property_is_also_a_typed_refusal():
     # The same defect, same fix, at the second (and only other) call site that
     # reads _state directly: the .policy property. Same in-process round-trip,
     # nothing crosses a trust boundary.

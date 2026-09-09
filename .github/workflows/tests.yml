@@ -28,7 +28,9 @@ jobs:
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with: { python-version: "${{ matrix.python-version }}" }
       - run: pip install -e ".[dev]"
-      - run: python -m pytest -q --cov=csa_zendesk --cov-report=term-missing --cov-fail-under=90
+      # 100, not 90: a gate ten points below a measured 100% cannot fail. The
+      # sanctioned hatch is `# pragma: no cover` on a specific line, documented there.
+      - run: python -m pytest -q --cov=csa_zendesk --cov-report=term-missing --cov-fail-under=100
 
   gates:
     runs-on: ubuntu-latest

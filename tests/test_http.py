@@ -237,10 +237,12 @@ def test_a_503_retry_after_beyond_the_cap_is_also_refused(monkeypatch):
     assert slept == []
 
 
-# --- fix round 1 -------------------------------------------------------------
+# --- retry boundaries, credential-leak paths, and response-shape edge cases --
 #
-# Two Criticals (both credential leaks), one misclassified success, two boundary
-# gaps. See .superpowers/sdd/2026-09-08-block-0-foundations/task-5-fix-1.md.
+# Two credential-leak paths (the instance dict, and exception chaining carrying
+# the live Authorization header), one success case that was previously
+# misclassified as an error (a 200/204 with an empty body), and two off-by-one
+# boundaries in the retry ceiling below.
 
 
 def test_retry_after_at_exactly_the_cap_is_slept_and_succeeds(monkeypatch):
@@ -373,10 +375,11 @@ def test_a_transport_error_does_not_chain_to_an_exception_carrying_the_auth_head
     assert "tok" not in str(ei.value)
 
 
-# --- fix round 2: cumulative retry budget ------------------------------------
+# --- cumulative retry budget --------------------------------------------------
 #
 # MAX_RETRIES x MAX_RETRY_AFTER_SECONDS alone still allows 180s of real sleeping in
-# one logical call. See .superpowers/sdd/2026-09-08-block-0-foundations/task-5-fix-2.md.
+# one logical call (see MAX_TOTAL_RETRY_SECONDS's docstring in _http.py for why
+# that is an ordinary production sequence, not a pathological one).
 
 
 def test_a_sustained_59s_retry_after_stops_on_the_budget_not_on_max_retries(monkeypatch):

@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 77, not 68: PEP 639's license-expression support (`license = "Apache-2.0"` above,
+# rather than a classifier or a table) needs setuptools>=77. 68 understated it.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -55,3 +57,12 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# An unclosed httpx.Client or any other warning becomes a failure instead of
+# silent output a stdio MCP server can't afford to print anyway.
+filterwarnings = ["error"]
+
+[tool.coverage.report]
+# 100, not the 90 this once was: a gate ten points below a measured 100% cannot
+# fail. The one sanctioned hatch is `# pragma: no cover` on a specific line, with
+# a comment there saying why - never lowering this number back down.
+fail_under = 100
