@@ -219,6 +219,61 @@ def test_widening_through_policy_dunder_init_is_refused_end_to_end() -> None:
         pb.get_ticket(ticket_id=1)
 
 
+def test_reinvoking_init_on_a_live_policybackend_is_refused_and_leaves_it_unchanged() -> None:
+    # The same defect one level up (fix round 4): PolicyBackend.__init__ writes
+    # _state[self] = (backend, policy) with no guard against a second call,
+    # which would silently swap BOTH the wrapped backend and the policy on a
+    # live wrapper - reaching every capability with no restart and no operator,
+    # by calling nothing more exotic than a public method twice. Both the raise
+    # and that the original backend/policy are unchanged afterwards are asserted.
+    original_backend = FakeBackend({1: {"id": 1}})
+    original_policy = pol.Policy(frozenset({pol.TICKET_READ}))
+    pb = pol.PolicyBackend(original_backend, original_policy)
+    with pytest.raises(AttributeError):
+        pb.__init__(FakeBackend({2: {"id": 2}}), pol.Policy(frozenset(pol.ALL_CAPABILITIES)))  # type: ignore[misc]
+    assert pb.policy is original_policy
+    assert pol._state[pb][0] is original_backend
+
+
+def test_widening_through_policybackend_dunder_init_is_refused_end_to_end() -> None:
+    # The wrapper-level mirror of the Policy end-to-end test: attempting to
+    # swap in a fully-permissive policy (and a different backend) through
+    # pb.__init__(...) must raise, and the subsequent call must still be
+    # refused by the ORIGINAL empty policy, not silently served by the new one.
+    pb = pol.PolicyBackend(FakeBackend({1: {"id": 1}}), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError):
+        pb.get_ticket(ticket_id=1)
+    with pytest.raises(AttributeError):
+        pb.__init__(FakeBackend({1: {"id": 1}}), pol.Policy(frozenset(pol.ALL_CAPABILITIES)))  # type: ignore[misc]
+    with pytest.raises(exc.PolicyError):
+        pb.get_ticket(ticket_id=1)
+
+
+@pytest.mark.parametrize(
+    "build_live_instance",
+    [
+        lambda: pol.Policy(frozenset({pol.TICKET_READ})),
+        lambda: pol.PolicyBackend(FakeBackend({1: {"id": 1}}), pol.Policy(frozenset({pol.TICKET_READ}))),
+    ],
+    ids=["Policy", "PolicyBackend"],
+)
+def test_no_construct_once_object_can_be_reinitialised(build_live_instance) -> None:
+    # Policy and PolicyBackend are both construct-once for the same reason:
+    # __init__ is an ordinary method that writes through a channel their frozen
+    # __setattr__ cannot see. This is the shape that would have caught round 4's
+    # bug directly from round 3's fix - a single guard covering every class with
+    # this property, so it is still there when a third one is added.
+    instance = build_live_instance()
+    with pytest.raises(AttributeError):
+        instance.__init__(*_widened_init_args(instance))
+
+
+def _widened_init_args(instance: object) -> tuple:
+    if isinstance(instance, pol.Policy):
+        return (frozenset(pol.ALL_CAPABILITIES),)
+    return (FakeBackend({1: {"id": 1}}), pol.Policy(frozenset(pol.ALL_CAPABILITIES)))
+
+
 def test_a_callable_gate_returning_a_bare_string_is_refused_not_exploded() -> None:
     # IMPORTANT 1: a gate bug that returns "ticket" instead of {"ticket"} must
     # not silently explode through frozenset(str) into {'t','i','c','k','e','t'}

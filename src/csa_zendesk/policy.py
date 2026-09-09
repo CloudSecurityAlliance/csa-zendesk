@@ -282,9 +282,26 @@ class PolicyBackend:
     `object.__setattr__`) would be found by ordinary attribute lookup before
     `__getattr__` is ever consulted, which would make `pb._backend` return the
     raw, ungated backend directly.
+
+    Construct-once, the same way and for the same reason as `Policy`:
+    `__init__` refuses to run a second time against an already-constructed
+    instance, because it is an ordinary method that writes through
+    `_state[self] = ...` - a channel the frozen `__setattr__` below cannot
+    see. Without this guard, `pb.__init__(other_backend, Policy(ALL_CAPABILITIES))`
+    would silently swap both the wrapped backend and the policy on a live
+    wrapper, reaching every capability including `ticket.close` with no
+    restart and no operator - calling nothing more exotic than a public
+    method twice. This is not protection against code that already has
+    execution reaching into module scope and writing `_state[pb] = ...`
+    directly - that always works and cannot be prevented, the same category
+    of residual, unavoidable path as `object.__setattr__` on `Policy` and
+    `HttpClient`'s credential via `_authorize.__closure__`. What this closes
+    is the route that looks like ordinary use: calling `__init__` again.
     """
 
     def __init__(self, backend: Backend, policy: Policy) -> None:
+        if self in _state:
+            raise AttributeError("PolicyBackend is immutable; construct a new one")
         _state[self] = (backend, policy)
 
     def __setattr__(self, name: str, value: Any) -> None:
