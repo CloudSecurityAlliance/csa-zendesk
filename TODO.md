@@ -39,6 +39,8 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 | | Item | Status | Notes |
 |---|---|---|---|
+| B9 | **Should `admin.write` split per object type?** 225 configuration operations behind one gate. Deferred by ADR-010 because `admin` is off by default in 1.0. | open | Revisit if `admin` is ever granted routinely. |
+| B10 | **Should `bulk` be complemented by a magnitude threshold** above which an operation needs confirmation? One surveyed server does this. `bulk` gates authority; a threshold gates scale. | open | Not the same question. |
 | C1 | **The requirements model over-reports on conditional forms.** It matched a live 422 exactly — but on a form with *zero* conditional rules, so the match validated the easy half. On a conditional form it lists mutually exclusive branches as both required. | open | Needs a ticket on a conditional form. `experiments/solve-required-fields/RESULTS.md`. |
 | C2 | **`required_on_statuses.type` is not enumerated.** `SOME_STATUSES` observed; `ALL_STATUSES` inferred and unverified. The whole `agent_conditions` structure is undocumented. | open | Keep the compute-vs-422 comparison as a conformance test so upstream shape changes fail loudly. |
 | C3 | ~~Confirm `status: "closed"` is rejected~~ | **done** | It is **accepted**, and terminal. See `API-SURFACE.md` §5.4d. The earlier claim that it was automation-only was wrong. |
