@@ -73,12 +73,24 @@ def _code(body: dict[str, Any]) -> str:
 
 
 def _retry_after(headers: Mapping[str, str] | None) -> int:
-    """Honour `Retry-After`; default to 10s when it is absent, per the official Ruby client."""
+    """Honour `Retry-After`; default to 10s when it is absent, per the official Ruby client.
+
+    Case-insensitive by its own doing rather than by trusting the caller: an httpx response
+    hands over a case-insensitive mapping, but a plain dict does not, and silently losing
+    the header would fall back to the default while looking like it had read one.
+
+    Clamped at zero. A negative value is nonsense from the server's side, but it would
+    reach `time.sleep()` in the retry loop and raise there instead of here.
+    """
     if not headers:
         return DEFAULT_RETRY_AFTER
-    raw = headers.get("Retry-After") or headers.get("retry-after")
+    raw: str | None = None
+    for key, value in headers.items():
+        if key.lower() == "retry-after":
+            raw = value
+            break
     try:
-        return int(str(raw))
+        return max(0, int(str(raw)))
     except (TypeError, ValueError):
         return DEFAULT_RETRY_AFTER
 

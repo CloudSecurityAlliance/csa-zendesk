@@ -144,3 +144,20 @@ def test_a_422_without_recordinvalid_or_problems_is_an_apierror_not_a_validation
     assert isinstance(err, exc.ApiError)
     assert not isinstance(err, exc.ValidationError)
     assert err.status == 422
+
+
+def test_a_negative_retry_after_is_clamped_to_zero() -> None:
+    # time.sleep() raises on a negative, and it would raise inside the retry loop
+    # rather than here. A server sending this is broken, but we are not.
+    err = parse_error(429, {"error": "TooManyRequests"}, headers={"Retry-After": "-5"})
+    assert isinstance(err, exc.RateLimited)
+    assert err.retry_after == 0
+
+
+def test_retry_after_is_found_whatever_the_header_casing() -> None:
+    # httpx hands over a case-insensitive mapping; a plain dict does not. Losing the
+    # header would fall back to the default while looking like it had read one.
+    for key in ("Retry-After", "retry-after", "RETRY-AFTER", "ReTrY-AfTeR"):
+        err = parse_error(503, {"error": "Unavailable"}, headers={key: "42"})
+        assert isinstance(err, exc.ServiceUnavailable)
+        assert err.retry_after == 42, key
