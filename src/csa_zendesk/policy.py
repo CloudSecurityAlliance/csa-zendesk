@@ -126,12 +126,36 @@ _GATES: dict[str, Gate] = {
 }
 
 
-def _required(gate: Gate, kwargs: dict[str, Any]) -> frozenset[str]:
+def _required(name: str, gate: Gate, kwargs: dict[str, Any]) -> frozenset[str]:
+    """Every capability `name`'s gate demands for this call.
+
+    A callable gate's return is validated, not trusted. There is no callable
+    gate yet - `update_ticket` is the first, per ADR-003, needing `ticket.write`
+    plus `ticket.solve` when solving - so this is dead code today and cheap to
+    get right before it isn't. Left unvalidated, a gate bug that returns a bare
+    string would silently explode through `frozenset(str)` into its individual
+    characters (`{'t', 'i', 'c', 'k', 'e', 't'}` for `"ticket"`), producing a
+    required-capability set no policy could ever satisfy - failing closed, but
+    for a reason nobody could diagnose from the error alone.
+
+    A gate that *raises* is deliberately left to propagate rather than being
+    wrapped in `PolicyError`: there is no callable gate that isn't our own
+    code, so a raising gate is a bug in csa-zendesk, not a hostile input, and
+    wrapping it would misrepresent a crash in our own logic as a considered
+    policy refusal - discarding the real traceback in the process.
+    """
     if gate is None:
         return frozenset()
     if isinstance(gate, str):
         return frozenset({gate})
-    return gate(kwargs)
+    result = gate(kwargs)
+    if isinstance(result, (frozenset, set)) and all(isinstance(c, str) for c in result):
+        return frozenset(result)
+    raise exc.PolicyError(
+        f"the gate for `{name}` returned {result!r}, not a set of capability strings. "
+        f"This is a programming error in csa-zendesk, not a configuration problem: fix "
+        f"the gate function in policy._GATES."
+    )
 
 
 class Policy:
@@ -201,10 +225,15 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     against the call's kwargs, and either refuses (logging method + missing
     capability, never the arguments - they may carry ticket content) or
     delegates to the real backend method.
+
+    The capability check happens before the `hasattr` check below on purpose:
+    a caller without the capability gets that refusal regardless of whether
+    the backend actually implements the method, since the capability refusal
+    is the one that matters for authority, not implementation completeness.
     """
     backend, policy = _state[pb]
     gate = _GATES[name]
-    absent = policy.missing(_required(gate, kwargs))
+    absent = policy.missing(_required(name, gate, kwargs))
     if absent:
         log.warning("refused %s: missing %s", name, ", ".join(sorted(absent)))
         raise exc.PolicyError(
@@ -213,6 +242,20 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
             f"for a capability no profile grants, list it explicitly in "
             f"CSA_ZENDESK_CAPABILITIES — then restart. The policy cannot be changed "
             f"from here."
+        )
+    if not hasattr(backend, name):
+        # Independent of _GATES drift (which the cross-check in test_policy.py
+        # already forbids): _GATES is ours, but the wrapped instance is an
+        # embedder's. Backend is a structural Protocol, so a partial
+        # implementation is legitimate Python that type-checks fine and still
+        # blows up here at the one call it's missing - without this check, as
+        # a raw AttributeError escaping from inside the security layer.
+        log.error("backend %s has no %s method despite a declared gate", type(backend).__name__, name)
+        raise exc.PolicyError(
+            f"`{name}` is declared in policy._GATES but the wrapped backend "
+            f"({type(backend).__name__!r}) has no such method. This is a bug in the "
+            f"backend implementation, not a policy refusal: implement `{name}` on "
+            f"{type(backend).__name__}."
         )
     return getattr(backend, name)(**kwargs)
 

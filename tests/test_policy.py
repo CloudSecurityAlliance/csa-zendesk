@@ -121,18 +121,18 @@ def test_capability_constants_and_the_all_tuple_agree():
 
 
 def test_required_treats_a_none_gate_as_an_ungated_read():
-    assert pol._required(None, {"anything": 1}) == frozenset()
+    assert pol._required("get_ticket", None, {"anything": 1}) == frozenset()
 
 
 def test_required_wraps_a_string_gate_as_a_singleton_set():
-    assert pol._required(pol.TICKET_READ, {}) == frozenset({pol.TICKET_READ})
+    assert pol._required("get_ticket", pol.TICKET_READ, {}) == frozenset({pol.TICKET_READ})
 
 
 def test_required_delegates_a_callable_gate_to_the_kwargs():
     def gate(kw: dict) -> frozenset:
         return frozenset({pol.TICKET_WRITE, pol.TICKET_SOLVE})
 
-    assert pol._required(gate, {"status": "solved"}) == {pol.TICKET_WRITE, pol.TICKET_SOLVE}
+    assert pol._required("get_ticket", gate, {"status": "solved"}) == {pol.TICKET_WRITE, pol.TICKET_SOLVE}
 
 
 def test_the_wrapper_exposes_its_policy():
@@ -193,6 +193,9 @@ def test_every_gate_names_a_real_backend_method_and_every_method_has_a_gate() ->
     )
 
 
+# --- fix round 3 -------------------------------------------------------------
+
+
 def test_reinvoking_init_on_a_live_policy_is_refused_and_leaves_it_unchanged() -> None:
     # CRITICAL: pb.policy.__init__(...) is calling an ordinary public method a
     # second time, not an exotic bypass. A guard that raises after already
@@ -213,4 +216,42 @@ def test_widening_through_policy_dunder_init_is_refused_end_to_end() -> None:
     with pytest.raises(AttributeError):
         pb.policy.__init__(frozenset(pol.ALL_CAPABILITIES))  # type: ignore[misc]
     with pytest.raises(exc.PolicyError):
+        pb.get_ticket(ticket_id=1)
+
+
+def test_a_callable_gate_returning_a_bare_string_is_refused_not_exploded() -> None:
+    # IMPORTANT 1: a gate bug that returns "ticket" instead of {"ticket"} must
+    # not silently explode through frozenset(str) into {'t','i','c','k','e','t'}
+    # - a required set no policy could ever satisfy, failing closed for a
+    # reason nobody could diagnose from the error alone.
+    def gate(kw: dict) -> frozenset:
+        return "ticket.read"  # type: ignore[return-value]
+
+    with pytest.raises(exc.PolicyError, match="not a set of capability strings"):
+        pol._required("get_ticket", gate, {})
+
+
+def test_a_callable_gate_that_raises_propagates_unwrapped() -> None:
+    # A raising gate is a bug in OUR code (there is no callable gate that
+    # isn't ours), not hostile input, so it propagates rather than being
+    # laundered into a PolicyError that would misrepresent a crash as a
+    # considered policy refusal.
+    def gate(kw: dict) -> frozenset:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        pol._required("get_ticket", gate, {})
+
+
+def test_an_incomplete_embedder_backend_raises_a_typed_error_not_a_raw_attributeerror() -> None:
+    # IMPORTANT 2: Backend is a structural Protocol, so an embedder's partial
+    # implementation - missing a method _GATES declares - is legitimate Python
+    # that type-checks fine. This is independent of _GATES drift (_GATES is
+    # ours; the instance is an embedder's), so it needs nothing the drift
+    # cross-check forbids: just a class missing a method.
+    class IncompleteBackend:
+        pass  # no get_ticket at all
+
+    pb = pol.PolicyBackend(IncompleteBackend(), pol.Policy.from_profile("full"))
+    with pytest.raises(exc.PolicyError, match="no such method"):
         pb.get_ticket(ticket_id=1)
