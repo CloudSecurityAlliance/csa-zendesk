@@ -1,0 +1,109 @@
+family,bucket,reason
+Tickets,now,The core object. Per-operation exceptions refuse permanent purge.
+Ticket Comments,now,"Reading and adding comments is the work; public reply is gated by reach, not excluded here."
+Ticket Audits,now,The change history is how triage reconstructs what happened.
+Ticket Metrics,now,Age and reply counts are what 'what is rotting' is computed from.
+Ticket Metric Events,now,Same reason as Ticket Metrics; one read.
+Users,now,"Requesters and agents. Per-operation exceptions refuse purge, password and merge."
+Organizations,now,Ticket context. Merge refused per-operation.
+Groups,now,Routing target; needed to say where a ticket should go.
+Group Memberships,now,Needed to answer 'who is in this group' when re-routing.
+Organization Memberships,now,Same as Group Memberships for the org side.
+Requests,now,The end-user view of a ticket; read-side of the customer experience.
+Search,now,Primary entry point for triage.
+Saved Searches,now,Cheap and directly serves recurring triage queries.
+Views,now,How the queue is actually organised; also a config-loop object.
+Tags,now,The main categorisation mechanism and the config loop's first lever.
+Ticket Fields,now,Must be read before solving; writing them is config-loop work.
+Ticket Forms,now,describe_ticket_form is already mandatory context per ADR-006.
+Custom Ticket Statuses,now,Status vocabulary is needed to set status correctly.
+Attachments,now,Tickets carry them; reading them is part of understanding a ticket.
+Locales,now,Small and needed to interpret content.
+Job Statuses,now,ADR-007 surfaces Zendesk's jobs; this is that surface.
+Basics,now,whoami and the context toolset.
+Suspended Tickets,now,"Triage includes 'what got suspended and should not have'. Destroy refused per-operation."
+Satisfaction Ratings,now,Direct signal about what went wrong; read-only in practice.
+Satisfaction Reasons,now,Two reads; needed to interpret ratings.
+Macros,now,"Config loop: the canned-response half of 'this recurs, automate it'."
+Triggers,now,Config loop: the automation half. Blast radius is every future ticket.
+Trigger Categories,now,Triggers are unusable without their categories.
+Object Triggers,now,Same mechanism as Triggers for custom objects.
+Automations,now,Time-based counterpart to Triggers; same loop.
+SLA Policies,now,Defines what 'late' means; triage depends on it.
+Dynamic Content,now,Macros and triggers reference it; editing one without it breaks text.
+Dynamic Content Item Variants,now,Inseparable from Dynamic Content.
+Incremental Export,later,Bulk history export. Wanted for corpus analysis; not needed to work the queue.
+Email Notifications,later,Read-only visibility into what was sent. Useful; not load-bearing yet.
+Activity Stream,later,Overlaps Ticket Audits for the ticket case.
+Bookmarks,later,Agent convenience; no agent is bookmarking.
+Ticket Skips,later,Niche routing telemetry.
+Ticket Content Pins,later,Niche.
+Approval Requests,later,No approval workflow in use yet.
+Task Lists,later,Not in use at CSA today.
+Task List Templates,later,Depends on Task Lists.
+Custom Object Records,later,No custom objects defined today; whole cluster defers together.
+Custom Objects,later,See Custom Object Records.
+Custom Object Fields,later,See Custom Object Records.
+Custom Object Permissions,later,See Custom Object Records.
+Custom Object Record Attachments,later,See Custom Object Records.
+Lookup Relationships,later,Part of the custom-object cluster.
+Skill Based Routing,later,Not configured at CSA; 18 operations for an unused feature.
+Incremental Skill Based Routing,later,See Skill Based Routing.
+Omnichannel Routing Queues,later,Not in use.
+X Channel,later,Channel we do not operate.
+Channel Framework,later,For building a channel; we are not.
+Conversation Log,later,Messaging-adjacent; not our channel.
+Push Notification Devices,later,Mobile app concern.
+Global Clients,later,Read-only introspection with no current use.
+Target Failures,later,Depends on Targets.
+Targets,later,Outbound webhooks. Config-loop adjacent but not needed for the first turn.
+Sharing Agreements,later,Cross-account ticket sharing; not in use.
+Resource Collections,later,Bulk config packaging; wanted only once config work is routine.
+Support Addresses,later,Changes where mail comes from; config work but rare and high-consequence.
+Brands,later,Multi-brand config; rare and high-consequence.
+Brand Agents,later,Depends on Brands.
+User Fields,later,Config loop reaches it eventually; not first turn.
+Organization Fields,later,Same as User Fields.
+User Identities,later,"Reading is useful; writing changes how a person is contacted. Defer as a unit."
+Organization Subscriptions,later,Niche.
+Countries,later,Two reads; no current use.
+Ticket Import,later,Bulk import of historical tickets; not a support-loop operation.
+Articles,later,"Help Center. GOALS has it medium-term; the first loop is tickets and config."
+Sections,later,See Articles.
+Categories,later,See Articles.
+Translations,later,See Articles. Also TODO A6 — nobody has said we localise.
+Article Attachments,later,See Articles.
+Article Comments,later,See Articles.
+Article Labels,later,See Articles.
+Content Subscriptions,later,See Articles. 26 operations for a feature with no stated need.
+User Segments,later,Help Center audience config.
+User Subscriptions,later,See Content Subscriptions.
+Posts,later,Community feature; not in use.
+Post Comments,later,See Posts.
+Topics,later,See Posts.
+Votes,later,See Posts. 19 operations for community voting.
+Help Center Search,later,Defers with the rest of Help Center.
+Help Center Sessions,later,One read; defers with Help Center.
+User Images,later,Help Center avatars.
+Account Settings,later,"Read is harmless and wanted; write changes account-wide behaviour. Deferred as a unit until the read/write split is worth the plumbing."
+Security Settings,later,One read. Wanted for a posture check; not for the support loop.
+Remote Authentications,later,One read; SSO introspection.
+Reseller,never,Account provisioning and billing. Nothing in the support loop needs it and the blast radius is the account itself.
+User Passwords,never,"An agent setting or changing a person's password is credential manipulation, not support."
+API Tokens,never,Minting or revoking API credentials. An agent that can mint a credential can escape its own gate.
+OAuth Clients,never,See API Tokens. Credential infrastructure is not support surface.
+OAuth Tokens,never,See API Tokens.
+Grant Type Tokens,never,See API Tokens.
+Sessions,never,"Deleting sessions force-logs-out real people; reading them is surveillance of staff. Neither is support."
+Custom Roles,never,"Changes who may do what in Zendesk. Privilege escalation by definition, and a human decision."
+Deletion Schedules,never,Configures automatic permanent deletion of customer data. Irreversible by design and on a timer.
+ITAM Assets,blocked,ADR-001 — plan-gated; WAITING-FOR-001.
+ITAM Asset Fields,blocked,ADR-001 — plan-gated.
+ITAM Asset Locations,blocked,ADR-001 — plan-gated.
+ITAM Asset Statuses,blocked,ADR-001 — plan-gated.
+ITAM Asset Types,blocked,ADR-001 — plan-gated.
+Group SLA Policies,blocked,ADR-001 — plan-gated.
+Workspaces,blocked,ADR-001 — plan-gated.
+Ticket Form Statuses,blocked,ADR-001 — plan-gated.
+Audit Logs,blocked,ADR-001 — plan-gated. Flagged in WAITING-FOR-001 as the likeliest to be reopened.
+Service Catalog Items,blocked,ADR-001 — plan-gated.
