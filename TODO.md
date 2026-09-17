@@ -66,7 +66,6 @@ Status: `open` · `in progress` · `blocked` · `done`
 | D8 | ~~Mint API tokens before the window closes~~ | **decided — no** | [ADR-015](DECISIONS-ADR/ADR-015.md): OAuth only, no further tokens, the 2026-10-27 window is allowed to close. A stockpile buys until 2027-04-30 regardless and argues against building OAuth this quarter. |
 | D10 | **Remove the API token code path** from `README.md` and `CLAUDE.md` as a supported configuration, per ADR-015. The research scripts under `scripts/` keep theirs — development tooling, not product. | open | Low effort; do it before anyone writes auth code against the old assumption. |
 | D11 | **Port the research scripts to OAuth** — `zd.py`, `ui_actions.py`, `probe_families.py`. | blocked | On Block 0b. They inherit the 2027-04-30 expiry; nothing at runtime depends on them, so this is a follow-on rather than a precondition. |
-| D9 | **Review the Zendesk MCP server written by a CSA colleague** and fold it into the prior art. Identity is in the private tenant config, where the denylist already places it. | open | Explicitly asked for in the 2026-09-12 design session and missed — `PRIOR-ART.md` surveys twelve servers and does not include it. Public repo, last pushed 2026-08-05, no stars. Worth more than a thirteenth alias: it is the one surveyed server whose author we can simply ask, so the reuse-or-diverge question is answerable rather than inferred. |
 | D1 | ~~Create the public GitHub repo~~ | **done** | The repo has existed since 2026-08-31 and is public. This entry was stale; it unblocks D2. |
 | D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | open | **Unblocked**: D1 is done, the repo is public, the URLs resolve. Also confirm the CINO Product for MCP Servers exists and holds this project alongside `csa-google-workspace` and `csa-skilljar` (asked for in the 2026-09-12 session; never confirmed). |
 | D1 | **Create the public GitHub repo** once there is working code, and push. | done | Repo exists; Block 0 is the first working code. |
@@ -112,3 +111,10 @@ Recorded so they are not re-proposed as oversights.
 - **A local attachment cache.** One surveyed server has nine tools for it. A local cache of
   customer attachments is a data-retention decision, not a convenience.
 - **Naming with a `zendesk_` prefix.** Settled: bare `verb_noun`. The client namespaces already.
+
+- **The Zendesk MCP server written by a CSA colleague.** Asked for during the 2026-09-12 design
+  session and **deliberately dropped 2026-09-17**: the prior-art survey exists to learn from servers
+  with real adoption, and this one has none. Including it because the author is internal would be
+  selecting on relationship rather than on signal, and the aliasing convention exists precisely so
+  the survey is about the ecosystem rather than about people. Recorded so it is not re-proposed as an
+  oversight.
