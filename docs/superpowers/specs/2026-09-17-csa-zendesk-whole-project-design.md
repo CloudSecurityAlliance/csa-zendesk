@@ -202,9 +202,64 @@ A `Never` entry records **what** is refused, **why**, and **what would reopen it
 4. **The official SDKs** — TODO **A1**, open: their union is 97 resources against our 125 families.
    The triage is where that reconciliation gets done rather than deferred again.
 
+### 3b. The negative space — what the web interface can do and the API cannot
+
+**The triage above partitions the API surface, and the API surface is not the capability surface.**
+A capability reachable only through the vendor's web interface never appears in the operation
+inventory at all, so the triage can neither admit nor refuse it. It is structurally invisible to a
+pass that reads the API.
+
+This is not hypothetical for the fleet. `ROSTER.md`'s North Star was moved from *API* coverage to
+*capability* coverage precisely because of it: `csa-skilljar` promised the caller reaches "whichever
+Skilljar API actually has the capability", which quietly assumes some API has it — and practice-exam
+grading, reachable only through the web UI, falsifies that. **"100% API coverage" can be true while
+the server is still incomplete.**
+
+`analysis/UI-ACTION-MAP.md` already does the adjacent job — it enumerates the UI's vocabulary by
+asking Zendesk's own `definitions.json` endpoints. That is the *positive* bridge: API shape to
+human-recognisable action. It cannot find absences, because it asks the API what the API models.
+
+**You cannot find an absence by reading the documentation of what exists.** Official documentation
+describes the positive space; the gap is visible only from outside it.
+
+#### Where the negative space is actually visible
+
+| Source | What it reveals |
+|---|---|
+| **Complaints** — vendor forums, Stack Overflow, GitHub issues on client libraries, Reddit | "Is there an API for X?" answered "no, UI only" is the highest-signal artifact there is. People only ask after trying |
+| **Third-party tool limitations** | Integrations that say "we cannot sync X because the API does not expose it" have already done this research |
+| **The vendor's own known-limitations pages** | Sometimes documented, rarely near the API reference |
+| **Evidence of an internal/private API** | The decisive case. If the web interface calls endpoints the public API does not publish, every capability behind them is unreachable by us |
+| **Changelog and deprecations** | A capability recently removed from the API is a gap that used to not exist |
+
+**The canonical example is Airtable**: an internal API powers the web interface and a separate
+external API is what integrators get. **Comments exist only in the internal one** — so no amount of
+reading the public API reference reveals that commenting is possible at all. A project that scoped
+itself from the public reference would conclude Airtable has no comments.
+
+#### What it produces, and what each entry forces
+
+A list of **capabilities a human can perform in the web interface that no API operation reaches**.
+Each entry is a decision, not a note:
+
+- **Web automation, with drift detection.** `ROSTER.md` is explicit that an API route has a contract
+  and a web route has none and breaks silently, so committing to web automation *without* a drift
+  watcher is committing to silent breakage. `csa-skilljar`'s `scripts/check_upstream.py` is the
+  pattern.
+- **Out of scope, recorded.** The same shape as a `Never` entry — what is refused, why, and what
+  would reopen it.
+- **Wait**, with a `WAITING-FOR` trigger, where the vendor has signalled the gap will close.
+
+#### Why this runs at the same time as everything else
+
+Reviewing holistically is the point. A gap found after the tool surface is designed either gets
+bolted on as an exception or gets silently dropped, and both outcomes are how an API-shaped tool
+list ends up mistaken for a capability-complete one. The negative-space pass, the triage and the
+classification are **one review, run together, before anything is generated.**
+
 ### Output
 
-One table, per family, with a bucket and a recorded reason. It feeds §4's classification: `Now` is
+One table, per family, with a bucket and a recorded reason; plus the negative-space list from §3b. It feeds §4's classification: `Now` is
 what gets classified on the four axes and generated; `Later` is classified but not generated, so
 admitting it later is a build step rather than a redesign; `Never` and `Blocked` are neither.
 
@@ -303,7 +358,7 @@ different gates.
 |---|---|---|
 | **B0** | Foundations | [PR #12](https://github.com/CloudSecurityAlliance/csa-zendesk/pull/12) — green, `MERGEABLE`, `CLEAN`, 32 commits. `main` carries no code until it lands |
 | **B0b** | OAuth public client, PKCE, one token file, `whoami` | `ADR-009`; TODO **B11** owes the plan. Nothing touches real Zendesk before this |
-| **B0c** | **Scoping triage** (§3) — every family bucketed now / later / never / blocked, with reasons | Depends on [#17](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/17) (probe the official server) and closes **A1**. Can run in parallel with B0b |
+| **B0c** | **Scoping triage and negative-space research** (§3, §3b) — every family bucketed now / later / never / blocked, plus the list of capabilities the web interface reaches and the API does not | One review, run together. Depends on [#17](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/17) (probe the official server) and closes **A1**. Can run in parallel with B0b |
 | **B1** | **Classification of the admitted surface** on the four axes | The keystone; everything below derives from it. Largely mechanical — the OpenAPI specs and `API-SURFACE.md` probes carry most of the input |
 | **B2** | Generate the capability set **and** the tool list from B1 | `ADR-010` mandates the first; §3 adds the second |
 | **B3** | Backend: the whole surface | From-scratch client per `ADR-002`. **Rate limiting lands here** — CINO [#53](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/53) records this server as having none, and the quota is shared with CSA's running systems. **The drift watcher lands here too** (issue #17) |
@@ -366,7 +421,11 @@ Named so they are decisions rather than omissions.
    operations, and §2's defence against failure mode #2 has not held.
 4. **The build is delivered in slices after all.** The bucketing gets re-carved, and the effort spent
    deciding it once is spent again.
-5. **The `Never` bucket is empty, or is quietly emptied later.** An empty refusal list means the
+5. **The negative-space list is empty.** For any vendor of this size it will not be, and an empty
+   list means §3b was skipped rather than that the API is complete. "100% API coverage" is then
+   true and the server is still incomplete — which is the exact failure `ROSTER.md`'s North Star
+   was rewritten to prevent.
+6. **The `Never` bucket is empty, or is quietly emptied later.** An empty refusal list means the
    triage did not happen — a vendor API this size always contains something an agent should not be
    able to reach. Moving an entry out of `Never` is a decision with a named reason, not a
    convenience during implementation.
