@@ -142,7 +142,7 @@ escape valve to **the phase-one operating surface**.
 **The hatch ships with B0b, not with B4.** It needs only the client, the gate and authentication — not
 the curated surface — so it is the one part of the build that is deliberately delivered early. That is
 what lets rung E1 begin while B1–B5 are still in progress, and it is the only place the build track
-and the enablement track overlap. Everything else follows §4: build first, enable after.
+and the enablement track overlap. Everything else follows §5: build first, enable after.
 
 That is a change of posture and it needs its own ADR, because `GOALS.md` currently lists
 *"the generic request tool becomes the way things are done"* as failure mode #2.
@@ -157,10 +157,78 @@ rather than guessed from the API surface or re-carved continuously.
 
 ---
 
-## 3. How the operation surface becomes tools
+## 3. Scoping triage — deciding what the surface *is*
 
-**Counts used in this spec:** 882 operations exist; **822 are in scope** after `ADR-001`'s exclusion
-of the six untestable families. `ADR-006` says "~700 reachable" and that figure predates the current
+**This step comes before classification, and it is opt-in rather than opt-out.**
+
+Today the surface is opt-out: every reachable operation gets built unless some reason excludes it.
+That is how 822 became the working number without anyone deciding it should be. The triage inverts
+the burden of proof — each family is admitted for a recorded reason, and "why does this exist?" has
+an answer per family rather than per objection.
+
+### Four buckets
+
+| Bucket | Meaning | Built? |
+|---|---|---|
+| **Now** | needed for the work the server exists to do | yes, in the one-pass build |
+| **Later** | plausibly wanted, not yet justified | classified, not generated |
+| **Never** | **should not be possible through this tool at all** | not generated, and recorded as refused |
+| **Blocked** | wanted but untestable (`ADR-001`) or plan-gated (`WAITING-FOR-001`) | not generated; existing triggers govern |
+
+**"Never" is the bucket that does not exist today, and it is the important one.** The repo has three
+ways of not building something — cannot test it (`ADR-001`), not valuable yet (the consideration
+pile), someone else's job (`ADR-002`) — and none of them means *we do not want this to be possible*.
+Account deletion is the canonical case: testable, present in the API, not post-1.0, and no agent
+should ever reach it.
+
+**Why it is a control and not a preference.** Toolsets, capabilities and allowlists are all
+configuration, and configuration can be set wrong — `GOALS.md` failure mode #1 is a destructive call
+nobody knew was destructive. An operation that was never generated cannot be enabled by a
+misconfiguration, a bad default, or a later refactor that forgets a gate. It is the only layer of the
+design that is not a runtime check, and it is therefore the only one that survives a gate failure.
+
+A `Never` entry records **what** is refused, **why**, and **what would reopen it** — the same shape
+`WAITING-FOR` uses, so a refusal is falsifiable rather than permanent by inertia.
+
+### Inputs
+
+1. **The API itself** — the OpenAPI specs and the `API-SURFACE.md` probes already in the repo.
+2. **The official vendor MCP server**, where one exists. For Zendesk this is
+   [issue #17](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/17): a first-party server
+   was announced at Relate 2026, `BUSINESS-CASE.md` makes a claim about its coverage, and
+   `analysis/PRIOR-ART.md` contains zero mentions of it. **#17 is a dependency of this step**, not a
+   loose end — what the vendor already covers well is evidence about what we need not curate.
+3. **Third-party servers** — `analysis/PRIOR-ART.md` already surveys twelve, read from source.
+4. **The official SDKs** — TODO **A1**, open: their union is 97 resources against our 125 families.
+   The triage is where that reconciliation gets done rather than deferred again.
+
+### Output
+
+One table, per family, with a bucket and a recorded reason. It feeds §4's classification: `Now` is
+what gets classified on the four axes and generated; `Later` is classified but not generated, so
+admitting it later is a build step rather than a redesign; `Never` and `Blocked` are neither.
+
+### Granularity
+
+**Per family, with per-operation exceptions.** 125 families is a tractable number of judgements; 822
+is not. Most families are wholly in or wholly out. Where a family is mostly wanted but contains
+something that is not — a destructive account-level operation inside an otherwise ordinary
+administration family — the exception is recorded against the operation, and the family carries a
+note saying it has one.
+
+### This step generalises to the fleet
+
+Every CSA MCP server wraps a vendor API larger than its useful surface, and every one of them has so
+far decided scope implicitly. This triage — API plus prior art plus official server, bucketed into
+now / later / never / blocked — belongs in the fleet's shared practice rather than in this repo
+alone. Recorded here as the first instance; the fleet-level write-up is owed separately.
+
+---
+
+## 4. How the in-scope surface becomes tools
+
+**Counts used in this spec:** 882 operations exist; **822 are reachable** after `ADR-001`'s exclusion
+of the six untestable families. How many are *admitted* is §3's output and is expected to be smaller. `ADR-006` says "~700 reachable" and that figure predates the current
 inventory — 822 is the number to use, and `scripts/check_counts.py`
 ([PR #16](https://github.com/CloudSecurityAlliance/csa-zendesk/pull/16)) derives it rather than
 trusting any of the three.
@@ -212,12 +280,13 @@ Everything uncurated stays reachable through the hatch.
 
 ---
 
-## 4. Build order and enable order are different things
+## 5. Build order and enable order are different things
 
 **Only one of them is incremental.**
 
-**Build: one pass, whole surface.** Read, write, admin, everything. How 822 operations bucket into
-tools is a *global* design decision; design it against half the surface and it gets redone. A good
+**Build: one pass, the whole in-scope surface.** Read, write, admin, everything §3 admitted. How the
+admitted operations bucket into tools is a *global* design decision; design it against half the
+surface and it gets redone. A good
 basic design, decided once, then executed. Testing a half-built surface also does not surface what is
 missing — the gaps only appear when the whole thing is there to exercise.
 
@@ -234,7 +303,8 @@ different gates.
 |---|---|---|
 | **B0** | Foundations | [PR #12](https://github.com/CloudSecurityAlliance/csa-zendesk/pull/12) — green, `MERGEABLE`, `CLEAN`, 32 commits. `main` carries no code until it lands |
 | **B0b** | OAuth public client, PKCE, one token file, `whoami` | `ADR-009`; TODO **B11** owes the plan. Nothing touches real Zendesk before this |
-| **B1** | **Classification of all 822 operations** on the four axes | The keystone; everything below derives from it. Largely mechanical — the OpenAPI specs and `API-SURFACE.md` probes carry most of the input |
+| **B0c** | **Scoping triage** (§3) — every family bucketed now / later / never / blocked, with reasons | Depends on [#17](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/17) (probe the official server) and closes **A1**. Can run in parallel with B0b |
+| **B1** | **Classification of the admitted surface** on the four axes | The keystone; everything below derives from it. Largely mechanical — the OpenAPI specs and `API-SURFACE.md` probes carry most of the input |
 | **B2** | Generate the capability set **and** the tool list from B1 | `ADR-010` mandates the first; §3 adds the second |
 | **B3** | Backend: the whole surface | From-scratch client per `ADR-002`. **Rate limiting lands here** — CINO [#53](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/53) records this server as having none, and the quota is shared with CSA's running systems. **The drift watcher lands here too** (issue #17) |
 | **B4** | Tool layer: ~30–50 curated tools plus the hatch | **Prompt-injection wrapping belongs here** (TODO **A4**) — ticket bodies are untrusted text and this is the primary risk |
@@ -265,6 +335,7 @@ Three ADRs are owed. They are listed here so the changes are decisions rather th
 | **ADR-011** | Allowlists select subject; the allowlist is a blast-radius control, not a security boundary | Adds a third axis to `ADR-006` |
 | **ADR-012** | The hatch is the primary phase-one surface | Changes `ADR-008`'s posture; must reconcile with `GOALS.md` failure mode #2 |
 | **ADR-013** | Tool boundaries never span an impact bucket | Likely an extension of `ADR-010`, sharing its derive-don't-hand-maintain argument |
+| **ADR-014** | Scope is admitted per family, and some operations are refused outright | Formalises §3. Narrows `ADR-001` from "cannot test" to one of four reasons not to build |
 
 ## Open items this closes by construction
 
@@ -295,3 +366,7 @@ Named so they are decisions rather than omissions.
    operations, and §2's defence against failure mode #2 has not held.
 4. **The build is delivered in slices after all.** The bucketing gets re-carved, and the effort spent
    deciding it once is spent again.
+5. **The `Never` bucket is empty, or is quietly emptied later.** An empty refusal list means the
+   triage did not happen — a vendor API this size always contains something an agent should not be
+   able to reach. Moving an entry out of `Never` is a decision with a named reason, not a
+   convenience during implementation.
