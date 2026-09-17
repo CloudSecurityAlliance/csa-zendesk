@@ -63,6 +63,10 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 | | Item | Status | Notes |
 |---|---|---|---|
+| D8 | **Mint every API token this project will ever want, before 2026-10-27.** After that date no account can create one, and existing tokens die 2027-04-30. | **open — 40 days** | [WAITING-FOR-002](WAITING-FOR/WAITING-FOR-002.md). Both dates were in ADR-009's prose only and tracked nowhere. The interim credential becomes *irreplaceable*, not merely deprecated. Block 0b inherits a hard 2027-04-30 deadline. |
+| D9 | **Review the Zendesk MCP server written by a CSA colleague** and fold it into the prior art. Identity is in the private tenant config, where the denylist already places it. | open | Explicitly asked for in the 2026-09-12 design session and missed — `PRIOR-ART.md` surveys twelve servers and does not include it. Public repo, last pushed 2026-08-05, no stars. Worth more than a thirteenth alias: it is the one surveyed server whose author we can simply ask, so the reuse-or-diverge question is answerable rather than inferred. |
+| D1 | ~~Create the public GitHub repo~~ | **done** | The repo has existed since 2026-08-31 and is public. This entry was stale; it unblocks D2. |
+| D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | open | **Unblocked**: D1 is done, the repo is public, the URLs resolve. Also confirm the CINO Product for MCP Servers exists and holds this project alongside `csa-google-workspace` and `csa-skilljar` (asked for in the 2026-09-12 session; never confirmed). |
 | D1 | **Create the public GitHub repo** once there is working code, and push. | done | Repo exists; Block 0 is the first working code. |
 | D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | blocked | On D1; the URLs would 404 today. |
 | D3 | **Decide whether `SECURITY-RESOURCES.md` is owed.** This project has no external surface of its own but handles an admin credential and untrusted ticket text. | open | |

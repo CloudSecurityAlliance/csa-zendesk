@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # WAITING-FOR-002: Required status checks on `main`
 
 **Status:** Open
@@ -49,3 +50,47 @@ not by reading the setting back: open a throwaway PR that fails one check and co
 merge button refuses. Branch protection has already been misread once in this repo —
 `enforce_admins: true` alone was mistaken for blocking pushes, when it only blocks
 force-pushes and deletions.
+=======
+# WAITING-FOR-002: Zendesk stops issuing API tokens on 2026-10-27
+
+**Status:** Open
+**Date identified:** 2026-09-17
+**Type:** Deadline — the window closes on a date, whether or not we act
+
+## What changes, and when
+
+| Date | What happens |
+|---|---|
+| **2026-10-27** | **No account can create a new API token.** Existing tokens keep working |
+| **2027-04-30** | **Existing API tokens stop working.** OAuth is the only route |
+
+Source: [ADR-009](../DECISIONS-ADR/ADR-009.md), which records both dates as the forcing facts behind
+the OAuth decision. Neither date was tracked anywhere until now — the first appeared in an ADR's
+prose, which is the wrong place for a thing that expires.
+
+## Why this is urgent rather than merely known
+
+Today's credential is an API token (`CINO_CSA_ZENDESK`), and it is what makes every read path
+testable before OAuth exists. **After 2026-10-27 it cannot be replaced.** Rotate it, lose it, need a
+second one for a test account, need one for CI — and the answer is no, permanently.
+
+So the cost of the first date is not "OAuth is late". It is that the interim credential becomes
+**irreplaceable rather than merely deprecated**, and every workflow that would have wanted its own
+token has to already have one.
+
+## Trigger
+
+**Act before 2026-10-27** — this is a deadline, not a wait. Two separate actions:
+
+1. **Mint every API token this project will ever want, now**, while it is still possible. At minimum:
+   the working credential, a spare for rotation, and one per test context we can foresee. Record
+   where each lives per `CREDENTIAL-STORAGE.md` conventions. A token costs nothing to hold and cannot
+   be obtained later.
+2. **Block 0b (OAuth, PKCE, token file) acquires a real deadline of 2027-04-30**, and should not be
+   sequenced as though it were open-ended. It is the only route after that date.
+
+## Resolution
+
+Resolved when Block 0b ships and an OAuth flow has authenticated against the live account. Until
+then the API tokens minted under action 1 are the whole margin.
+>>>>>>> a02452d (docs: the API-token window shuts in 40 days, and it was tracked nowhere)
