@@ -357,7 +357,7 @@ different gates.
 | | Work | Notes |
 |---|---|---|
 | **B0** | Foundations | [PR #12](https://github.com/CloudSecurityAlliance/csa-zendesk/pull/12) — green, `MERGEABLE`, `CLEAN`, 32 commits. `main` carries no code until it lands |
-| **B0b** | OAuth public client, PKCE, one token file, `whoami` | `ADR-009`; TODO **B11** owes the plan. Nothing touches real Zendesk before this |
+| **B0b** | OAuth public client, PKCE, one token file, `whoami` | **The critical path, with a hard deadline of 2027-04-30.** `ADR-015` removed the API token fallback and declined to stockpile tokens before the 2026-10-27 minting cutoff, so this is the only route to a live call. `ADR-009`; TODO **B11** owes the plan |
 | **B0c** | **Scoping triage and negative-space research** (§3, §3b) — every family bucketed now / later / never / blocked, plus the list of capabilities the web interface reaches and the API does not | One review, run together. Depends on [#17](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/17) (probe the official server) and closes **A1**. Can run in parallel with B0b |
 | **B1** | **Classification of the admitted surface** on the four axes | The keystone; everything below derives from it. Largely mechanical — the OpenAPI specs and `API-SURFACE.md` probes carry most of the input |
 | **B2** | Generate the capability set **and** the tool list from B1 | `ADR-010` mandates the first; §3 adds the second |
@@ -425,7 +425,10 @@ Named so they are decisions rather than omissions.
    list means §3b was skipped rather than that the API is complete. "100% API coverage" is then
    true and the server is still incomplete — which is the exact failure `ROSTER.md`'s North Star
    was rewritten to prevent.
-6. **The `Never` bucket is empty, or is quietly emptied later.** An empty refusal list means the
+6. **Block 0b slips past 2027-04-30.** `ADR-015` deliberately removed the fallback, so there is no
+   degraded mode to slip into — the project simply cannot reach Zendesk. That was the point of the
+   decision, and it only works if the date is treated as real.
+7. **The `Never` bucket is empty, or is quietly emptied later.** An empty refusal list means the
    triage did not happen — a vendor API this size always contains something an agent should not be
    able to reach. Moving an entry out of `Never` is a decision with a named reason, not a
    convenience during implementation.

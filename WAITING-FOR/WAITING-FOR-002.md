@@ -80,17 +80,30 @@ token has to already have one.
 
 ## Trigger
 
-**Act before 2026-10-27** — this is a deadline, not a wait. Two separate actions:
+**Ship Block 0b before 2027-04-30.** This is a deadline, not a wait, and
+[ADR-015](../DECISIONS-ADR/ADR-015.md) removed the option of buying time.
 
-1. **Mint every API token this project will ever want, now**, while it is still possible. At minimum:
-   the working credential, a spare for rotation, and one per test context we can foresee. Record
-   where each lives per `CREDENTIAL-STORAGE.md` conventions. A token costs nothing to hold and cannot
-   be obtained later.
-2. **Block 0b (OAuth, PKCE, token file) acquires a real deadline of 2027-04-30**, and should not be
-   sequenced as though it were open-ended. It is the only route after that date.
+The obvious mitigation — mint every token the project could ever want before 2026-10-27, while that
+is still possible — was **considered and declined**. A stockpile buys until 2027-04-30 regardless,
+and every token in it would be an argument for not building OAuth this quarter. The deadline is more
+useful as a forcing function than as something to insure against.
+
+## What is being accepted
+
+After 2026-10-27 the one existing token is **irreplaceable**. If it is lost, rotated or revoked
+before Block 0b ships, `scripts/zd.py`, `scripts/ui_actions.py` and `scripts/probe_families.py` stop
+working and the API inventory cannot be refreshed until OAuth exists. Nothing at runtime depends on
+them, so this delays research rather than breaking the product.
+
+The mitigation is not a spare token. It is Block 0b shipping.
 
 ## Resolution
 
+<<<<<<< HEAD
 Resolved when Block 0b ships and an OAuth flow has authenticated against the live account. Until
 then the API tokens minted under action 1 are the whole margin.
 >>>>>>> a02452d (docs: the API-token window shuts in 40 days, and it was tracked nowhere)
+=======
+Resolved when Block 0b ships and an OAuth flow has authenticated against the live account. The
+research scripts are ported to OAuth as a follow-on, not as a precondition.
+>>>>>>> cd4f952 (docs: ADR-015 — OAuth only, and the token window is allowed to close)
