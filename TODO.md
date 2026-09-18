@@ -63,6 +63,18 @@ Status: `open` · `in progress` · `blocked` · `done`
 | C6 | **`merge_tickets` is a closing operation** — *placed automatically by the classification pass under bucket purity; keep as a conformance check rather than a manual fix.* — merging closes the source ticket, which observational sampling suggests is a significant real-world path to the irreversible state. It needs a gate at `ticket.close` level, not `ticket.write`, and a tool description that says so. | open | Found by ADR-004's technique, not by reading docs. |
 | C5 | **Seed a cursor-capability table** from the Ruby client's path list, then verify each against live probes. Single-sourced today. | open | |
 
+## F. Live end-to-end testing
+
+| | Item | Status | Notes |
+|---|---|---|---|
+| F1 | **A live end-to-end run against a real ticket, created by emailing support@.** File a ticket by email, then walk it through the whole surface — read it, assign it, add an internal note, reply publicly, solve it, close it — and record what the API actually did at each step in a dated `experiments/*/RESULTS.md`. | open | **Blocked on Block 0b**: ADR-015 removed the API-token path from the library, so nothing can reach Zendesk until OAuth exists. Not blocked on 0c, which is deliberately offline. |
+| F2 | **An email-originated ticket is the right fixture *and* the sharpest one.** Its first comment is public, and `comment.public` has no fixed default — it **inherits from the ticket's first comment** (invariant 13, C4). So on this fixture every comment defaults to **public** unless forced otherwise, which is exactly the trap `add_internal_note` forcing `public=false` exists to close. A fixture that defaults to safe would not test the control. | open | Pairs with F1. The requester is whoever sent the email, so a public reply emails **that** account — if it is a test account, the blast radius of the whole exercise is one inbox we control. |
+| F3 | **Register the test tickets in `CSA_ZD_ALLOWLIST_WRITE` by hand.** A ticket created by email is not tool-created, so it carries no `csa-zendesk-created` tag and provenance scope does not cover it. This is the operator-granted half of the allowlist doing its job, and F1 is its first real exercise. | open | Also the first live check that the read/write asymmetry holds: `READ=*` so triage sees the queue, `WRITE=` the test ids only. |
+| F4 | **Adopt the fleet's demo-as-end-to-end-test pattern** rather than inventing a Zendesk-specific harness. `csa-google-workspace` proved it once — one artifact that is simultaneously the demo, the release smoke test, the tool-description quality check and the feedback collection point; 3 live runs found 4 real bugs, one of which had survived 660 green unit tests. | open | CINO tracks this as needing a **second** adopter before it becomes fleet standard, and says adopting it unblocks the `mcp-server-development` skill. `csa-zendesk` is the natural one: see [`research/mcp-servers/DEMO-AS-END-TO-END-TEST.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/research/mcp-servers/DEMO-AS-END-TO-END-TEST.md). |
+| F5 | **The e2e run is how each enablement rung is earned.** E1 read → E2 write → E3 admin read → E4 admin write → E5 reach. A rung is earned by the previous one working against a real ticket, not by elapsed time. | open | Makes the ladder in the whole-project design testable rather than declarative. |
+
+---
+
 ## D. Repo and process
 
 | | Item | Status | Notes |
