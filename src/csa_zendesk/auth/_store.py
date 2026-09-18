@@ -28,9 +28,18 @@ class Tokens:
     access_token: str
     refresh_token: str
     expires_at: float
+    #: Space-separated scope names exactly as Zendesk granted them at issuance
+    #: (login or refresh). NOT a credential - a list of public scope names - so
+    #: it is fine to persist and fine to show in `repr`. It exists so refresh
+    #: can detect a registered-scope ceiling narrowing since issuance: without a
+    #: stored baseline of what this credential actually carried, that check is
+    #: only checkable against what the caller happens to be requesting *this
+    #: time*, which is empty by default - i.e. no check at all. See Task 5's
+    #: fix report for the incident this closes.
+    scope: str
 
     def __repr__(self) -> str:  # never let a credential reach a log line
-        return f"Tokens(expires_at={self.expires_at!r}, credentials=<redacted>)"
+        return f"Tokens(expires_at={self.expires_at!r}, scope={self.scope!r}, credentials=<redacted>)"
 
 
 def token_path() -> pathlib.Path:
@@ -68,6 +77,7 @@ def write(tokens: Tokens) -> None:
                     "access_token": tokens.access_token,
                     "refresh_token": tokens.refresh_token,
                     "expires_at": tokens.expires_at,
+                    "scope": tokens.scope,
                 },
                 fh,
             )
@@ -96,10 +106,16 @@ def read() -> Tokens | None:
         )
     try:
         raw = json.loads(path.read_text())
+        # `raw["scope"]` (not `raw.get("scope", "")`): a file written before scope
+        # was tracked is refused via the same KeyError path as any other missing
+        # field, rather than silently treated as "no scope" - an empty grant is
+        # exactly the value that would make refresh's scope-narrowing check
+        # vacuous again, which is the defect this field exists to close.
         return Tokens(
             access_token=raw["access_token"],
             refresh_token=raw["refresh_token"],
             expires_at=float(raw["expires_at"]),
+            scope=raw["scope"],
         )
     except (ValueError, KeyError, TypeError) as e:
         raise TokenFileError(

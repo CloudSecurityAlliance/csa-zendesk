@@ -76,28 +76,41 @@ def _post(subdomain: str, body: dict[str, str], transport: httpx.BaseTransport |
     return dict(response.json())
 
 
-def _to_tokens(payload: dict[str, object], requested: Sequence[str]) -> Tokens:
+def _to_tokens(payload: dict[str, object], baseline: Sequence[str]) -> Tokens:
     """Build `Tokens` from a token-endpoint response, after verifying scopes.
 
-    Compares requested scopes against granted scopes rather than trusting a
-    200: per API-SURFACE §7, Zendesk issues a token for an unrecognised scope
-    name instead of refusing the grant, so a typo produces a credential that
+    Compares `baseline` against granted scopes rather than trusting a 200: per
+    API-SURFACE §7, Zendesk issues a token for an unrecognised scope name
+    instead of refusing the grant, so a typo produces a credential that
     authenticates but authorizes nothing - the resulting 403 arrives later, on
     an unrelated call, far from this exchange. Caught here instead.
+
+    `baseline` is a verification floor, not necessarily "what was just
+    requested on the wire": `exchange_code` passes the scopes it requested at
+    login (the typo case above); `refresh` passes the scopes the credential
+    already carried before this call, so a registered-scope ceiling narrowing
+    since issuance is caught even though a refresh's own request may ask for
+    nothing in particular (see `refresh`'s docstring). Either way the granted
+    string on the response - not `baseline` - is what gets persisted on
+    `Tokens.scope`, so it always reflects reality rather than an intent.
     """
-    granted = set(str(payload.get("scope", "")).split())
-    missing = sorted(set(requested) - granted)
+    granted_str = str(payload.get("scope", ""))
+    granted = set(granted_str.split())
+    missing = sorted(set(baseline) - granted)
     if missing:
         raise ScopeError(
-            f"Zendesk granted {sorted(granted)} but not {missing}. A scope name Zendesk "
-            f"does not recognise is silently dropped rather than refused, so check "
-            f"{missing} against the client's registered scopes before retrying - the "
-            f"token above will otherwise look valid and 403 on every call that needs it."
+            f"Zendesk granted {sorted(granted)} but not {missing}. Either a scope "
+            f"name Zendesk does not recognise was silently dropped instead of "
+            f"refused, or - on a refresh - the client's registered scope ceiling "
+            f"narrowed since this credential was issued and it no longer carries "
+            f"{missing}. Either way this token will 403 on every call that needs "
+            f"{missing}, far from this cause, unless it's reconciled now."
         )
     return Tokens(
         access_token=str(payload["access_token"]),
         refresh_token=str(payload["refresh_token"]),
         expires_at=time.time() + float(str(payload["expires_in"])),
+        scope=granted_str,
     )
 
 
@@ -171,6 +184,15 @@ def refresh(
     missing one is filled in from the current `tokens` before that call. Losing
     a rotated refresh token because it was overwritten with an empty value
     would force a full re-login for no reason.
+
+    `_to_tokens`'s scope check runs against `tokens.scope` - what this
+    credential already carried - not against `requested_scopes`. Those are
+    different claims: `requested_scopes` is empty by default (see above), and
+    an empty baseline can never fail a subset check against anything, which
+    would make the check permanently vacuous on the default path - exactly the
+    defect this field exists to close. A registered-scope ceiling narrowed
+    since issuance must still be caught on refresh even when nothing in
+    particular was requested this time.
     """
     body: dict[str, str] = {
         "grant_type": "refresh_token",
@@ -181,7 +203,7 @@ def refresh(
         body["scope"] = " ".join(requested_scopes)
     payload = _post(subdomain, body, transport)
     payload.setdefault("refresh_token", tokens.refresh_token)
-    fresh = _to_tokens(payload, requested_scopes)
+    fresh = _to_tokens(payload, tokens.scope.split())
     _store.write(fresh)  # not persisting a refresh means every process refreshes on every start
     return fresh
 
