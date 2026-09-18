@@ -216,6 +216,39 @@ honestly advertise both a routine field edit and an irreversible email.
 Its gate is therefore **a function of its kwargs**: `ticket.write`, plus `ticket.solve` when
 `status == "solved"`. All required capabilities are checked before anything is written.
 
+> **Correction (2026-09-18, [ADR-016](../../../DECISIONS-ADR/ADR-016.md), Block 0c Task 6 final
+> review, [`analysis/SLICE-FINDINGS.md`](../../../analysis/SLICE-FINDINGS.md)).** This document
+> calls itself "the authoritative design" in its opening paragraph, and two things above are now
+> wrong rather than merely superseded.
+>
+> **`update_ticket`'s composite capability is exactly what ADR-016 forbids.** The subsection above
+> and the tool-surface table's `ticket.write` (+`ticket.note` with a comment, +`ticket.solve` when
+> solving) describe one tool spanning several impact buckets, gated by a function of its kwargs.
+> ADR-016 decided the opposite after a validation slice falsified the composite assumption before
+> any of the 822-operation derivation's code existed: **a tool is `(operation × constrained
+> arguments)`**, tools are atomic, and there are no composite tools — `update_ticket` is now the
+> field-edit-only tool, with `add_internal_note`, `reply_publicly`, `solve_ticket`, and `close_ticket`
+> as separate, narrower tools over the same `PUT`, each refusing the body keys that would change its
+> bucket. `policy.py`'s callable `Gate` (built for exactly this composite) has no production user as
+> a result — tracked as **B22**.
+>
+> **`mark_ticket_as_spam` is gated on a capability this branch deleted.** `people.suspend` does not
+> exist in `policy.ALL_CAPABILITIES` — `analysis/scope-triage-exceptions.csv` refuses "Mark Ticket as
+> Spam and Suspend Requester" outright, in the `never` bucket, alongside `ticket.purge`,
+> `people.purge`, and `people.merge`. No tool named `mark_ticket_as_spam` exists in
+> `src/csa_zendesk/tools.py`. `test_the_refused_operations_have_no_capability_at_all`
+> (`tests/test_policy.py`) is the test that would fail if `people.suspend` reappeared.
+>
+> **The 54-tool table itself is superseded, not merely two rows of it.** ADR-016 replaces *grouping*
+> operations into tools with *splitting* them, which moves the tool count in the opposite direction
+> from what produced 54 here — see the §4 correction already appended to
+> [`docs/superpowers/specs/2026-09-17-csa-zendesk-whole-project-design.md`](2026-09-17-csa-zendesk-whole-project-design.md)
+> and **B28**. `scripts/check_spec.py` still reports this file's count as internally consistent
+> because it only counts the table's own rows and resolves ADR links; it has no way to know the
+> table's premise changed. Read this whole document as historical record of the pre-ADR-016 design,
+> not as current guidance for the tool surface — the whole-project design doc and ADR-016 are
+> authoritative for that now.
+
 ---
 
 ## 5. Cross-cutting behaviour

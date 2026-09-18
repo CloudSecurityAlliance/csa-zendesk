@@ -49,10 +49,6 @@ def test_the_default_profile_holds_only_reversible_capabilities():
         pol.TICKET_REPLY,
         pol.TICKET_SOLVE,
         pol.TICKET_CLOSE,
-        pol.TICKET_PURGE,
-        pol.PEOPLE_MERGE,
-        pol.PEOPLE_SUSPEND,
-        pol.PEOPLE_PURGE,
         pol.RAW_READ,
         pol.RAW_WRITE,
         pol.BULK,
@@ -60,8 +56,8 @@ def test_the_default_profile_holds_only_reversible_capabilities():
         assert irreversible not in default, irreversible
 
 
-def test_no_profile_grants_purge_close_merge_or_raw():
-    never = {pol.TICKET_CLOSE, pol.TICKET_PURGE, pol.PEOPLE_PURGE, pol.PEOPLE_MERGE, pol.RAW_READ, pol.RAW_WRITE}
+def test_no_profile_grants_close_or_raw():
+    never = {pol.TICKET_CLOSE, pol.TICKET_MERGE, pol.RAW_READ, pol.RAW_WRITE}
     for name, caps in pol.PROFILES.items():
         assert not (caps & never), f"profile {name!r} grants {sorted(caps & never)}"
 
@@ -152,6 +148,34 @@ def test_capability_constants_and_the_all_tuple_agree():
     # structurally exclude it and could never pass against a correct policy.py.
     consts = {v for k, v in vars(pol).items() if k.isupper() and isinstance(v, str)}
     assert consts == set(pol.ALL_CAPABILITIES)
+
+
+def test_reach_flagged_tools_and_reach_capable_tools_are_the_same_set():
+    # I1: reach enforcement hangs on _GATES, uncross-checked against TOOLS.
+    # `_GATES["reply_publicly"] = TICKET_WRITE` (a plausible typo when the ten
+    # missing gates land) would silently disarm the reach switch while
+    # ToolSpec(reach=True) and the CSV still say contacts-a-person - one
+    # hand-maintained list traded for another. This cross-checks the two
+    # hand-maintained facts against each other directly, independent of _GATES:
+    # every tool ToolSpec flags as reach must carry a capability this module
+    # has flagged reach-carrying, and vice versa.
+    reach_flagged = {n for n, t in pol.tools.TOOLS.items() if t.reach}
+    reach_capable = {n for n, t in pol.tools.TOOLS.items() if t.capability in pol.REACH_CAPABILITIES}
+    assert reach_flagged == reach_capable
+
+
+def test_gates_agree_with_tools_on_capability_wherever_both_declare_a_tool():
+    # I1's other half: a plain-string _GATES entry for a name that is also in
+    # TOOLS must name the SAME capability TOOLS does, so a _GATES typo (the
+    # right tool, the wrong string) cannot silently disarm capability or reach
+    # enforcement while the declarative TOOLS table still says the true thing.
+    # Skips callable gates - update_ticket's future kwargs-dependent gate is
+    # a *set* computed from the call, not a single capability to compare.
+    for name, gate in pol._GATES.items():
+        spec = pol.tools.TOOLS.get(name)
+        if spec is None or not isinstance(gate, str):
+            continue
+        assert gate == spec.capability, f"{name}: _GATES says {gate!r}, TOOLS says {spec.capability!r}"
 
 
 # --- additional coverage: branches not reached by the tests above ------------
@@ -377,3 +401,144 @@ def test_an_unpickled_policybackends_policy_property_is_also_a_typed_refusal():
     unpickled = pickle.loads(pickle.dumps(pb))
     with pytest.raises(exc.PolicyError, match="unpickled"):
         unpickled.policy  # noqa: B018
+
+
+def test_the_refused_operations_have_no_capability_at_all():
+    # analysis/scope-triage-exceptions.csv refuses purge, the two merges and
+    # mark_as_spam outright. They must not be grantable.
+    for gone in ("ticket.purge", "people.purge", "people.merge", "people.suspend"):
+        assert gone not in pol.ALL_CAPABILITIES
+
+
+def test_no_profile_grants_a_reach_capability():
+    # DEC-015: reach carries an operator switch SEPARATE from the capability
+    # profile. A profile that grants a reach capability makes the switch
+    # decorative. Fix wave I5: this used to hardcode TICKET_REPLY, so a second
+    # reach capability (ticket.merge, added in the same fix wave as C1) could
+    # have been granted by a profile with the suite still green. Iterating
+    # REACH_CAPABILITIES itself closes that.
+    for name, caps in pol.PROFILES.items():
+        for reach_cap in pol.REACH_CAPABILITIES:
+            assert reach_cap not in caps, f"profile {name!r} grants reach capability {reach_cap!r}"
+
+
+# --- carried requirement 3: PROFILES must only name real capabilities ---------
+
+
+def test_every_profile_only_grants_capabilities_that_exist():
+    # Profile entries are hand-written literal sets, and nothing previously
+    # asserted they only name capabilities ALL_CAPABILITIES actually declares. A
+    # typo would grant a capability no gate requires and no test would notice -
+    # which undercuts the reason profiles exist: "nobody composes a capability
+    # list correctly under time pressure."
+    all_caps = set(pol.ALL_CAPABILITIES)
+    for name, caps in pol.PROFILES.items():
+        assert caps <= all_caps, f"profile {name!r} grants unknown capabilities: {caps - all_caps}"
+
+
+# --- carried requirement 2: REACH_CAPABILITIES must be CONSUMED by _dispatch --
+
+
+def test_reach_is_derived_from_the_calls_required_capabilities_not_hand_listed(monkeypatch):
+    # Proof this is derived rather than hand-listed: the fake method's NAME
+    # ("fake_reply") appears nowhere in policy.py and is not in tools.TOOLS. The
+    # only reason this call is stopped is that its gate's required capability
+    # (TICKET_REPLY) intersects REACH_CAPABILITIES - exactly the mechanism the
+    # carried requirement demands instead of a second, driftable list of names.
+    monkeypatch.delenv("CSA_ZD_ALLOW_REACH", raising=False)
+    monkeypatch.setitem(pol._GATES, "fake_reply", pol.TICKET_REPLY)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_reply", pol._make_gated("fake_reply"), raising=False)
+
+    class BackendWithFakeReply(FakeBackend):
+        def fake_reply(self, **kwargs: object) -> dict:
+            return {"ok": True}  # pragma: no cover - refused before delegation
+
+    pb = pol.PolicyBackend(BackendWithFakeReply(), pol.Policy(frozenset({pol.TICKET_REPLY})))
+    with pytest.raises(exc.PolicyError, match="CSA_ZD_ALLOW_REACH"):
+        pb.fake_reply(ticket_id=1)
+
+
+def test_reach_derivation_lets_the_call_through_once_the_switch_is_on(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "true")
+    monkeypatch.setitem(pol._GATES, "fake_reply_2", pol.TICKET_REPLY)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_reply_2", pol._make_gated("fake_reply_2"), raising=False)
+
+    class BackendWithFakeReply(FakeBackend):
+        def fake_reply_2(self, **kwargs: object) -> dict:
+            return {"ok": True, **kwargs}
+
+    pb = pol.PolicyBackend(BackendWithFakeReply(), pol.Policy(frozenset({pol.TICKET_REPLY})))
+    assert pb.fake_reply_2(ticket_id=1) == {"ok": True, "ticket_id": 1}
+
+
+# --- scope wired end-to-end through _dispatch, not just unit-tested directly --
+
+
+def test_get_ticket_through_the_real_dispatch_is_refused_outside_the_read_allowlist(monkeypatch):
+    # test_tools.py proves policy.assert_subject_permitted() refuses in
+    # isolation. This proves _dispatch actually calls it for a real,
+    # materialised, gated method - not merely that the standalone function
+    # works when called directly.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.get_ticket(ticket_id=99999)
+
+
+def test_get_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.get_ticket(ticket_id=44821) == {"ticket": {"id": 44821}}
+
+
+def test_dispatch_fails_closed_when_the_read_allowlist_is_entirely_unset(monkeypatch):
+    # Fix round 1, finding 1: tests/conftest.py's autouse fixture defaults both
+    # allowlists to "*" for every OTHER test in this suite, so the fail-closed-
+    # on-unset behaviour was exercised at module level only (test_scope.py,
+    # against a synthetic variable name) and never through a REAL dispatched
+    # call. This is the one test that opts out of the default, to prove the
+    # thing that actually matters: an allowlist nobody configured at all - not
+    # a narrow one, not "*" - reaches _dispatch through a genuine
+    # PolicyBackend.get_ticket call and refuses, naming the variable an
+    # operator would set. Without this, a future "fix" that made
+    # assert_subject_permitted silently pass on an unset variable would keep
+    # the suite green while inverting the default from nothing-permitted to
+    # everything-permitted.
+    monkeypatch.delenv("CSA_ZD_ALLOWLIST_READ", raising=False)
+    monkeypatch.delenv("CSA_ZD_ALLOWLIST_WRITE", raising=False)
+    pb = wrapped()
+    with pytest.raises(exc.PolicyError, match="CSA_ZD_ALLOWLIST_READ"):
+        pb.get_ticket(ticket_id=1)
+
+
+# --- fix round 1, finding 2: the tool's own constraint enforced AT THE SEAM ----
+
+
+def test_a_tools_check_is_enforced_by_dispatch_itself_not_only_unit_tested(monkeypatch):
+    # ADR-016 / this block's central claim: "the constraint is enforced at the
+    # seam, not in the tool... PolicyBackend refuses the call." test_tools.py
+    # proves ToolSpec.check functions reject the right kwargs when called
+    # directly - that is a unit test of a function, not proof that _dispatch
+    # is the thing doing the refusing. This installs a fake tool with a real
+    # constraint, a fake gate, and a fake materialised method (the same
+    # technique the capability- and reach-wiring tests above use) and proves
+    # _dispatch calls spec.check(kwargs) itself: the malformed call is
+    # refused, and the well-formed one is not.
+    def reject_priority(kw: dict) -> None:
+        if "priority" in kw:
+            raise exc.PolicyError("this fake tool does not accept priority")
+
+    monkeypatch.setitem(
+        pol.tools.TOOLS, "fake_constrained", pol.tools.ToolSpec(capability=pol.TICKET_WRITE, check=reject_priority)
+    )
+    monkeypatch.setitem(pol._GATES, "fake_constrained", pol.TICKET_WRITE)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_constrained", pol._make_gated("fake_constrained"), raising=False)
+
+    class BackendWithFakeConstrained(FakeBackend):
+        def fake_constrained(self, **kwargs: object) -> dict:
+            return {"ok": True, **kwargs}
+
+    pb = pol.PolicyBackend(BackendWithFakeConstrained(), pol.Policy(frozenset({pol.TICKET_WRITE})))
+    assert pb.fake_constrained(subject="x") == {"ok": True, "subject": "x"}
+    with pytest.raises(exc.PolicyError, match="priority"):
+        pb.fake_constrained(priority="high")

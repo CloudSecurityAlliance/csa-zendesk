@@ -58,7 +58,7 @@ def test_nothing_writes_to_stdout_when_any_module_is_imported_fresh():
     #
     # `importlib.reload(csa_zendesk)` re-executes only __init__.py - every module
     # it imports is already cached in sys.modules and is NOT re-executed, so a
-    # print() at module scope in any of the other seven modules left an earlier
+    # print() at module scope in any of the other eight modules left an earlier
     # version of this test green even though a real cold start (the only import a
     # freshly launched server ever does) would have printed it. Genuinely removing
     # every module of this package from sys.modules before each import is what
@@ -86,7 +86,7 @@ def test_nothing_writes_to_stdout_when_any_module_is_imported_fresh():
     # number, but do not delete the assertion: without it, a module quietly
     # excluded from the loop below would leave this guard passing while
     # covering less than it claims to.
-    assert len(module_names) == 8, f"expected 8 modules, found {module_names}"
+    assert len(module_names) == 10, f"expected 10 modules, found {module_names}"
 
     for name in module_names:
         for cached in [n for n in sys.modules if n == "csa_zendesk" or n.startswith("csa_zendesk.")]:

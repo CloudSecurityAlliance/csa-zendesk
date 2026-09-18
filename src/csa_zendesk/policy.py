@@ -24,10 +24,12 @@ is the complete permitted list rather than a delta.
 from __future__ import annotations
 
 import logging
+import os
 import weakref
 from collections.abc import Callable
 from typing import Any
 
+from . import _scope, tools
 from . import exceptions as exc
 from .backend import Backend
 
@@ -39,16 +41,26 @@ TICKET_NOTE = "ticket.note"  # internal note; never leaves the org
 TICKET_WRITE = "ticket.write"  # fields, assignee, tags; audited
 TICKET_REPLY = "ticket.reply"  # PUBLIC comment; emailed, irreversible
 TICKET_SOLVE = "ticket.solve"  # on-ramp to terminal: automation closes solved
-TICKET_CLOSE = "ticket.close"  # terminal immediately; also covers merge
+TICKET_CLOSE = "ticket.close"  # terminal immediately
+# Deliberately its own capability, not folded into TICKET_CLOSE: merge closes the
+# source ticket(s) (irreversible, like close_ticket) but the endpoint also accepts
+# `source_comment_is_public`/`target_comment_is_public` (fix wave C1) - a body a
+# denylist can forbid TODAY without ever making that forbidding a proof for
+# tomorrow. Sharing TICKET_CLOSE with close_ticket would force one of two wrong
+# outcomes: close_ticket wrongly flagged reach (it can carry no comment at all),
+# or merge_tickets wrongly NOT flagged reach - either way ADR-016's "authority
+# beats atomicity" argument (grant close without granting merge's reach) breaks,
+# and the I1 cross-check below could never hold for both tools honestly at once.
+TICKET_MERGE = "ticket.merge"  # closes the source ticket(s); reach (fix wave C1)
 TICKET_DELETE = "ticket.delete"  # soft delete; recoverable with effort
-TICKET_PURGE = "ticket.purge"  # "Delete Ticket Permanently"
+# ticket.purge, people.purge, people.merge and people.suspend used to live here.
+# analysis/scope-triage-exceptions.csv refuses those operations outright, so no
+# tool backs them and a capability for them would be a promise the code does not
+# keep. Re-adding one means re-admitting the operation first, deliberately.
 
 PEOPLE_READ = "people.read"
 PEOPLE_WRITE = "people.write"
-PEOPLE_SUSPEND = "people.suspend"  # mark-as-spam suspends the REQUESTER
-PEOPLE_MERGE = "people.merge"  # irreversible identity merge
 PEOPLE_DELETE = "people.delete"
-PEOPLE_PURGE = "people.purge"  # "Permanently Delete User"
 
 HC_READ = "hc.read"
 HC_WRITE = "hc.write"
@@ -76,14 +88,11 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     TICKET_REPLY,
     TICKET_SOLVE,
     TICKET_CLOSE,
+    TICKET_MERGE,
     TICKET_DELETE,
-    TICKET_PURGE,
     PEOPLE_READ,
     PEOPLE_WRITE,
-    PEOPLE_SUSPEND,
-    PEOPLE_MERGE,
     PEOPLE_DELETE,
-    PEOPLE_PURGE,
     HC_READ,
     HC_WRITE,
     HC_DELETE,
@@ -100,9 +109,9 @@ ALL_CAPABILITIES: tuple[str, ...] = (
 # Named profiles, because nobody composes a capability list correctly under time
 # pressure and everybody can pick a word.
 #
-# `default` is everything that can be undone. Reply, solve, suspend, merge, delete,
-# purge, bulk and the escape hatch are all opt-in - and close, purge, merge and raw
-# are granted by NO profile, so enabling them is a deliberate act.
+# `default` is everything that can be undone. Reply, solve, delete, bulk and the
+# escape hatch are all opt-in - and close and raw are granted by NO profile, so
+# enabling them is a deliberate act.
 PROFILES: dict[str, frozenset[str]] = {
     "readonly": frozenset({TICKET_READ, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}),
     "default": frozenset({TICKET_READ, TICKET_NOTE, TICKET_WRITE, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}),
@@ -111,7 +120,6 @@ PROFILES: dict[str, frozenset[str]] = {
             TICKET_READ,
             TICKET_NOTE,
             TICKET_WRITE,
-            TICKET_REPLY,
             TICKET_SOLVE,
             HC_READ,
             PEOPLE_READ,
@@ -125,28 +133,82 @@ PROFILES: dict[str, frozenset[str]] = {
     ),
     "editor": frozenset({HC_READ, HC_WRITE, TICKET_READ, PEOPLE_READ, ADMIN_READ}),
     "analyst": frozenset({TICKET_READ, PEOPLE_READ, HC_READ, REPORTING_READ, REPORTING_EXPORT, ADMIN_READ}),
-    # `full` is everything EXCEPT what nobody should get by naming a word.
-    #
-    # The excluded set is ordered by REACH first and destructiveness second
-    # (DEC-015). `ticket.reply` is excluded although it destroys nothing,
-    # because it is the one capability whose effect leaves the building:
-    # ADR-003 exists because "a public reply cannot be unsent". `people.suspend`
-    # is excluded for the same reason - mark-as-spam suspends a real requester's
-    # account. An earlier version of this set omitted both while excluding
-    # `ticket.close`, which reaches nobody; that ordered the list by internal
-    # destructiveness and got the most important case backwards.
-    "full": frozenset(ALL_CAPABILITIES)
-    - {
-        TICKET_REPLY,
-        TICKET_CLOSE,
-        TICKET_PURGE,
-        PEOPLE_SUSPEND,
-        PEOPLE_PURGE,
-        PEOPLE_MERGE,
-        RAW_READ,
-        RAW_WRITE,
-    },
+    # `full` is every capability that exists, minus the ones no word should grant.
+    # Ordered by REACH first and destructiveness second (DEC-015): ticket.reply is
+    # excluded although it destroys nothing, because its effect leaves the building.
+    # ticket.merge joins ticket.close here for the same reach reason as reply, not
+    # the destructiveness one (fix wave C1).
+    # Reach additionally requires CSA_ZD_ALLOW_REACH - a profile cannot grant it.
+    "full": frozenset(ALL_CAPABILITIES) - {TICKET_REPLY, TICKET_CLOSE, TICKET_MERGE, RAW_READ, RAW_WRITE},
 }
+
+#: Capabilities whose effect leaves the building and touches a person (DEC-015).
+#: These need the operator switch IN ADDITION to the capability - holding
+#: `ticket.reply` is necessary and not sufficient. `ticket.merge` joined this set
+#: in the fix wave (I1/C1): merging accepts `source_comment_is_public` /
+#: `target_comment_is_public`, the same reach mechanism as a public reply.
+REACH_CAPABILITIES: frozenset[str] = frozenset({TICKET_REPLY, TICKET_MERGE})
+
+
+def reach_permitted() -> bool:
+    """Whether outward-facing calls are allowed at all. Off unless explicitly on."""
+    return os.environ.get("CSA_ZD_ALLOW_REACH", "").strip().lower() == "true"
+
+
+def assert_reach_permitted(tool: str) -> None:
+    if not reach_permitted():
+        raise exc.PolicyError(
+            f"`{tool}` sends something to a person outside this organisation, and outward-facing "
+            f"calls are off. Set CSA_ZD_ALLOW_REACH=true to enable them. This is deliberately "
+            f"separate from the capability profile: a public reply cannot be unsent, so granting "
+            f"the capability is necessary and not sufficient."
+        )
+
+
+def assert_subject_permitted(tool: str, kwargs: dict[str, Any]) -> None:
+    """May this call act on the object it names - the scope control, ADR-016's
+    third axis alongside capability and reach.
+
+    `tools.TOOLS[tool].subject_var` names which allowlist governs the object
+    THIS call carries. **The check is on the target of the write, never on what
+    a prior search returned** - that is the property most worth getting right
+    in the whole design (see `_scope.py`'s module docstring): the normal
+    posture is `CSA_ZD_ALLOWLIST_READ=*` (triage must see the whole queue) with
+    `CSA_ZD_ALLOWLIST_WRITE` a handful of ids, and a leak from read scope into
+    write scope would turn "I found it" into "I may change it".
+
+    A no-op when `tool` is not in the tool table, or the tool names no subject
+    allowlist at all (a search, or ticket creation - there is no existing
+    ticket yet to scope against) - there is nothing here to check.
+    """
+    spec = tools.TOOLS.get(tool)
+    if spec is None or spec.subject_var is None:
+        return
+    if "ticket_id" not in kwargs:
+        raise exc.PolicyError(
+            f"`{tool}` is scoped by {spec.subject_var} but this call carries no `ticket_id` to "
+            f"check it against. This is a programming error in csa-zendesk, not a configuration "
+            f"problem."
+        )
+    # Carried forward from review: ids arrive as `int` from callers and
+    # backends alike, but `_scope.permits` compares against a `frozenset[str]`
+    # - an unconverted `int` id is never a member of it, so every allowlisted
+    # write would be refused while looking correctly configured (fail closed,
+    # but for the wrong reason). Convert explicitly, at this call site.
+    subject = str(kwargs["ticket_id"])
+    listing = _scope.read_listing(spec.subject_var)
+    if not _scope.permits(listing, subject):
+        # "the object" rather than "the ticket": this message fires for every
+        # subject_var, including CSA_ZD_ALLOWLIST_ADMIN (update_trigger's scope is
+        # a trigger, not a ticket - fix wave Minor). The kwarg is still literally
+        # `ticket_id` regardless of domain (TODO C8, deferred), so the wording here
+        # is corrected without pretending the key itself is generalised too.
+        raise exc.PolicyError(
+            f"`{tool}` may not act on the object {subject}: it is not listed in {spec.subject_var}. "
+            f"Add it there, or set {spec.subject_var}=* to permit every object - deliberately, "
+            f"since this check is on THIS call's target, never on what a prior search returned."
+        )
+
 
 #: A gate is a constant capability, `None` for an ungated read, or a function of
 #: the call's kwargs returning every capability that call requires. The third form
@@ -282,14 +344,29 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     capability, never the arguments - they may carry ticket content) or
     delegates to the real backend method.
 
+    The four controls fire in this order - capability, then the tool's own
+    constraint, then scope, then reach - so the most specific true refusal
+    wins: a caller missing the capability learns that first regardless of
+    anything else; one who holds the capability but sent a malformed call
+    (a body key that would change what the call does) learns that next,
+    before we ever reason about which object it targets; one who clears both
+    but targets an out-of-allowlist object learns THAT next; and only a
+    caller who clears all three meets the outward-facing reach switch.
+
     The capability check happens before the `hasattr` check below on purpose:
     a caller without the capability gets that refusal regardless of whether
     the backend actually implements the method, since the capability refusal
     is the one that matters for authority, not implementation completeness.
+    The constraint, scope and reach checks are asserted before that same
+    `hasattr` check for the identical reason - they are refusals about
+    authority (or, for the constraint, about what the call is even asking
+    for), not about whether the wrapped backend happens to implement the
+    method.
     """
     backend, policy = _lookup(pb)
     gate = _GATES[name]
-    absent = policy.missing(_required(name, gate, kwargs))
+    required = _required(name, gate, kwargs)
+    absent = policy.missing(required)
     if absent:
         log.warning("refused %s: missing %s", name, ", ".join(sorted(absent)))
         raise exc.PolicyError(
@@ -297,6 +374,23 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
             f"not grant. The capability must be granted in the server's own "
             f"configuration; it cannot be changed from here."
         )
+    # ADR-016 / this block's central claim: "the constraint is enforced at the
+    # seam, not in the tool." A ToolSpec.check that merely EXISTS, unreferenced
+    # from here, would be a unit-tested function, not a control - PolicyBackend
+    # is the thing that must refuse the call. `spec` is None for any dispatched
+    # method the tool table says nothing about (there is no obligation for
+    # every Backend method to be a tool), which is a no-op, not a refusal.
+    spec = tools.TOOLS.get(name)
+    if spec is not None:
+        spec.check(kwargs)
+    assert_subject_permitted(name, kwargs)
+    # REACH_CAPABILITIES is CONSUMED here, not hand-listed: whichever
+    # capabilities this specific call required (a callable gate's kwargs-
+    # dependent set, not a static per-tool label) are intersected against it,
+    # so reach stays derived from the capability model instead of a second
+    # list of tool names that can drift from the first.
+    if required & REACH_CAPABILITIES:
+        assert_reach_permitted(name)
     if not hasattr(backend, name):
         # Independent of _GATES drift (which the cross-check in test_policy.py
         # already forbids): _GATES is ours, but the wrapped instance is an
