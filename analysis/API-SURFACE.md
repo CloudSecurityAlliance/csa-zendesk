@@ -514,6 +514,38 @@ commonly resolves to `::1` first, which never reaches a listener bound to IPv4 `
 browser-trusted secure contexts, so nothing is lost by taking the literal. The two forms are **not**
 interchangeable to a string-matching authorization server: send byte-for-byte what was registered.
 
+### 7.2 Overlapping scopes are rejected at client registration
+
+Operator-observed, 2026-09-18, registering the `csa-zendesk` client: Admin Center **rejects a scope
+list that contains both a broad scope and a narrower member of it** — e.g. `read` together with
+`tickets:read`. This is not in the spec text, and it invalidated an earlier recommendation here to
+request `read` alongside per-family scopes. Pick one level and stay at it:
+
+- **Broad:** `read` plus the specific writes (`tickets:write`, …) — fewer strings to typo, but grants
+  read on every family Zendesk has, including ones deliberately out of scope for 1.0.0.
+- **Granular:** `tickets:read tickets:write ticket_views:read …` — the set the server actually needs,
+  and the one that makes the token itself the boundary rather than the allowlist.
+
+Granular is the better fit for this project, because **the token's scope is the only control an
+attacker cannot reconfigure** — the toolset, capability profile and allowlist are all local settings
+(`DECISIONS-ADR/ADR-012.md`). Note this interacts with the §7 typo trap: a granular list is longer,
+so it is more likely to contain the unrecognised scope name that silently yields a token that 403s.
+Compare requested against granted on every token, without exception.
+
+### 7.3 Every client gets a secret, including a public one
+
+`secret` is documented as *"Generated automatically on creation and returned in full only at that
+time"* (line 30868), so **being handed a secret says nothing about the client's type**. The type is
+the separate `kind` field — `"public"` or `"confidential"` (line 30850).
+
+Unresolved, and it decides whether `DECISIONS-ADR/ADR-009.md`'s "public client, no secret" survives
+contact: the spec's **authorization-code example omits `client_secret` and sends `code_verifier`**
+(line 22805), while its **refresh-token example sends `client_secret`** (line 22827). If refresh
+genuinely requires the secret, this client is confidential in practice and ADR-009 needs a dated
+correction. Probe it at first refresh rather than assuming either way — and until then, retain the
+secret at `0600` rather than discarding it, since it is displayed exactly once and recovering it
+means rotating the client.
+
 ---
 
 ## 8. Re-checking this document
