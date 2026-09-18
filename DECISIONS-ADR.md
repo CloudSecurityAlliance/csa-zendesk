@@ -18,3 +18,4 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 | [ADR-009](DECISIONS-ADR/ADR-009.md) | Public OAuth client with PKCE, and exactly one token file | Active — token clause superseded by ADR-015 | 2026-09-08 |
 | [ADR-010](DECISIONS-ADR/ADR-010.md) | Capabilities are derived from a classification of every operation | Active | 2026-09-08 |
 | [ADR-015](DECISIONS-ADR/ADR-015.md) | OAuth only — API token support is removed, and no further tokens are minted | Active | 2026-09-17 |
+| [ADR-016](DECISIONS-ADR/ADR-016.md) | Tools are atomic and bucket-pure; workflow lives in plugins | Active | 2026-09-17 |

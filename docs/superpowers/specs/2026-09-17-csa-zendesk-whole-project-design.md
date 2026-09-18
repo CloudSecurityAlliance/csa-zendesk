@@ -299,10 +299,16 @@ Every operation is classified on DEC-015's four axes:
 | **Reach** | does the effect leave our boundary and touch a person? | internal · contacts-a-person |
 | **Authority** | what must the caller hold? | the capability |
 
-Tool boundaries are then drawn so that **every operation inside a tool shares all four values**. This
-is a *constraint on where boundaries may fall*, not the grouping rule: within a bucket, operations
-group by task and argument shape, so `get_ticket`, `search_tickets` and `list_comments` remain
-separate tools despite all being ticket-reads.
+Tool boundaries are then drawn so that **every operation inside a tool shares all four values**.
+
+> **Correction (2026-09-17, [ADR-016](../../../DECISIONS-ADR/ADR-016.md)).** This section originally
+> continued: *"within a bucket, operations group by task and argument shape"* — assuming tools are
+> built by **grouping** operations. A validation slice falsified that before any code was written.
+> `PUT /tickets/{id}` is five impact levels in one operation, so one operation must back **several**
+> tools, each narrower than it, and **the constraint on the request body is what makes a tool
+> bucket-pure**. A tool is `(operation × constrained arguments)`. In the ticket-write path there are
+> therefore *more* tools than operations, not fewer. Tools are atomic; sequencing lives in a
+> workflow plugin.
 
 Four consequences, and they are the reason to adopt it:
 
@@ -358,6 +364,7 @@ different gates.
 |---|---|---|
 | **B0** | Foundations | [PR #12](https://github.com/CloudSecurityAlliance/csa-zendesk/pull/12) — green, `MERGEABLE`, `CLEAN`, 32 commits. `main` carries no code until it lands |
 | **B0b** | OAuth public client, PKCE, one token file, `whoami` | **The critical path, with a hard deadline of 2027-04-30.** `ADR-015` removed the API token fallback and declined to stockpile tokens before the 2026-10-27 minting cutoff, so this is the only route to a live call. `ADR-009`; TODO **B11** owes the plan |
+| **B0d** | **Tool-surface validation slice** — eleven tools over eight operations against `FakeBackend` | **Resequenced 2026-09-17 to run before B0b.** [ADR-016](../../../DECISIONS-ADR/ADR-016.md) was produced by starting this slice and finding that `PUT /tickets/{id}` is five impact levels in one operation. The slice needs no network, no credentials and no OAuth, and it tests the design B1–B5 derive from — so it is cheaper before 0b than after. Plan: `plans/2026-09-17-block-0c-tool-slice.md` |
 | **B0c** | **Scoping triage and negative-space research** (§3, §3b) — every family bucketed now / later / never / blocked, plus the list of capabilities the web interface reaches and the API does not | One review, run together. Depends on [#17](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/17) (probe the official server) and closes **A1**. Can run in parallel with B0b |
 | **B1** | **Classification of the admitted surface** on the four axes | The keystone; everything below derives from it. Largely mechanical — the OpenAPI specs and `API-SURFACE.md` probes carry most of the input |
 | **B2** | Generate the capability set **and** the tool list from B1 | `ADR-010` mandates the first; §3 adds the second |
