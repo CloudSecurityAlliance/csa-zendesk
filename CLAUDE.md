@@ -78,12 +78,19 @@ share their architecture.
    server already, and the survey settled it.
 5. **Six names are fixed by the field** and must not be renamed: `get_ticket`, `create_ticket`,
    `update_ticket`, `get_user`, `get_organization`, `get_ticket_comments`.
-6. **`update_ticket` is deliberately broad — but it cannot go public.** The web UI stages every
-   field edit, the comment and the status change and applies them in one `PUT`, and one tool
-   matching that is faithful to both. The exception is outward-facing text: `update_ticket`'s
-   comment is **always internal**, and `add_public_reply` is the only path to a public comment
-   (ADR-003). Annotations are per-tool, so one tool cannot honestly advertise both a routine
-   field edit and an irreversible email.
+6. **A tool is `(operation × constrained arguments)`, and `update_ticket` is NOT broad**
+   ([ADR-016](DECISIONS-ADR/ADR-016.md)). `PUT /tickets/{id}` is five different impact levels
+   depending on its body — field edit, internal note, public reply, solve, close — so one tool
+   matching the operation cannot be gated or annotated honestly. Several narrow tools back that
+   one operation instead, each refusing the body keys that would change its bucket:
+   `update_ticket` refuses `comment` and `status`; `add_internal_note` sends a comment with
+   `public` forced false; `reply_publicly` forces it true; `solve_ticket` sets only the status.
+   **The constraint on the body is what makes the tool bucket-pure.** Annotations are per-tool,
+   so one tool cannot honestly advertise both a routine field edit and an irreversible email —
+   which is why this is enforced rather than documented.
+   **Tools are atomic and there are no composites.** Sequencing belongs to a workflow plugin, not
+   to the server: required fields are tenant-specific and the API already 422s naming what is
+   missing. The server states what is *true*; a plugin states what to *do*.
 7. **Authority is ordered by reversibility** (ADR-003): `ticket.read` < `ticket.note` <
    `ticket.write` < `ticket.reply` < `ticket.solve` < `ticket.close`. The default profile is
    everything that can be undone — read, note, write. Reply, solve and close are opt-in, and no

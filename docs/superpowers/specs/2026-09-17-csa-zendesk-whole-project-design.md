@@ -299,10 +299,16 @@ Every operation is classified on DEC-015's four axes:
 | **Reach** | does the effect leave our boundary and touch a person? | internal · contacts-a-person |
 | **Authority** | what must the caller hold? | the capability |
 
-Tool boundaries are then drawn so that **every operation inside a tool shares all four values**. This
-is a *constraint on where boundaries may fall*, not the grouping rule: within a bucket, operations
-group by task and argument shape, so `get_ticket`, `search_tickets` and `list_comments` remain
-separate tools despite all being ticket-reads.
+Tool boundaries are then drawn so that **every operation inside a tool shares all four values**.
+
+> **Correction (2026-09-17, [ADR-016](../../../DECISIONS-ADR/ADR-016.md)).** This section originally
+> continued: *"within a bucket, operations group by task and argument shape"* — assuming tools are
+> built by **grouping** operations. A validation slice falsified that before any code was written.
+> `PUT /tickets/{id}` is five impact levels in one operation, so one operation must back **several**
+> tools, each narrower than it, and **the constraint on the request body is what makes a tool
+> bucket-pure**. A tool is `(operation × constrained arguments)`. In the ticket-write path there are
+> therefore *more* tools than operations, not fewer. Tools are atomic; sequencing lives in a
+> workflow plugin.
 
 Four consequences, and they are the reason to adopt it:
 
