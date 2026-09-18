@@ -1,3 +1,4 @@
+<<<<<<< HEAD:WAITING-FOR/WAITING-FOR-002.md
 <<<<<<< HEAD
 # WAITING-FOR-002: Required status checks on `main`
 
@@ -52,6 +53,9 @@ merge button refuses. Branch protection has already been misread once in this re
 force-pushes and deletions.
 =======
 # WAITING-FOR-002: Zendesk stops issuing API tokens on 2026-10-27
+=======
+# WAITING-FOR-003: Zendesk stops issuing API tokens on 2026-10-27
+>>>>>>> 9bd2568 (docs: renumber the API-token deadline to WAITING-FOR-003):WAITING-FOR/WAITING-FOR-003.md
 
 **Status:** Open
 **Date identified:** 2026-09-17

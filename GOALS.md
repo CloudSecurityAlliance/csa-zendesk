@@ -25,7 +25,7 @@ comment, and irreversible operations are verified **by observation rather than b
 | Goal | Success metric |
 |---|---|
 | **Land Block 0** | [PR #12](https://github.com/CloudSecurityAlliance/csa-zendesk/pull/12) merged — the typed error hierarchy, pagination guard, HTTP client, `Backend` seam with an offline `FakeBackend`, fail-closed capability policy, and one operation (`get_ticket`) reaching through every layer |
-| **Block 0b: authentication** | Public OAuth client with PKCE and exactly one token file ([ADR-009](DECISIONS-ADR/ADR-009.md)). Nothing is callable against a real Zendesk until this lands — literally, since [ADR-015](DECISIONS-ADR/ADR-015.md) removed the API token path. **Hard deadline 2027-04-30**, when existing tokens stop working ([WAITING-FOR-002](WAITING-FOR/WAITING-FOR-002.md)) |
+| **Block 0b: authentication** | Public OAuth client with PKCE and exactly one token file ([ADR-009](DECISIONS-ADR/ADR-009.md)). Nothing is callable against a real Zendesk until this lands — literally, since [ADR-015](DECISIONS-ADR/ADR-015.md) removed the API token path. **Hard deadline 2027-04-30**, when existing tokens stop working ([WAITING-FOR-003](WAITING-FOR/WAITING-FOR-003.md)) |
 | **Capabilities derived, not hand-listed** | Every operation classified, and the capability set generated from that classification ([ADR-010](DECISIONS-ADR/ADR-010.md)). A hand-maintained gate table drifts from the surface it gates and tests itself against its own assumptions |
 | **The gate is proven by refusal** | For each capability, a test that the gate *refuses* — run one capability at a time against a hand-written expectation, not one derived from the gate table |
 
