@@ -29,6 +29,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from . import _scope, tools
 from . import exceptions as exc
 from .backend import Backend
 
@@ -146,6 +147,46 @@ def assert_reach_permitted(tool: str) -> None:
             f"calls are off. Set CSA_ZD_ALLOW_REACH=true to enable them. This is deliberately "
             f"separate from the capability profile: a public reply cannot be unsent, so granting "
             f"the capability is necessary and not sufficient."
+        )
+
+
+def assert_subject_permitted(tool: str, kwargs: dict[str, Any]) -> None:
+    """May this call act on the object it names - the scope control, ADR-016's
+    third axis alongside capability and reach.
+
+    `tools.TOOLS[tool].subject_var` names which allowlist governs the object
+    THIS call carries. **The check is on the target of the write, never on what
+    a prior search returned** - that is the property most worth getting right
+    in the whole design (see `_scope.py`'s module docstring): the normal
+    posture is `CSA_ZD_ALLOWLIST_READ=*` (triage must see the whole queue) with
+    `CSA_ZD_ALLOWLIST_WRITE` a handful of ids, and a leak from read scope into
+    write scope would turn "I found it" into "I may change it".
+
+    A no-op when `tool` is not in the tool table, or the tool names no subject
+    allowlist at all (a search, or ticket creation - there is no existing
+    ticket yet to scope against) - there is nothing here to check.
+    """
+    spec = tools.TOOLS.get(tool)
+    if spec is None or spec.subject_var is None:
+        return
+    if "ticket_id" not in kwargs:
+        raise exc.PolicyError(
+            f"`{tool}` is scoped by {spec.subject_var} but this call carries no `ticket_id` to "
+            f"check it against. This is a programming error in csa-zendesk, not a configuration "
+            f"problem."
+        )
+    # Carried forward from review: ids arrive as `int` from callers and
+    # backends alike, but `_scope.permits` compares against a `frozenset[str]`
+    # - an unconverted `int` id is never a member of it, so every allowlisted
+    # write would be refused while looking correctly configured (fail closed,
+    # but for the wrong reason). Convert explicitly, at this call site.
+    subject = str(kwargs["ticket_id"])
+    listing = _scope.read_listing(spec.subject_var)
+    if not _scope.permits(listing, subject):
+        raise exc.PolicyError(
+            f"`{tool}` may not act on ticket {subject}: it is not listed in {spec.subject_var}. "
+            f"Add it there, or set {spec.subject_var}=* to permit every ticket - deliberately, "
+            f"since this check is on THIS call's target, never on what a prior search returned."
         )
 
 
@@ -283,14 +324,24 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     capability, never the arguments - they may carry ticket content) or
     delegates to the real backend method.
 
+    The three controls fire in this order - capability, then scope, then reach
+    - so the most specific true refusal wins: a caller missing the capability
+    learns that first regardless of scope or reach, one who holds the
+    capability but targets an out-of-allowlist object learns THAT next, and
+    only a caller who clears both meets the outward-facing reach switch.
+
     The capability check happens before the `hasattr` check below on purpose:
     a caller without the capability gets that refusal regardless of whether
     the backend actually implements the method, since the capability refusal
     is the one that matters for authority, not implementation completeness.
+    Scope and reach are asserted before that same `hasattr` check for the
+    identical reason - they are refusals about authority, not about whether
+    the wrapped backend happens to implement the method.
     """
     backend, policy = _lookup(pb)
     gate = _GATES[name]
-    absent = policy.missing(_required(name, gate, kwargs))
+    required = _required(name, gate, kwargs)
+    absent = policy.missing(required)
     if absent:
         log.warning("refused %s: missing %s", name, ", ".join(sorted(absent)))
         raise exc.PolicyError(
@@ -298,6 +349,14 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
             f"not grant. The capability must be granted in the server's own "
             f"configuration; it cannot be changed from here."
         )
+    assert_subject_permitted(name, kwargs)
+    # REACH_CAPABILITIES is CONSUMED here, not hand-listed: whichever
+    # capabilities this specific call required (a callable gate's kwargs-
+    # dependent set, not a static per-tool label) are intersected against it,
+    # so reach stays derived from the capability model instead of a second
+    # list of tool names that can drift from the first.
+    if required & REACH_CAPABILITIES:
+        assert_reach_permitted(name)
     if not hasattr(backend, name):
         # Independent of _GATES drift (which the cross-check in test_policy.py
         # already forbids): _GATES is ours, but the wrapped instance is an

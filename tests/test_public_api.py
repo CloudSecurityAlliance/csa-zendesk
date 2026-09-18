@@ -86,7 +86,7 @@ def test_nothing_writes_to_stdout_when_any_module_is_imported_fresh():
     # number, but do not delete the assertion: without it, a module quietly
     # excluded from the loop below would leave this guard passing while
     # covering less than it claims to.
-    assert len(module_names) == 9, f"expected 9 modules, found {module_names}"
+    assert len(module_names) == 10, f"expected 10 modules, found {module_names}"
 
     for name in module_names:
         for cached in [n for n in sys.modules if n == "csa_zendesk" or n.startswith("csa_zendesk.")]:

@@ -387,3 +387,72 @@ def test_no_profile_grants_a_reach_capability():
     # profile. A profile that grants ticket.reply makes the switch decorative.
     for name, caps in pol.PROFILES.items():
         assert pol.TICKET_REPLY not in caps, f"profile {name!r} grants reach"
+
+
+# --- carried requirement 3: PROFILES must only name real capabilities ---------
+
+
+def test_every_profile_only_grants_capabilities_that_exist():
+    # Profile entries are hand-written literal sets, and nothing previously
+    # asserted they only name capabilities ALL_CAPABILITIES actually declares. A
+    # typo would grant a capability no gate requires and no test would notice -
+    # which undercuts the reason profiles exist: "nobody composes a capability
+    # list correctly under time pressure."
+    all_caps = set(pol.ALL_CAPABILITIES)
+    for name, caps in pol.PROFILES.items():
+        assert caps <= all_caps, f"profile {name!r} grants unknown capabilities: {caps - all_caps}"
+
+
+# --- carried requirement 2: REACH_CAPABILITIES must be CONSUMED by _dispatch --
+
+
+def test_reach_is_derived_from_the_calls_required_capabilities_not_hand_listed(monkeypatch):
+    # Proof this is derived rather than hand-listed: the fake method's NAME
+    # ("fake_reply") appears nowhere in policy.py and is not in tools.TOOLS. The
+    # only reason this call is stopped is that its gate's required capability
+    # (TICKET_REPLY) intersects REACH_CAPABILITIES - exactly the mechanism the
+    # carried requirement demands instead of a second, driftable list of names.
+    monkeypatch.delenv("CSA_ZD_ALLOW_REACH", raising=False)
+    monkeypatch.setitem(pol._GATES, "fake_reply", pol.TICKET_REPLY)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_reply", pol._make_gated("fake_reply"), raising=False)
+
+    class BackendWithFakeReply(FakeBackend):
+        def fake_reply(self, **kwargs: object) -> dict:
+            return {"ok": True}  # pragma: no cover - refused before delegation
+
+    pb = pol.PolicyBackend(BackendWithFakeReply(), pol.Policy(frozenset({pol.TICKET_REPLY})))
+    with pytest.raises(exc.PolicyError, match="CSA_ZD_ALLOW_REACH"):
+        pb.fake_reply(ticket_id=1)
+
+
+def test_reach_derivation_lets_the_call_through_once_the_switch_is_on(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "true")
+    monkeypatch.setitem(pol._GATES, "fake_reply_2", pol.TICKET_REPLY)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_reply_2", pol._make_gated("fake_reply_2"), raising=False)
+
+    class BackendWithFakeReply(FakeBackend):
+        def fake_reply_2(self, **kwargs: object) -> dict:
+            return {"ok": True, **kwargs}
+
+    pb = pol.PolicyBackend(BackendWithFakeReply(), pol.Policy(frozenset({pol.TICKET_REPLY})))
+    assert pb.fake_reply_2(ticket_id=1) == {"ok": True, "ticket_id": 1}
+
+
+# --- scope wired end-to-end through _dispatch, not just unit-tested directly --
+
+
+def test_get_ticket_through_the_real_dispatch_is_refused_outside_the_read_allowlist(monkeypatch):
+    # test_tools.py proves policy.assert_subject_permitted() refuses in
+    # isolation. This proves _dispatch actually calls it for a real,
+    # materialised, gated method - not merely that the standalone function
+    # works when called directly.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.get_ticket(ticket_id=99999)
+
+
+def test_get_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.get_ticket(ticket_id=44821) == {"ticket": {"id": 44821}}
