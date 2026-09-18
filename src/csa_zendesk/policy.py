@@ -24,6 +24,7 @@ is the complete permitted list rather than a delta.
 from __future__ import annotations
 
 import logging
+import os
 import weakref
 from collections.abc import Callable
 from typing import Any
@@ -126,6 +127,27 @@ PROFILES: dict[str, frozenset[str]] = {
     # Reach additionally requires CSA_ZD_ALLOW_REACH - a profile cannot grant it.
     "full": frozenset(ALL_CAPABILITIES) - {TICKET_REPLY, TICKET_CLOSE, RAW_READ, RAW_WRITE},
 }
+
+#: Capabilities whose effect leaves the building and touches a person (DEC-015).
+#: These need the operator switch IN ADDITION to the capability - holding
+#: `ticket.reply` is necessary and not sufficient.
+REACH_CAPABILITIES: frozenset[str] = frozenset({TICKET_REPLY})
+
+
+def reach_permitted() -> bool:
+    """Whether outward-facing calls are allowed at all. Off unless explicitly on."""
+    return os.environ.get("CSA_ZD_ALLOW_REACH", "").strip().lower() == "true"
+
+
+def assert_reach_permitted(tool: str) -> None:
+    if not reach_permitted():
+        raise exc.PolicyError(
+            f"`{tool}` sends something to a person outside this organisation, and outward-facing "
+            f"calls are off. Set CSA_ZD_ALLOW_REACH=true to enable them. This is deliberately "
+            f"separate from the capability profile: a public reply cannot be unsent, so granting "
+            f"the capability is necessary and not sufficient."
+        )
+
 
 #: A gate is a constant capability, `None` for an ungated read, or a function of
 #: the call's kwargs returning every capability that call requires. The third form
