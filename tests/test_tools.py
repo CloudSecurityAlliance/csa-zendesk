@@ -14,6 +14,26 @@ def test_every_tool_in_the_table_exists_in_code():
     assert named == set(tools.TOOLS), named ^ set(tools.TOOLS)
 
 
+def test_the_csv_and_tools_table_agree_on_which_tools_reach():
+    # Fix wave item 1: `test_every_tool_in_the_table_exists_in_code` above
+    # compares tool NAMES only - it would stay green if the table said
+    # `merge_tickets` was internal while ToolSpec said `reach=True` (or vice
+    # versa). A corrected table with uncorrected code (or the reverse) is
+    # exactly the "documented but not enforced" failure ADR-016 exists to
+    # prevent, so this compares the reach axis itself, per tool.
+    import csv
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    with (root / "analysis/tool-boundaries.csv").open() as fh:
+        rows = {r["tool"]: r for r in csv.DictReader(fh)}
+    for name, spec in tools.TOOLS.items():
+        csv_reach = rows[name]["reach"] == "contacts-a-person"
+        assert spec.reach == csv_reach, (
+            f"{name}: CSV says reach={rows[name]['reach']!r} but ToolSpec.reach={spec.reach!r}"
+        )
+
+
 def test_update_ticket_refuses_a_comment():
     # The whole of ADR-016 in one assertion: the constraint is the control. A
     # tool that merely documents "I will not comment" is not a control.
@@ -43,15 +63,23 @@ def test_reply_publicly_forces_public_true_and_is_flagged_for_reach():
     assert tools.TOOLS["reply_publicly"].reach is True
 
 
-def test_only_reply_publicly_reaches_a_person():
+def test_reply_publicly_and_merge_tickets_reach_a_person():
+    # Fix wave C1: merge_tickets joined reply_publicly here - POST .../merge
+    # accepts source_comment_is_public/target_comment_is_public, the same reach
+    # mechanism as a public reply. A test that only ever names reply_publicly
+    # would stay green even if a second reach-carrying tool went undeclared.
     reaching = {n for n, t in tools.TOOLS.items() if t.reach}
-    assert reaching == {"reply_publicly"}
+    assert reaching == {"reply_publicly", "merge_tickets"}
 
 
-def test_merge_is_gated_at_close_not_write():
-    # TODO C6: merging closes the source ticket. Placed by the axes, not by
-    # someone remembering.
-    assert tools.TOOLS["merge_tickets"].capability == "ticket.close"
+def test_merge_is_gated_at_a_terminal_reach_capability_of_its_own():
+    # TODO C6: merging closes the source ticket - it is not ticket.write. Fix
+    # wave C1: it is not ticket.close either, because close_ticket can carry no
+    # comment at all and merge_tickets can, so folding merge into ticket.close
+    # would either wrongly flag close_ticket as reach or wrongly leave
+    # merge_tickets un-flagged. ticket.merge is its own capability for exactly
+    # that reason.
+    assert tools.TOOLS["merge_tickets"].capability == "ticket.merge"
 
 
 def test_assign_ticket_permits_only_assignment_fields():
@@ -107,13 +135,63 @@ def test_close_ticket_sets_status_closed_only():
         tools.TOOLS["close_ticket"].check({"ticket_id": 1, "status": "solved"})
 
 
-def test_get_ticket_and_search_tickets_and_merge_and_update_trigger_have_no_op_checks():
-    # These four use ToolSpec's default no-op check - there is no constraint to
-    # enforce beyond capability, scope and (where relevant) reach.
+def test_get_ticket_and_search_tickets_and_update_trigger_have_no_op_checks():
+    # These three use ToolSpec's default no-op check - there is no constraint to
+    # enforce beyond capability, scope and (where relevant) reach. merge_tickets
+    # used to be a fourth (fix wave C1 gave it a real check; see below).
     tools.TOOLS["get_ticket"].check({"ticket_id": 1})
     tools.TOOLS["search_tickets"].check({"query": "status:open"})
-    tools.TOOLS["merge_tickets"].check({"ticket_id": 1, "target_ticket_id": 2})
     tools.TOOLS["update_trigger"].check({"trigger_id": 1})
+
+
+# --- fix wave C1: merge_tickets forbids the two public-comment flags -----------
+
+
+def test_merge_tickets_permits_an_ordinary_merge():
+    tools.TOOLS["merge_tickets"].check({"ticket_id": 1, "ids": [2]})
+
+
+def test_merge_tickets_forbids_source_comment_is_public():
+    with pytest.raises(exc.PolicyError, match="source_comment_is_public"):
+        tools.TOOLS["merge_tickets"].check({"ticket_id": 1, "ids": [2], "source_comment_is_public": True})
+
+
+def test_merge_tickets_forbids_target_comment_is_public():
+    with pytest.raises(exc.PolicyError, match="target_comment_is_public"):
+        tools.TOOLS["merge_tickets"].check({"ticket_id": 1, "ids": [2], "target_comment_is_public": True})
+
+
+# --- fix wave C3/C4: update_ticket and create_ticket forbid the reach side doors
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("custom_status_id", 321),
+        ("additional_collaborators", ["a@example.com"]),
+        ("email_ccs", [{"user_email": "a@example.com", "action": "put"}]),
+        ("followers", [{"user_email": "a@example.com", "action": "put"}]),
+        ("collaborator_ids", [123]),
+    ],
+)
+def test_update_ticket_forbids_the_reach_side_doors(key, value):
+    with pytest.raises(exc.PolicyError, match=key):
+        tools.TOOLS["update_ticket"].check({"ticket_id": 1, key: value})
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("custom_status_id", 321),
+        ("additional_collaborators", ["a@example.com"]),
+        ("email_ccs", [{"user_email": "a@example.com", "action": "put"}]),
+        ("followers", [{"user_email": "a@example.com", "action": "put"}]),
+        ("collaborator_ids", [123]),
+    ],
+)
+def test_create_ticket_forbids_the_reach_side_doors(key, value):
+    with pytest.raises(exc.PolicyError, match=key):
+        tools.TOOLS["create_ticket"].check({"subject": "help", key: value})
 
 
 # --- Step 5: the failing integration tests for the seam -----------------------

@@ -26,6 +26,15 @@ class ToolSpec:
     #: act on no particular subject (a search, or ticket creation - there is no
     #: existing ticket to scope against yet).
     subject_var: str | None = None
+    #: NOTE (fix wave Minor): `_force_public` and `_create_ticket_check` below
+    #: mutate the caller's `kwargs["comment"]` dict IN PLACE rather than copying
+    #: it. `policy._dispatch` runs `spec.check(kwargs)` before the scope and
+    #: reach checks (see that function's docstring for the fixed order), so a
+    #: call later refused by scope or reach has already had the caller's own
+    #: nested `comment` dict rewritten (e.g. `public` forced to `False`) by the
+    #: time the refusal is raised. Harmless today - the call is refused either
+    #: way, and no test has needed the pre-check dict back - but worth knowing
+    #: before any caller starts reusing a `kwargs` dict across retries.
     check: Callable[[dict[str, Any]], None] = field(default=lambda _kwargs: None)
 
 
@@ -79,13 +88,35 @@ def _status(value: str) -> Callable[[dict[str, Any]], None]:
     return check
 
 
+# Forbidden on both create and update (fix wave C3/C4): `custom_status_id` is a
+# second route into solve/close alongside the literal `status` key - the OAS's
+# own example for updating a ticket pairs `custom_status_id: 321` with
+# `status: solved` - and `additional_collaborators`/`email_ccs`/`followers`/
+# `collaborator_ids` each notify someone when the ticket changes, which is
+# reach from a tool that carries no `reach=True` flag. Forbidding these named
+# keys does not make either tool bucket-pure the way an allowlist would (root
+# finding: a denylist over a body the tool never enumerates is unclosable) -
+# it closes the four known routes without claiming to close routes the OAS has
+# not shown us yet. See `specs/zendesk-support-oas.yaml`'s `UpdateTicket` and
+# `Ticket` schema examples for the exact fields.
+_TICKET_REACH_SIDE_DOORS = (
+    "custom_status_id",
+    "additional_collaborators",
+    "email_ccs",
+    "followers",
+    "collaborator_ids",
+)
+
+
 def _create_ticket_check(kwargs: dict[str, Any]) -> None:
     # Both halves of the CSV constraint ("no public comment; body must not
-    # contain status"): `status` is refused outright - creating and solving in
-    # one call would span two impact buckets - and any `comment` supplied with
-    # the new ticket is forced private, because a public one would email the
-    # requester (reach) from a tool that carries no `reach=True` flag.
-    _forbid("status")(kwargs)
+    # contain status, custom_status_id, or the collaborator fields"): `status`
+    # and the reach side doors are refused outright - creating and solving, or
+    # creating and notifying a collaborator, in one call would span two impact
+    # buckets - and any `comment` supplied with the new ticket is forced
+    # private, because a public one would email the requester (reach) from a
+    # tool that carries no `reach=True` flag.
+    _forbid("status", *_TICKET_REACH_SIDE_DOORS)(kwargs)
     comment = kwargs.get("comment")
     if isinstance(comment, dict):
         comment["public"] = False
@@ -95,7 +126,11 @@ TOOLS: dict[str, ToolSpec] = {
     "get_ticket": ToolSpec("ticket.read", subject_var="CSA_ZD_ALLOWLIST_READ"),
     "search_tickets": ToolSpec("ticket.read"),
     "create_ticket": ToolSpec("ticket.write", check=_create_ticket_check),
-    "update_ticket": ToolSpec("ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_forbid("comment", "status")),
+    "update_ticket": ToolSpec(
+        "ticket.write",
+        subject_var="CSA_ZD_ALLOWLIST_WRITE",
+        check=_forbid("comment", "status", *_TICKET_REACH_SIDE_DOORS),
+    ),
     "assign_ticket": ToolSpec(
         "ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("assignee_id", "group_id")
     ),
@@ -105,6 +140,18 @@ TOOLS: dict[str, ToolSpec] = {
     ),
     "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("solved")),
     "close_ticket": ToolSpec("ticket.close", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("closed")),
-    "merge_tickets": ToolSpec("ticket.close", subject_var="CSA_ZD_ALLOWLIST_WRITE"),
+    # ticket.merge, not ticket.close (fix wave C1): POST .../merge accepts
+    # source_comment_is_public/target_comment_is_public, the same reach mechanism
+    # as a public reply, tabled `internal` and unguarded until this fix. Forbidding
+    # both keys is a denylist over an endpoint whose body this table does not
+    # enumerate - it closes the two known keys, not the shape (root finding) - so
+    # reach=True stands regardless of the constraint, as the defense the
+    # constraint alone cannot promise.
+    "merge_tickets": ToolSpec(
+        "ticket.merge",
+        reach=True,
+        subject_var="CSA_ZD_ALLOWLIST_WRITE",
+        check=_forbid("source_comment_is_public", "target_comment_is_public"),
+    ),
     "update_trigger": ToolSpec("admin.write", subject_var="CSA_ZD_ALLOWLIST_ADMIN"),
 }

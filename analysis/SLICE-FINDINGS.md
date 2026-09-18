@@ -26,6 +26,11 @@ OK - 95 tracked files, nothing tenant-specific found
 coverage: structural + tenant terms
 ```
 
+*(Corrected 2026-09-18, final review, Minor: this repository now has **96** tracked files — this
+document's own addition moved the count by one. Also, `check_boundaries.py`'s `OK - ...` line above
+is written to **stderr**, not stdout (`print(..., file=sys.stderr)`); shown here as it would appear
+in an interactive shell, not as a literal capture of `subprocess.run(...).stdout`.)*
+
 `analysis/scope-triage.csv`, via `scripts/triage.py`, gives the admitted/deferred/refused/blocked
 split this slice sits inside:
 
@@ -69,6 +74,43 @@ check at all — `create_ticket`'s fix above was caught by a human re-reading th
 surface, not by the checker. Filed as **B24**, and it is the single most consequential finding this
 slice produced for the 822-operation derivation: a solo-tool operation is precisely the one nobody
 thought to split, and it is exactly the case the mechanical check cannot see.
+
+> **Correction (2026-09-18, final review).** The verdict above — "held, with a change" — is wrong,
+> and wrong in the direction that understates danger, which is the one direction a document whose
+> job is to stop a reader concluding too much cannot afford. **The corrected verdict: bucket purity
+> held only where the tool's constraint is an allowlist, and broke again wherever the constraint is
+> a denylist.**
+>
+> The five tools built with `_only(...)` — an allowlist of the keys a call may carry —
+> (`assign_ticket`, `add_internal_note`, `reply_publicly`, `solve_ticket`, `close_ticket`) are
+> genuinely bucket-pure: nothing outside the named keys can reach the backend, by construction. The
+> four built with `_forbid(...)` (a denylist of the keys a call may *not* carry) or no check at all —
+> `update_ticket`, `create_ticket`, `merge_tickets`, `update_trigger` — are not, **and cannot be
+> while they stay denylists: a denylist over a body the tool never fully enumerates is unclosable.**
+> Naming the keys known to be dangerous today does not guarantee the next Zendesk API revision, or
+> the next unread paragraph of the OAS, adds no others.
+>
+> This was not hypothetical. Before this correction's fix wave, `update_ticket` and `create_ticket`
+> were both missing four more keys the OAS already documented: `custom_status_id` (a second route
+> into `solve`/`close` alongside the literal `status` key — the OAS's own update example pairs
+> `custom_status_id: 321` with `status: solved`) and the collaborator fields
+> `additional_collaborators`, `email_ccs`, `followers`, `collaborator_ids` (each notifies someone
+> when the ticket changes — reach, from tools that carried no `reach=True` flag). `merge_tickets`
+> was worse: `POST .../merge` accepts `source_comment_is_public` and `target_comment_is_public` —
+> the exact mechanism classified as reach for a public reply — and the tool was tabled `reach=internal`,
+> `ToolSpec(reach=False)`, gated at `ticket.close` (a capability not in `REACH_CAPABILITIES`), with
+> **no constraint at all**. All three tools are corrected in the same commit as this note: see
+> `analysis/tool-boundaries.csv` and `src/csa_zendesk/tools.py`. `merge_tickets` now carries its own
+> `ticket.merge` capability rather than sharing `close_ticket`'s `ticket.close` — deliberately, so
+> that a tool which can reach a person and a tool which structurally cannot (`close_ticket` accepts
+> no comment at all) are never forced to agree on one reach flag by sharing one capability string.
+>
+> **This reframes B24.** The predicate filed there — "the checker is blind to an operation that backs
+> exactly one tool" — is wrong. `update_ticket` shares `PUT /tickets/{id}` with five siblings and
+> `check_boundaries.py` inspects it on every run, and it was still wrong: the checker asserts a
+> constraint *exists* and *distinguishes siblings*, never that a denylist constraint is *complete*.
+> Operation cardinality was never the load-bearing variable; allowlist-vs-denylist is. See B24's
+> corrected entry in `TODO.md` for the full re-framing.
 
 ### 2. Three controls compose without leaking — held
 
@@ -142,6 +184,24 @@ the way the ticket write path did, the honest range is not "somewhat above 30–
 exceeds `ADR-006`'s own record of the widest server surveyed shipping **51 tools**, by a wide margin,
 while the core ticket loop this project actually exists for is about ten.
 
+> **Correction (2026-09-18, final review, I2/I3).** "Dozens of such families" overstates what this
+> slice's own numbers support: the `now` bucket has **33 families total** (the scope-triage table
+> above), of which roughly fourteen are config objects with a write — "several", not "dozens". The
+> correction already appended to
+> `docs/superpowers/specs/2026-09-17-csa-zendesk-whole-project-design.md` §4 (also 2026-09-18) says
+> "several", correctly; this document is brought into line with it.
+>
+> More importantly, the extrapolation's *premise* is contradicted by this slice's own second
+> datapoint, stated two paragraphs above the passage it contradicts: `update_trigger`, the one
+> config-object write this slice actually built, came out **1:1**, constraint `none` — not a multi-
+> split. The 6:1 split on `PUT /tickets/{id}` was driven by that operation carrying reach (a public
+> reply) and a terminal status change in the same request body; a trigger `PUT` carries neither. The
+> honest read of this slice's two datapoints is "the ticket write path splits hard; the one
+> config-object write sampled does not" — not "config-object writes split the way the ticket write
+> path did." Whether they still might, for reasons this slice's one sample didn't hit, remains open
+> and is exactly what **B18**'s real per-operation classification is for; it is not something this
+> slice's own evidence supports predicting.
+
 **That is a finding about the design, not a detail.** A tool surface a model can usefully choose
 from and a tool surface that is bucket-pure at Zendesk's actual granularity are now in tension, and
 nothing in the design resolves it yet — toolsets (`ADR-006`) narrow what's *loaded* per session but
@@ -192,6 +252,14 @@ controls" and concludes the eleven-tool surface works has been misled by a true 
 wrong thing. That is the gap this document exists to name, and it is not closed by more tests against
 `FakeBackend` fakes-of-fakes; it is closed by Block 0b (OAuth) and the real `Backend` methods the
 tool table is waiting for.
+
+> **Correction (2026-09-18, final review, Minor).** "Several synthetic stand-ins" undercounts: there
+> are **three** (`fake_update_ticket`, `fake_reply`/`fake_reply_2`, and `fake_constrained` — all in
+> `tests/test_policy.py`). Separately, "whether `merge_tickets` actually gates at `ticket.close`" is
+> no longer even the right hypothetical to test against a real backend: the fix wave applied
+> alongside this correction gave `merge_tickets` its own `ticket.merge` capability (see Claim 1's
+> correction, above). The paragraph's point is unaffected either way: none of it has been checked
+> against a real merge call yet.
 
 ---
 
@@ -244,7 +312,7 @@ share an operation — see **B24**.
   checks (`"ticket.purge"`, `"people.purge"`, `"people.merge"`, `"people.suspend"`) that the retired
   test checked against every profile by value (Task 2 minor, deferred).
 - **C11** *(new)* — `tests/test_public_api.py` hard-asserts the module count (`== 9`); same defect
-  class as **E10**.
+  class as **E10**. *(Corrected 2026-09-18: the assertion in the file is `== 10`, not `== 9`.)*
 - **C12** *(new)* — leading-zero ticket ids in an allowlist are accepted as literal strings and can
   never match a canonical Zendesk id — fails closed by accident, with no operator-facing error
   (Task 3 minor, deferred).
@@ -255,5 +323,25 @@ share an operation — see **B24**.
 - **C15** *(new)* — one inert `# pragma: no cover` in `tests/test_policy.py` (~line 421) on a
   genuinely unreachable return; lives in `tests/`, which the coverage gate never measures, so it has
   zero effect, but it matches a pattern the plan otherwise forbids (Task 5 minor, deferred).
+
+**Added by the 2026-09-18 final review (this correction), filed and largely closed in the same
+commit:**
+
+- **C1–C4** *(fixed, not filed open)* — `merge_tickets` under-tabled `reach`, and `update_ticket` /
+  `create_ticket` under-forbade `custom_status_id` and the collaborator fields. Corrected in
+  `analysis/tool-boundaries.csv` and `src/csa_zendesk/tools.py` in the same commit as this document's
+  correction, rather than filed as open TODOs, because the fix was small and mechanical once found.
+- **B24** *(re-scoped)* — the predicate was wrong ("solo operations get no check"); the real one is
+  "a denylist constraint cannot be verified closed by comparing tools." See the Claim 1 correction
+  above and `TODO.md`'s corrected B24 row.
+- **C8** *(extended)* — `merge_tickets`' wrong-subject case (checks the surviving target, never the
+  tickets closed via `ids` — fail-**open**) is added alongside `update_trigger`'s existing
+  fail-**closed** case. See `TODO.md`'s extended C8 row.
+- **I1** *(new; filed and closed in the same commit)* — reach enforcement hung on `_GATES`,
+  uncross-checked against `TOOLS`. Closed by two new tests in `tests/test_policy.py`. See `TODO.md`'s
+  I1 row.
+- **I5** *(fixed)* — `test_no_profile_grants_a_reach_capability` hardcoded `TICKET_REPLY`; it now
+  iterates `REACH_CAPABILITIES`, so a second reach capability (`ticket.merge`, added by this same
+  correction) can't be silently granted by a profile.
 
 See `TODO.md` for the filed rows.

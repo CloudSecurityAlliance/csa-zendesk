@@ -41,7 +41,17 @@ TICKET_NOTE = "ticket.note"  # internal note; never leaves the org
 TICKET_WRITE = "ticket.write"  # fields, assignee, tags; audited
 TICKET_REPLY = "ticket.reply"  # PUBLIC comment; emailed, irreversible
 TICKET_SOLVE = "ticket.solve"  # on-ramp to terminal: automation closes solved
-TICKET_CLOSE = "ticket.close"  # terminal immediately; also covers merge
+TICKET_CLOSE = "ticket.close"  # terminal immediately
+# Deliberately its own capability, not folded into TICKET_CLOSE: merge closes the
+# source ticket(s) (irreversible, like close_ticket) but the endpoint also accepts
+# `source_comment_is_public`/`target_comment_is_public` (fix wave C1) - a body a
+# denylist can forbid TODAY without ever making that forbidding a proof for
+# tomorrow. Sharing TICKET_CLOSE with close_ticket would force one of two wrong
+# outcomes: close_ticket wrongly flagged reach (it can carry no comment at all),
+# or merge_tickets wrongly NOT flagged reach - either way ADR-016's "authority
+# beats atomicity" argument (grant close without granting merge's reach) breaks,
+# and the I1 cross-check below could never hold for both tools honestly at once.
+TICKET_MERGE = "ticket.merge"  # closes the source ticket(s); reach (fix wave C1)
 TICKET_DELETE = "ticket.delete"  # soft delete; recoverable with effort
 # ticket.purge, people.purge, people.merge and people.suspend used to live here.
 # analysis/scope-triage-exceptions.csv refuses those operations outright, so no
@@ -78,6 +88,7 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     TICKET_REPLY,
     TICKET_SOLVE,
     TICKET_CLOSE,
+    TICKET_MERGE,
     TICKET_DELETE,
     PEOPLE_READ,
     PEOPLE_WRITE,
@@ -125,14 +136,18 @@ PROFILES: dict[str, frozenset[str]] = {
     # `full` is every capability that exists, minus the ones no word should grant.
     # Ordered by REACH first and destructiveness second (DEC-015): ticket.reply is
     # excluded although it destroys nothing, because its effect leaves the building.
+    # ticket.merge joins ticket.close here for the same reach reason as reply, not
+    # the destructiveness one (fix wave C1).
     # Reach additionally requires CSA_ZD_ALLOW_REACH - a profile cannot grant it.
-    "full": frozenset(ALL_CAPABILITIES) - {TICKET_REPLY, TICKET_CLOSE, RAW_READ, RAW_WRITE},
+    "full": frozenset(ALL_CAPABILITIES) - {TICKET_REPLY, TICKET_CLOSE, TICKET_MERGE, RAW_READ, RAW_WRITE},
 }
 
 #: Capabilities whose effect leaves the building and touches a person (DEC-015).
 #: These need the operator switch IN ADDITION to the capability - holding
-#: `ticket.reply` is necessary and not sufficient.
-REACH_CAPABILITIES: frozenset[str] = frozenset({TICKET_REPLY})
+#: `ticket.reply` is necessary and not sufficient. `ticket.merge` joined this set
+#: in the fix wave (I1/C1): merging accepts `source_comment_is_public` /
+#: `target_comment_is_public`, the same reach mechanism as a public reply.
+REACH_CAPABILITIES: frozenset[str] = frozenset({TICKET_REPLY, TICKET_MERGE})
 
 
 def reach_permitted() -> bool:
@@ -183,9 +198,14 @@ def assert_subject_permitted(tool: str, kwargs: dict[str, Any]) -> None:
     subject = str(kwargs["ticket_id"])
     listing = _scope.read_listing(spec.subject_var)
     if not _scope.permits(listing, subject):
+        # "the object" rather than "the ticket": this message fires for every
+        # subject_var, including CSA_ZD_ALLOWLIST_ADMIN (update_trigger's scope is
+        # a trigger, not a ticket - fix wave Minor). The kwarg is still literally
+        # `ticket_id` regardless of domain (TODO C8, deferred), so the wording here
+        # is corrected without pretending the key itself is generalised too.
         raise exc.PolicyError(
-            f"`{tool}` may not act on ticket {subject}: it is not listed in {spec.subject_var}. "
-            f"Add it there, or set {spec.subject_var}=* to permit every ticket - deliberately, "
+            f"`{tool}` may not act on the object {subject}: it is not listed in {spec.subject_var}. "
+            f"Add it there, or set {spec.subject_var}=* to permit every object - deliberately, "
             f"since this check is on THIS call's target, never on what a prior search returned."
         )
 

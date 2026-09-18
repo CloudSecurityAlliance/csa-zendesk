@@ -57,7 +57,7 @@ def test_the_default_profile_holds_only_reversible_capabilities():
 
 
 def test_no_profile_grants_close_or_raw():
-    never = {pol.TICKET_CLOSE, pol.RAW_READ, pol.RAW_WRITE}
+    never = {pol.TICKET_CLOSE, pol.TICKET_MERGE, pol.RAW_READ, pol.RAW_WRITE}
     for name, caps in pol.PROFILES.items():
         assert not (caps & never), f"profile {name!r} grants {sorted(caps & never)}"
 
@@ -148,6 +148,34 @@ def test_capability_constants_and_the_all_tuple_agree():
     # structurally exclude it and could never pass against a correct policy.py.
     consts = {v for k, v in vars(pol).items() if k.isupper() and isinstance(v, str)}
     assert consts == set(pol.ALL_CAPABILITIES)
+
+
+def test_reach_flagged_tools_and_reach_capable_tools_are_the_same_set():
+    # I1: reach enforcement hangs on _GATES, uncross-checked against TOOLS.
+    # `_GATES["reply_publicly"] = TICKET_WRITE` (a plausible typo when the ten
+    # missing gates land) would silently disarm the reach switch while
+    # ToolSpec(reach=True) and the CSV still say contacts-a-person - one
+    # hand-maintained list traded for another. This cross-checks the two
+    # hand-maintained facts against each other directly, independent of _GATES:
+    # every tool ToolSpec flags as reach must carry a capability this module
+    # has flagged reach-carrying, and vice versa.
+    reach_flagged = {n for n, t in pol.tools.TOOLS.items() if t.reach}
+    reach_capable = {n for n, t in pol.tools.TOOLS.items() if t.capability in pol.REACH_CAPABILITIES}
+    assert reach_flagged == reach_capable
+
+
+def test_gates_agree_with_tools_on_capability_wherever_both_declare_a_tool():
+    # I1's other half: a plain-string _GATES entry for a name that is also in
+    # TOOLS must name the SAME capability TOOLS does, so a _GATES typo (the
+    # right tool, the wrong string) cannot silently disarm capability or reach
+    # enforcement while the declarative TOOLS table still says the true thing.
+    # Skips callable gates - update_ticket's future kwargs-dependent gate is
+    # a *set* computed from the call, not a single capability to compare.
+    for name, gate in pol._GATES.items():
+        spec = pol.tools.TOOLS.get(name)
+        if spec is None or not isinstance(gate, str):
+            continue
+        assert gate == spec.capability, f"{name}: _GATES says {gate!r}, TOOLS says {spec.capability!r}"
 
 
 # --- additional coverage: branches not reached by the tests above ------------
@@ -384,9 +412,14 @@ def test_the_refused_operations_have_no_capability_at_all():
 
 def test_no_profile_grants_a_reach_capability():
     # DEC-015: reach carries an operator switch SEPARATE from the capability
-    # profile. A profile that grants ticket.reply makes the switch decorative.
+    # profile. A profile that grants a reach capability makes the switch
+    # decorative. Fix wave I5: this used to hardcode TICKET_REPLY, so a second
+    # reach capability (ticket.merge, added in the same fix wave as C1) could
+    # have been granted by a profile with the suite still green. Iterating
+    # REACH_CAPABILITIES itself closes that.
     for name, caps in pol.PROFILES.items():
-        assert pol.TICKET_REPLY not in caps, f"profile {name!r} grants reach"
+        for reach_cap in pol.REACH_CAPABILITIES:
+            assert reach_cap not in caps, f"profile {name!r} grants reach capability {reach_cap!r}"
 
 
 # --- carried requirement 3: PROFILES must only name real capabilities ---------
