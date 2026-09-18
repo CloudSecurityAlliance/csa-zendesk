@@ -15,7 +15,7 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 | | Item | Status | Notes |
 |---|---|---|---|
-| A1 | **Reconcile our scope against what the official SDKs cover.** Their union is 97 resources; ours is 125 families. Work out which of their families we lack, whether each is reachable here, and whether it belongs in scope. | open | Explicitly deferred by ADR-002. The awkward cases are families they model that we cannot test. |
+| A1 | **Reconcile our scope against what the official SDKs cover.** Their union is 97 resources; ours is 125 families. Work out which of their families we lack, whether each is reachable here, and whether it belongs in scope. | open | Explicitly deferred by ADR-002. The awkward cases are families they model that we cannot test. **Now an input to the scoping triage (B16) rather than standalone.** |
 | A2 | **Resolve the six ambiguous Help Center 404s** — Badges, Badge Categories, Badge Assignments, Guide Media Objects, Account Custom Claims, Help Center JWTs. Each returned a bare 404 from an *inferred* path, so "not on this plan" and "wrong path" are indistinguishable. | open | Needs the reference page per family, not another guess. See `API-SURFACE.md` §4b. |
 | A3 | **Establish the `guide/search` filter contract.** It 400s without a `filter` object, then again without `filter[locales]`. The older `help_center/articles/search.json` works and is the one to start from. | open | |
 | A4 | **Evaluate `prompt-security-utils`** as a dependency versus implementing the injection-wrapping pattern directly. | open | Prompt injection through ticket bodies is the primary risk; nothing in the field addresses it except one server. |
@@ -28,6 +28,14 @@ Status: `open` · `in progress` · `blocked` · `done`
 |---|---|---|---|
 | B1 | ~~Architecture options~~ | **done** | Settled across ADR-002/003/005/006/007/008 and assembled in `docs/superpowers/specs/2026-09-01-csa-zendesk-design.md`. |
 | B2 | ~~Implementation plan for Block 0~~ | **done** | `docs/superpowers/plans/2026-09-08-block-0-foundations.md` — 8 tasks, 46 steps, TDD throughout. |
+| B12 | ~~Whole-project sequence~~ | **done** | `docs/superpowers/specs/2026-09-17-csa-zendesk-whole-project-design.md` — build order vs enable order, the third control (allowlists), hatch-first delivery, and bucket-pure tool boundaries. |
+| B19 | **Negative-space research** — what a human can do in the Zendesk web interface that no API operation reaches. Sources are complaints (vendor forums, Stack Overflow, GitHub issues on client libraries), third-party tools that say "we cannot sync X", the vendor's own known-limitations pages, and evidence of an internal API the web app uses. | open | Added 2026-09-17, §3b of the whole-project design. The triage partitions the *API* surface; a UI-only capability is invisible to it. `UI-ACTION-MAP.md` does not cover this — it asks the API what the UI can do, so it cannot find absences. Each gap decides: web automation *with* a drift watcher, out-of-scope with a reopening condition, or WAITING-FOR. |
+| B16 | **Scoping triage (B0c)** | **first pass done** | `analysis/SCOPING-TRIAGE.md` + `scripts/triage.py`. 335 now / 387 later / 48 never / 52 blocked, from 822. Still owed: the official-server input (#17) and the SDK reconciliation (A1), both of which can only *move* families, not invalidate the pass. |
+| B18 | **Correct `operation-classification.csv` before B1 derives anything from it.** Three defects found by the triage: 15 of 17 `outward_facing=yes` rows are reads; four reads are flagged irreversible; and the public reply — the operation the whole design is built around — is a *parameter on ticket update*, so it is not in the table at all. | open | Blocks B1, which derives both the capability set and the tool list from this table. DEC-015 anticipated the third case ("reach may be a property of the call rather than the tool"); ADR-003 resolves it at the tool layer; the table has no way to express it. |
+| B13 | **ADR-011 — allowlists select subject**, and the allowlist is a blast-radius control rather than a security boundary. | open | Owed by the whole-project design. Adds a third axis to ADR-006. |
+| B14 | **ADR-012 — the hatch is the primary phase-one surface.** | open | Owed by the whole-project design. Changes ADR-008's posture; must reconcile with GOALS failure mode #2. |
+| B15 | **ADR-013 — tool boundaries never span an impact bucket.** | open | Owed by the whole-project design. Likely an extension of ADR-010. |
+| B17 | **ADR-014 — scope is admitted per family, and some operations are refused outright.** | open | Formalises the scoping triage. Narrows ADR-001 from "cannot test" to one of four reasons not to build. |
 | B11 | ~~Block 0b plan~~ | **done** | `docs/superpowers/plans/2026-09-17-block-0b-oauth.md` — 9 tasks, TDD throughout. |
 | B20 | **The token file is written atomically but without a lock.** ADR-009 specifies "atomically … under a lock file". `os.replace` is atomic on POSIX so concurrent writers cannot tear the file; the residual risk is two overlapping refreshes losing one rotated refresh token, which costs a re-login rather than corruption. | open | Deliberately deferred by the Block 0b plan's self-review — a correct cross-platform lock is more code than the rest of the store, for a recoverable failure. Revisit when the server genuinely runs under more than one MCP client. |
 | D12 | **`check_public_safe.py` matches denylist terms as bare substrings**, so a short private term that happens to sit inside an ordinary English word refuses the commit. Hit twice on 2026-09-17 by one four-letter term inside a common gerund — and then again when this very entry tried to quote the example, which is the tell: a gate you cannot describe a false positive in. | open | Word-boundary matching is the obvious fix and is *not* obviously safe — a stricter matcher risks false **negatives**, which for a publication gate is the worse direction, and several real terms contain hyphens and dots that word boundaries treat inconsistently. Deserves its own considered change with tests, not a drive-by. Same defect class as a leak-test canary short enough to occur by chance. |
@@ -42,19 +50,24 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 | | Item | Status | Notes |
 |---|---|---|---|
-| B9 | **Should `admin.write` split per object type?** 225 configuration operations behind one gate. Deferred by ADR-010 because `admin` is off by default in 1.0. | open | Revisit if `admin` is ever granted routinely. |
+| B9 | ~~Should `admin.write` split per object type?~~ | **answered** | The 2026-09-17 design answers it with `CSA_ZD_ALLOWLIST_ADMIN` — per-object scope is finer and more honest than splitting the capability 225 ways. The revisit trigger fired: the configuration-improvement loop means `admin` *will* be granted routinely. |
 | B10 | **Should `bulk` be complemented by a magnitude threshold** above which an operation needs confirmation? One surveyed server does this. `bulk` gates authority; a threshold gates scale. | open | Not the same question. |
 | C1 | **The requirements model over-reports on conditional forms.** It matched a live 422 exactly — but on a form with *zero* conditional rules, so the match validated the easy half. On a conditional form it lists mutually exclusive branches as both required. | open | Needs a ticket on a conditional form. `experiments/solve-required-fields/RESULTS.md`. |
 | C2 | **`required_on_statuses.type` is not enumerated.** `SOME_STATUSES` observed; `ALL_STATUSES` inferred and unverified. The whole `agent_conditions` structure is undocumented. | open | Keep the compute-vs-422 comparison as a conformance test so upstream shape changes fail loudly. |
 | C3 | ~~Confirm `status: "closed"` is rejected~~ | **done** | It is **accepted**, and terminal. See `API-SURFACE.md` §5.4d. The earlier claim that it was automation-only was wrong. |
 | C4 | ~~Confirm the default for `comment.public` when omitted~~ | **done** | There is no fixed default: it **inherits from the ticket's first comment**, so email-originated tickets default to public. `API-SURFACE.md` §5.4f. Answered from docs + read-only observation rather than by emailing four uninvolved people. |
-| C6 | **`merge_tickets` is a closing operation** — merging closes the source ticket, which observational sampling suggests is a significant real-world path to the irreversible state. It needs a gate at `ticket.close` level, not `ticket.write`, and a tool description that says so. | open | Found by ADR-004's technique, not by reading docs. |
+| C6 | **`merge_tickets` is a closing operation** — *placed automatically by the classification pass under bucket purity; keep as a conformance check rather than a manual fix.* — merging closes the source ticket, which observational sampling suggests is a significant real-world path to the irreversible state. It needs a gate at `ticket.close` level, not `ticket.write`, and a tool description that says so. | open | Found by ADR-004's technique, not by reading docs. |
 | C5 | **Seed a cursor-capability table** from the Ruby client's path list, then verify each against live probes. Single-sourced today. | open | |
 
 ## D. Repo and process
 
 | | Item | Status | Notes |
 |---|---|---|---|
+| D8 | ~~Mint API tokens before the window closes~~ | **decided — no** | [ADR-015](DECISIONS-ADR/ADR-015.md): OAuth only, no further tokens, the 2026-10-27 window is allowed to close. A stockpile buys until 2027-04-30 regardless and argues against building OAuth this quarter. |
+| D10 | **Remove the API token code path** from `README.md` and `CLAUDE.md` as a supported configuration, per ADR-015. The research scripts under `scripts/` keep theirs — development tooling, not product. | open | Low effort; do it before anyone writes auth code against the old assumption. |
+| D11 | **Port the research scripts to OAuth** — `zd.py`, `ui_actions.py`, `probe_families.py`. | blocked | On Block 0b. They inherit the 2027-04-30 expiry; nothing at runtime depends on them, so this is a follow-on rather than a precondition. |
+| D1 | ~~Create the public GitHub repo~~ | **done** | The repo has existed since 2026-08-31 and is public. This entry was stale; it unblocks D2. |
+| D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | open | **Unblocked**: D1 is done, the repo is public, the URLs resolve. Also confirm the CINO Product for MCP Servers exists and holds this project alongside `csa-google-workspace` and `csa-skilljar` (asked for in the 2026-09-12 session; never confirmed). |
 | D1 | **Create the public GitHub repo** once there is working code, and push. | done | Repo exists; Block 0 is the first working code. |
 | D2 | **Set the Airtable file-registry URLs** — README, DECISIONS-ADR, WAITING-FOR, TODO, and the rest. | blocked | On D1; the URLs would 404 today. |
 | D3 | **Decide whether `SECURITY-RESOURCES.md` is owed.** This project has no external surface of its own but handles an admin credential and untrusted ticket text. | open | |
@@ -98,3 +111,10 @@ Recorded so they are not re-proposed as oversights.
 - **A local attachment cache.** One surveyed server has nine tools for it. A local cache of
   customer attachments is a data-retention decision, not a convenience.
 - **Naming with a `zendesk_` prefix.** Settled: bare `verb_noun`. The client namespaces already.
+
+- **The Zendesk MCP server written by a CSA colleague.** Asked for during the 2026-09-12 design
+  session and **deliberately dropped 2026-09-17**: the prior-art survey exists to learn from servers
+  with real adoption, and this one has none. Including it because the author is internal would be
+  selecting on relationship rather than on signal, and the aliasing convention exists precisely so
+  the survey is about the ecosystem rather than about people. Recorded so it is not re-proposed as an
+  oversight.

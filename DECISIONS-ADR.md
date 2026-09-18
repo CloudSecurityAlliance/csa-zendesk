@@ -15,5 +15,6 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 | [ADR-006](DECISIONS-ADR/ADR-006.md) | Toolsets select surface; capabilities grant authority; the operator decides both | Active | 2026-09-01 |
 | [ADR-007](DECISIONS-ADR/ADR-007.md) | Surface Zendesk's async jobs; do not invent our own | Active | 2026-09-01 |
 | [ADR-008](DECISIONS-ADR/ADR-008.md) | A generic request tool exists, refuses what curated tools cover, and names its own remedy | Active | 2026-09-01 |
-| [ADR-009](DECISIONS-ADR/ADR-009.md) | Public OAuth client with PKCE, and exactly one token file | Active | 2026-09-08 |
+| [ADR-009](DECISIONS-ADR/ADR-009.md) | Public OAuth client with PKCE, and exactly one token file | Active — token clause superseded by ADR-015 | 2026-09-08 |
 | [ADR-010](DECISIONS-ADR/ADR-010.md) | Capabilities are derived from a classification of every operation | Active | 2026-09-08 |
+| [ADR-015](DECISIONS-ADR/ADR-015.md) | OAuth only — API token support is removed, and no further tokens are minted | Active | 2026-09-17 |

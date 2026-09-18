@@ -1,0 +1,9 @@
+method,path,bucket,reason
+DELETE,/api/v2/deleted_tickets/{ticket_id},never,Permanently purges an already-deleted ticket. The one deletion with no undo.
+DELETE,/api/v2/deleted_tickets/destroy_many,never,Bulk permanent purge. Same as above with a multiplier.
+DELETE,/api/v2/deleted_users/{deleted_user_id},never,Permanently purges a person's record. A GDPR-shaped act that belongs to a human.
+PUT,/api/v2/users/{user_id}/merge,never,Irreversibly merges two people. Wrong on a real customer and there is no undo.
+POST,/api/v2/organizations/{organization_id}/merge,never,Irreversibly merges two organizations.
+PUT,/api/v2/tickets/{ticket_id}/mark_as_spam,never,Suspends the requester. Punitive and it reaches a real person.
+DELETE,/api/v2/suspended_tickets/{id},never,Permanently destroys a suspended ticket before anyone has read it.
+DELETE,/api/v2/suspended_tickets/destroy_many,never,Bulk form of the above.
