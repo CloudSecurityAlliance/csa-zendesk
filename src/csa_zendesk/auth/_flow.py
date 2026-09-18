@@ -28,15 +28,25 @@ from outside `exchange_code` for that reason.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Sequence
 
 import httpx
 
 from .. import exceptions as exc
+from . import _store
 from ._store import Tokens
 
-__all__ = ["exchange_code", "ScopeError", "AuthExchangeError"]
+__all__ = [
+    "exchange_code",
+    "refresh",
+    "access_token",
+    "ScopeError",
+    "AuthExchangeError",
+    "NotAuthorised",
+    "REFRESH_MARGIN_SECONDS",
+]
 
 
 class ScopeError(exc.ZendeskError):
@@ -121,3 +131,108 @@ def exchange_code(
         transport,
     )
     return _to_tokens(payload, requested_scopes)
+
+
+#: Refresh this many seconds before the access token actually expires, not after.
+#: Token expiration is mandatory and cannot be turned off on the live client, so
+#: this is not an optimisation - `access_token()` must always hand back something
+#: that will survive the request about to be made with it.
+REFRESH_MARGIN_SECONDS = 120
+
+
+class NotAuthorised(exc.ZendeskError):
+    """No usable credential. The operator has to do something."""
+
+
+def refresh(
+    *,
+    subdomain: str,
+    client_id: str,
+    tokens: Tokens,
+    requested_scopes: Sequence[str],
+    transport: httpx.BaseTransport | None = None,
+) -> Tokens:
+    """Exchange a refresh token for a new access token, and persist the result.
+
+    Sends no `client_secret`, deliberately: we are a public client even on
+    refresh, though Zendesk's own refresh-token example shows one. Whether the
+    live account accepts a secret-less refresh is unverified; if it turns out
+    one is required, adding it back is an architecture decision, not a patch
+    here.
+
+    `requested_scopes` is sent as `scope` only when non-empty. Omitting it
+    entirely (rather than sending an empty string) asks Zendesk to keep
+    whatever scopes were already granted, per normal OAuth refresh semantics -
+    sending `scope=` outright could instead be read as a request for zero
+    scopes.
+
+    A refresh response may omit `refresh_token` (Zendesk is not required to
+    rotate it every time); `_to_tokens` requires the key to be present, so a
+    missing one is filled in from the current `tokens` before that call. Losing
+    a rotated refresh token because it was overwritten with an empty value
+    would force a full re-login for no reason.
+    """
+    body: dict[str, str] = {
+        "grant_type": "refresh_token",
+        "refresh_token": tokens.refresh_token,
+        "client_id": client_id,
+    }
+    if requested_scopes:
+        body["scope"] = " ".join(requested_scopes)
+    payload = _post(subdomain, body, transport)
+    payload.setdefault("refresh_token", tokens.refresh_token)
+    fresh = _to_tokens(payload, requested_scopes)
+    _store.write(fresh)  # not persisting a refresh means every process refreshes on every start
+    return fresh
+
+
+def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
+    """A currently-valid access token. THE accessor every caller uses.
+
+    Called on every request (`HttpClient`'s `token_provider`), so the healthy
+    path is a file read and a float comparison - no network at all.
+    """
+    subdomain = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
+    if not subdomain:
+        raise NotAuthorised(
+            "CSA_ZENDESK_SUBDOMAIN is not set. Set it to the Zendesk subdomain this "
+            "server talks to (the 'example' in example.zendesk.com). There is no default."
+        )
+    client_id = os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "")
+    if not client_id:
+        raise NotAuthorised(
+            "CSA_ZENDESK_MCP_SERVER_IDENTIFIER is not set. Register a public OAuth client in "
+            "Zendesk Admin Center (no secret is needed) and set its id. There is no "
+            "default client id, deliberately: a shared one would pool every "
+            "deployment's rate limit and scope ceiling."
+        )
+    tokens = _store.read()
+    if tokens is None:
+        raise NotAuthorised("no token file. Run `csa-zendesk auth login` first.")
+    if tokens.expires_at - time.time() > REFRESH_MARGIN_SECONDS:
+        return tokens.access_token
+    scopes = tuple(sorted(set(os.environ.get("CSA_ZENDESK_SCOPES", "").split())))
+    try:
+        fresh = refresh(
+            subdomain=subdomain,
+            client_id=client_id,
+            tokens=tokens,
+            requested_scopes=scopes,
+            transport=transport,
+        )
+    except AuthExchangeError as e:
+        # `_post` deliberately surfaces only the HTTP status (never the response
+        # body - the token endpoint's body contains tokens), so this can't say
+        # which of the two live possibilities it was: Zendesk refusing the grant
+        # outright, or the refresh token having simply expired (30 days by
+        # default, with expiration mandatory and not something we can turn off).
+        # Say both, and the fix is the same either way, so a bare "unauthorised"
+        # doesn't send an operator chasing a permissions problem instead.
+        raise NotAuthorised(
+            "Zendesk refused to refresh this token. Either the refresh token has "
+            "expired or was revoked (Zendesk's default lifetime is 30 days of "
+            "inactivity), or Zendesk refused the refresh grant itself - the "
+            "response does not say which. Run `csa-zendesk auth login` again to "
+            "get a new token."
+        ) from e
+    return fresh.access_token
