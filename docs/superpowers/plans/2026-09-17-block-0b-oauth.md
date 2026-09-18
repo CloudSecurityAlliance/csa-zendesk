@@ -450,6 +450,35 @@ git commit -m "feat(auth): PKCE S256 and the authorization URL"
 > the better design, because a fixed port is a port that can be occupied. Record the answer in
 > `analysis/API-SURFACE.md` §7 either way, since it is a fact about the vendor and not about us.
 
+> **Correction 2 (2026-09-18), before execution.** The correction above is superseded on two points
+> by the text of Zendesk's own OAuth client form (now recorded verbatim in `analysis/API-SURFACE.md`
+> §7.1): *"URLs must be absolute (not relative) and use HTTPS, unless they are for localhost or
+> 127.0.0.1."*
+>
+> **1. The URN is not registrable, so there is no out-of-band flow.** `urn:ietf:wg:oauth:2.0:oob` is
+> not an absolute URL and the form rejects it — this is the likely cause of the registration error
+> that blocked this block. Task 3's paste fallback therefore cannot use the URN. It must pass a
+> **registered loopback URI**, let the browser redirect fail to connect, and have the operator copy
+> the `code` parameter out of the address bar. The `_run` sketch below still names the URN in two
+> places; both become `PASTE_REDIRECT`, the first registered candidate URI, and the value sent to the
+> token endpoint must be that same string.
+>
+> **2. Register `127.0.0.1`, not `localhost`** — RFC 8252 §8.3, and because `localhost` on a
+> dual-stack host commonly resolves to `::1`, which never reaches a listener bound to IPv4. This
+> matches what the plan's code already emits, so the code does not change; the earlier correction's
+> registration list does. It becomes exactly:
+>
+> ```
+> http://127.0.0.1:8765/callback
+> http://127.0.0.1:8766/callback
+> http://127.0.0.1:8767/callback
+> ```
+>
+> Task 3's tests assert that every URI the code can emit is a member of that set, so the set is the
+> single source of truth and a drifted port fails a test rather than an authorization.
+>
+> The any-port probe from correction 1 still stands and is still unanswered.
+
 ### Task 3: The callback listener and the paste fallback
 
 **Files:**

@@ -489,6 +489,31 @@ and then 403s every request made with it* — so a typo produces a credential th
 looks valid and works for nothing. Any scope handling must compare requested
 against granted.
 
+### 7.1 Redirect URLs are pre-registered, and the OOB URN is not registrable
+
+The OAuth client form in Admin Center states, verbatim:
+
+> Add the absolute URLs for redirecting users after they authorize access to your app. URLs must be
+> absolute (not relative) and use HTTPS, unless they are for localhost or 127.0.0.1. List each URL on
+> a new line. For example, `http://localhost` or `http://127.0.0.1`
+
+Three facts fall out of that, and they constrain the auth design:
+
+1. **The list is a fixed set of strings.** Consistent with `specs/zendesk-support-oas.yaml:30858`
+   (`redirect_uri` = "an array of the valid redirect URIs for this client"). A dynamically-bound
+   loopback port cannot match unless Zendesk implements RFC 8252's any-port rule — still unprobed.
+2. **`urn:ietf:wg:oauth:2.0:oob` cannot be registered.** It is not an absolute URL, so the form's own
+   validator rejects it. There is therefore **no out-of-band redirect on Zendesk**, and any paste
+   fallback must redirect to a registered loopback URI and have the operator copy `code` out of the
+   browser's address bar after the connection fails.
+3. **Loopback is exempt from the HTTPS requirement**, so no local TLS is needed.
+
+**Use the literal `127.0.0.1`, not `localhost`** — RFC 8252 §8.3. `localhost` resolves through the
+host's resolver, so it can be redirected by `/etc/hosts` or DNS, and on a dual-stack machine it
+commonly resolves to `::1` first, which never reaches a listener bound to IPv4 `127.0.0.1`. Both are
+browser-trusted secure contexts, so nothing is lost by taking the literal. The two forms are **not**
+interchangeable to a string-matching authorization server: send byte-for-byte what was registered.
+
 ---
 
 ## 8. Re-checking this document
