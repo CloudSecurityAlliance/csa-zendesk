@@ -6,8 +6,12 @@ family with no assignment is an error rather than a default, because silently
 defaulting is how an operation ends up built with nobody having decided it
 should be.
 """
+
 from __future__ import annotations
-import csv, sys, collections
+
+import collections
+import csv
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,8 +21,7 @@ BUCKETS = ("now", "later", "never", "blocked")
 def load():
     ops = list(csv.DictReader((ROOT / "analysis/operation-classification.csv").open()))
     fam = {r["family"]: r for r in csv.DictReader((ROOT / "analysis/scope-triage.csv").open())}
-    exc = {(r["method"], r["path"]): r
-           for r in csv.DictReader((ROOT / "analysis/scope-triage-exceptions.csv").open())}
+    exc = {(r["method"], r["path"]): r for r in csv.DictReader((ROOT / "analysis/scope-triage-exceptions.csv").open())}
     return ops, fam, exc
 
 
@@ -39,8 +42,7 @@ def main() -> int:
     if bad:
         print(f"ERROR: unknown bucket(s) {sorted(bad)}", file=sys.stderr)
         return 1
-    unused = sorted((m, p) for (m, p) in exc if not any(
-        o["method"] == m and o["path"] == p for o in ops))
+    unused = sorted((m, p) for (m, p) in exc if not any(o["method"] == m and o["path"] == p for o in ops))
     if unused:
         print(f"ERROR: exceptions match no operation: {unused}", file=sys.stderr)
         return 1
@@ -53,19 +55,23 @@ def main() -> int:
         counts[b] += 1
         if is_exc:
             exceptions_applied.append((b, o["method"], o["path"]))
-    for f, r in fam.items():
+    for r in fam.values():
         fam_counts[r["bucket"]] += 1
 
     total = sum(counts.values())
     print(f"{'bucket':9} {'families':>9} {'operations':>11}   share")
     for b in BUCKETS:
-        print(f"{b:9} {fam_counts[b]:>9} {counts[b]:>11}   {counts[b]/total:6.1%}")
+        print(f"{b:9} {fam_counts[b]:>9} {counts[b]:>11}   {counts[b] / total:6.1%}")
     print(f"{'total':9} {sum(fam_counts.values()):>9} {total:>11}")
     print()
-    print(f"admitted now: {counts['now']} of {total} operations "
-          f"({counts['now']/total:.1%}) across {fam_counts['now']} families")
-    print(f"refused outright: {counts['never']} operations "
-          f"({fam_counts['never']} whole families + {len(exceptions_applied)} exceptions)")
+    print(
+        f"admitted now: {counts['now']} of {total} operations "
+        f"({counts['now'] / total:.1%}) across {fam_counts['now']} families"
+    )
+    print(
+        f"refused outright: {counts['never']} operations "
+        f"({fam_counts['never']} whole families + {len(exceptions_applied)} exceptions)"
+    )
     print()
     print("per-operation exceptions applied:")
     for b, m, p in sorted(exceptions_applied):
