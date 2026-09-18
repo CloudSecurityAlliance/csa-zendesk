@@ -45,6 +45,7 @@ def test_the_authorize_url_carries_every_required_parameter():
     assert q["code_challenge_method"] == ["S256"]
     assert q["state"] == ["st"]
     assert q["scope"] == ["tickets:read hc:read"]
+    assert q["redirect_uri"] == ["http://localhost:1234/callback"]
     assert "client_secret" not in q
 
 
@@ -59,3 +60,21 @@ def test_no_verifier_ever_reaches_the_url():
         state="st",
     )
     assert v not in url
+
+
+def test_redirect_uri_percent_encoding_survives_round_trip():
+    # Stress test: redirect_uri with special characters (+ : / ?) that could be
+    # mangled if something re-parses or normalises the URL. Zendesk string-matches
+    # the exact URI against a pre-registered list, so any normalisation breaks auth.
+    redirect_with_query = "http://localhost:8765/callback?state=abc+def:ghi"
+    url = _pkce.authorize_url(
+        subdomain="example",
+        client_id="cid",
+        redirect_uri=redirect_with_query,
+        scopes=["tickets:read"],
+        challenge="chal",
+        state="st",
+    )
+    parsed = urlparse(url)
+    q = parse_qs(parsed.query)
+    assert q["redirect_uri"] == [redirect_with_query]
