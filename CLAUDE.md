@@ -7,9 +7,36 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 `csa-zendesk` — a Python library (import name `csa_zendesk`) and local stdio MCP server over
 the Zendesk REST API, targeting 100% coverage of what is in scope and reachable.
 
-**Status: research complete, nothing implemented.** There is no `src/` yet. The repository
+**Status: Block 0 complete. Foundations only — one operation, no MCP server, no OAuth.**
+`src/csa_zendesk/` holds `exceptions.py`, `_errors.py`, `_pagination.py`, `_http.py`,
+`backend.py`, `policy.py` and `client.py`; 143 tests at 100% coverage. The repository also
 holds upstream API snapshots, an operation inventory, an anonymised ecosystem survey, live
-experiment results, and the decisions taken so far. **Do not describe any feature as working.**
+experiment results, and the decisions taken so far.
+
+**One backend method exists (`get_ticket`) out of 54 designed tools.** There is no MCP server,
+no tool layer, and no OAuth — those are Block 0b and Block 1. **Do not describe any tool as
+working.**
+
+### Working on the code
+
+Everything runs from a venv; CI gates four things and so should you:
+
+```bash
+.venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing   # 100% required
+.venv/bin/ruff check src tests scripts        # T20 included: no `print` in src/ or tests/
+.venv/bin/ruff format --check src tests       # scripts/ is exempt from format, not from lint
+.venv/bin/mypy                                # strict, over src
+```
+
+The coverage gate is **100%, not 90%** — a gate below the measured state cannot fail.
+`# pragma: no cover` is the explicit hatch, and using it is a decision to write down.
+
+**`FakeBackend` is a first-class implementation of `Backend`, not a mock.** It is what makes
+the offline tier possible, and `tests/test_backend.py` asserts it cannot drift from
+`ApiBackend`: the guard compares the **union** of public methods across the Protocol and both
+implementations, because a guard that walks only the Protocol checks the one set that cannot
+drift. Four guards in this repo were caught comparing a source against itself. When you write
+one, name its independent second source.
 
 Third in the line after [`csa-google-workspace`](https://github.com/CloudSecurityAlliance/csa-google-workspace)
 and [`csa-skilljar`](https://github.com/CloudSecurityAlliance/csa-skilljar), and intended to
@@ -119,6 +146,42 @@ discarded; **never `Field(alias=…)`** on a tool parameter; **`mcp.server.fastm
 exist** (it is `from mcp.server import MCPServer`); sync handlers run on **worker threads**, so
 any non-thread-safe client must be thread-local; **`TypedDict` from `typing_extensions`** below
 Python 3.12; and do not block `initialize` on a network call.
+
+## Python semantics that bit this repo — all verified, all counter-intuitive
+
+Each of these was written into a fix and turned out to be wrong; an implementer caught it by
+running the code. They are recorded because the same instinct will produce the same mistake.
+
+1. **`inspect.signature(cls)` raises `ValueError` on a bare `Exception` subclass** — "no
+   signature found for builtin type". `Exception.__init__` is a C slot wrapper. So a guard
+   that inspects exception constructors must skip classes declaring no `__init__` of their
+   own, and `'__init__' in vars(Exception)` is `True` while
+   `Exception.__init__ is BaseException.__init__` is `False`.
+2. **`raise X from None` does not sever exception chaining.** It sets `__cause__ = None` and
+   `__suppress_context__ = True`, but **`__context__` still points at the original** —
+   `__suppress_context__` only affects *display*. An error tracker that walks `__context__`
+   still reaches it. To truly detach, raise after the `except` block has exited. This mattered
+   here because an httpx exception carries `.request.headers`, i.e. the `Authorization` header.
+3. **`vars(obj)` raises `TypeError` on a `__slots__` class** — there is no `__dict__`. Use
+   `hasattr` for a construct-once sentinel.
+4. **Python 3.12 changed `runtime_checkable` protocol `isinstance` to use
+   `inspect.getattr_static`**, which does not consult `__getattr__`. A class providing methods
+   dynamically satisfies `hasattr` and **fails `isinstance`** — and answers differently on
+   3.10/3.11 than on 3.12/3.13, so it splits a CI matrix. Materialise the methods onto the
+   class if the protocol identity matters.
+5. **`from __future__ import annotations` binds the name `annotations` in the module
+   namespace.** It is neither underscore-prefixed nor a module, so it leaks into any
+   `dir()`-based public-surface check.
+6. **`base64` is not obfuscation.** A credential-leak check that greps for the plaintext and
+   inspects `repr()` will pass while `vars(client)` hands over the same secret one
+   `b64decode` away. Redacting `__repr__` is what makes such a leak invisible to the check
+   most people run.
+
+**And the meta-lesson, which cost the most:** *where you find a guard, test the routes that do
+not go through it.* Four guards here were caught comparing a source against itself, and three
+separate verification passes — mine included — checked `__setattr__` for immutability while
+`__init__` re-invocation silently re-wrote the same state. A protected surface is evidence
+someone anticipated attack there, which makes it the least likely place to find a live one.
 
 ## The public/private line — enforced, not remembered
 
@@ -281,9 +344,14 @@ python3 scripts/survey_tools.py        # re-run the ecosystem survey from the cl
 python3 scripts/extract_config.py      # tenant configuration -> gitignored tenant-config/
 ```
 
-Credentials come from `./.env`. The current one is an **API token**: unscoped, full admin, and
-it bypasses account 2FA. Zendesk deactivates all API tokens on **2027-04-30**, and no account
-can create one after **2026-10-27**. The shipped design authenticates with OAuth.
+Those are **scripts**, and the API token in `./.env` is theirs alone. **The library never reads it**
+([ADR-015](DECISIONS-ADR/ADR-015.md)): `HttpClient` takes a `token_provider` callable and sends a
+`Bearer` header, with no API-token path and no fallback. If you are adding auth to library code and
+reach for `CINO_CSA_ZENDESK`, stop — that is the deleted model.
+
+The script token is unscoped, full admin, and bypasses account 2FA. Zendesk deactivates all API
+tokens on **2027-04-30** and issues no new ones after **2026-10-27**. We chose not to stockpile
+spares before the cutoff, so it is irreplaceable; porting the scripts to OAuth follows Block 0b.
 
 ## Working in this repo
 

@@ -66,7 +66,7 @@ def recoverability(row: dict) -> str:
 
 
 def domain(row: dict) -> str:
-    p, fam = row["path"], row["family"]
+    p = row["path"]
     if row["capability"] == "help_center":
         return "hc"
     if CONFIG.search(p):

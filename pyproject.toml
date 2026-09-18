@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 77, not 68: PEP 639's license-expression support (`license = "Apache-2.0"` above,
+# rather than a classifier or a table) needs setuptools>=77. 68 understated it.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,7 +16,6 @@ keywords = ["zendesk", "mcp", "model-context-protocol", "support", "help-center"
 classifiers = [
   "Development Status :: 1 - Planning",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -44,10 +45,23 @@ where = ["src"]
 [tool.ruff]
 line-length = 120
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+# T20 (flake8-print) is here for one reason: this is a stdio MCP server, so stdout
+# is the protocol channel and a single stray `print` corrupts the session. The
+# runtime guard in tests/test_public_api.py can only observe output at IMPORT time;
+# a `print` inside a function is invisible to it and fires in production instead.
+# Static analysis catches both, which makes this the stronger of the two guards -
+# they are kept together because neither subsumes the other (T20 cannot see a write
+# through `sys.stdout`, which the runtime guard can).
+select = ["E", "F", "W", "I", "B", "UP", "T20"]
 # E702 is deliberately ignored in the sibling repos - one-line `a = ...; b = ...`
 # is house style there. Adopted here for consistency.
 ignore = ["E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# scripts/ are operator-facing CLIs whose entire output contract is stdout. The
+# stdout prohibition binds the PACKAGE, which is what gets imported into an MCP
+# server; it was never meant to bind the tooling around it.
+"scripts/*" = ["T20"]
 
 [tool.mypy]
 files = ["src"]
@@ -56,3 +70,12 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# An unclosed httpx.Client or any other warning becomes a failure instead of
+# silent output a stdio MCP server can't afford to print anyway.
+filterwarnings = ["error"]
+
+[tool.coverage.report]
+# 100, not the 90 this once was: a gate ten points below a measured 100% cannot
+# fail. The one sanctioned hatch is `# pragma: no cover` on a specific line, with
+# a comment there saying why - never lowering this number back down.
+fail_under = 100

@@ -77,7 +77,6 @@ PROBES = [
 def probe(path: str) -> dict:
     url = f"https://{SUB}.zendesk.com{path}"
     req = urllib.request.Request(url, method="GET")
-    auth = urllib.request.HTTPPasswordMgrWithDefaultRealm()
     import base64
     raw = base64.b64encode(f"{EMAIL}/token:{TOKEN}".encode()).decode()
     req.add_header("Authorization", f"Basic {raw}")

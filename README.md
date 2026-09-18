@@ -10,9 +10,15 @@ project_source: github:CloudSecurityAlliance-Internal/CINO-Projects/projects/Clo
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
-> **Status: API surface enumerated. Nothing implemented.** There is no `src/` yet. This
-> repository currently holds the upstream API snapshots, the operation inventory, and the probe
-> findings that will constrain the design. Do not describe any feature below as working.
+> **Status: Block 0 complete — foundations only, one operation end to end.** `src/` now holds
+> the typed error hierarchy, the error parser, the pagination guard, the HTTP client, the
+> `Backend` seam with an offline `FakeBackend`, the fail-closed capability policy, and a thin
+> `ZendeskClient`. One operation — `get_ticket` — reaches through every layer, proven by
+> `tests/test_vertical.py`.
+>
+> **There is no MCP server and no tools yet, and OAuth is not implemented** (Block 0b). Of the
+> 54 tools in the design, **one** backend method exists. Do not describe any tool below as
+> working: the table is the plan, not the state.
 
 ## Scope
 
@@ -117,15 +123,25 @@ include this" rather than "this is broken".
 
 ## Configuration
 
-Credentials come from `./.env`, which is gitignored:
+**The library authenticates by OAuth and by nothing else** ([ADR-015](DECISIONS-ADR/ADR-015.md)).
+`HttpClient` takes a `token_provider` callable and sends a `Bearer` header; there is no API-token
+code path, no fallback, and no environment variable the library reads. A fallback that silently
+activates when OAuth is misconfigured turns an auth failure into something that reads like a
+permissions failure, which is the confusion the 401 handling goes out of its way to prevent.
+
+The variables below are for the **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`,
+`probe_families.py` — which refresh `analysis/` and ship in no package. They come from `./.env`,
+which is gitignored:
 
 | Variable | What |
 |---|---|
 | `CINO_CSA_ZENDESK` | API token (basic auth as `EMAIL/token:TOKEN`) |
 | `CINO_CSA_ZENDESK_EMAIL` | The account the token is paired with |
 
-The API token is a **stopgap**. It is unscoped, carries full admin rights, bypasses account 2FA,
-and Zendesk retires it on 2027-04-30. The shipped design authenticates with OAuth.
+That token is unscoped, carries full admin rights and bypasses account 2FA. Zendesk stops issuing
+new ones on **2026-10-27** and retires all of them on **2027-04-30**; we deliberately did not
+stockpile any before the cutoff ([WAITING-FOR-002](WAITING-FOR/WAITING-FOR-002.md) in the Block 0
+branch tracks the consequence). Porting the scripts to OAuth follows Block 0b.
 
 ```bash
 set -a; . ./.env; set +a

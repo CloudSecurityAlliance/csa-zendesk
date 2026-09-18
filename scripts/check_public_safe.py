@@ -35,7 +35,6 @@ from __future__ import annotations
 import pathlib
 import re
 import subprocess
-import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRIVATE_TERMS = ROOT / "tenant-config/private-terms.txt"
@@ -149,14 +148,19 @@ def main() -> int:
                 if label in seen:
                     continue
                 seen.add(label)
-                n = sum(1 for l, _, _ in items if l == label)
+                n = sum(1 for lbl, _, _ in items if lbl == label)
                 print(f"      {label} x{n}  (first at line {line}: {snip!r})")
         print("\nThese identify a tenant or a third party. Keep them out of the public repo.")
         return 1
 
     print(f"OK - {len(files)} tracked files, nothing tenant-specific found")
     print(f"coverage: {coverage}")
-    return 0 if have_private else 0
+    # A pass either way: STRUCTURAL ONLY (no private term list present) is a
+    # deliberately reduced-coverage PASS, not a failure - CI runs this way, since
+    # the gitignored tenant term list is absent there by design (see the `coverage`
+    # message above, which says so rather than reporting a clean bill of health it
+    # cannot support).
+    return 0
 
 
 if __name__ == "__main__":

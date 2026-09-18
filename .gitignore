@@ -33,7 +33,10 @@ experiments/**/*_response.json
 # EVERYTHING here is private, the summary included. An earlier version tracked
 # tenant-config/SUMMARY.md on the grounds that counts and shapes are harmless; that
 # was the wrong line. The right line is whose facts these are, and these are CSA's.
-tenant-config/
+# No trailing slash, deliberately: a worktree reaches this directory through a
+# SYMLINK, and `tenant-config/` does not match a symlink - so the pattern that
+# looks more precise is the one that leaves the private extract stageable.
+tenant-config
 
 # --- candidate dependency clones -------------------------------------------
 # Existing Zendesk client libraries, cloned for build-vs-adopt evaluation.
