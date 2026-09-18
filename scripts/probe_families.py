@@ -15,10 +15,11 @@ import time
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import zd  # noqa: E402  - the single auth chokepoint for scripts/ (ADR-015)
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SUB = os.environ.get("ZENDESK_SUBDOMAIN", "")
-EMAIL = os.environ.get("CINO_CSA_ZENDESK_EMAIL", "")
-TOKEN = os.environ.get("CINO_CSA_ZENDESK", "")
 
 # capability, family, path. One cheap representative GET each.
 PROBES = [
@@ -77,10 +78,7 @@ PROBES = [
 def probe(path: str) -> dict:
     url = f"https://{SUB}.zendesk.com{path}"
     req = urllib.request.Request(url, method="GET")
-    import base64
-    raw = base64.b64encode(f"{EMAIL}/token:{TOKEN}".encode()).decode()
-    req.add_header("Authorization", f"Basic {raw}")
-    req.add_header("Accept", "application/json")
+    zd.authorize(req)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             body = r.read()
@@ -123,8 +121,7 @@ def probe(path: str) -> dict:
 
 
 def main() -> int:
-    missing = [n for n, v in (("CINO_CSA_ZENDESK", TOKEN),
-                              ("CINO_CSA_ZENDESK_EMAIL", EMAIL)) if not v]
+    missing = zd.missing_credentials()
     if missing:
         # Named individually: "credentials not set" sends someone hunting for the
         # wrong one. Both live in ./.env; neither has a default worth guessing.

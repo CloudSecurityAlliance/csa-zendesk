@@ -33,10 +33,41 @@ def _auth() -> str:
     return base64.b64encode(f"{email}/token:{token}".encode()).decode()
 
 
-def call(method: str, path: str, body: dict | None = None):
-    req = urllib.request.Request(f"https://{_require_subdomain()}.zendesk.com{path}", method=method)
+def missing_credentials() -> list[str]:
+    """Credential variables that are not set, named individually.
+
+    A preflight check so a script can exit cleanly instead of failing on the
+    first request. Named individually because "credentials not set" sends someone
+    hunting for the wrong one.
+
+    Lives here with `authorize` so both move together when `scripts/` goes to
+    OAuth: the names this reports and the header that function builds are the
+    same decision, and they used to be able to disagree.
+    """
+    return [n for n in ("CINO_CSA_ZENDESK", "CINO_CSA_ZENDESK_EMAIL") if not os.environ.get(n)]
+
+
+def authorize(req: urllib.request.Request) -> None:
+    """Attach credentials to a request. THE auth chokepoint for every script.
+
+    Every script in this directory goes through here, so moving `scripts/` to
+    OAuth is a change to this one function rather than a hunt through five files
+    (ADR-015). It used to be three implementations: this one, plus copies in
+    `ui_actions.py` and `probe_families.py` that drifted independently.
+
+    This is API-token auth and it is on death row - Zendesk issues no new tokens
+    after 2026-10-27 and honours none after 2027-04-30. It stays only until
+    Block 0b exists to replace it, at which point the body of this function
+    becomes `req.add_header("Authorization", "Bearer " + access_token())` and
+    nothing else in `scripts/` changes.
+    """
     req.add_header("Authorization", f"Basic {_auth()}")
     req.add_header("Accept", "application/json")
+
+
+def call(method: str, path: str, body: dict | None = None):
+    req = urllib.request.Request(f"https://{_require_subdomain()}.zendesk.com{path}", method=method)
+    authorize(req)
     data = None
     if body is not None:
         data = json.dumps(body).encode()

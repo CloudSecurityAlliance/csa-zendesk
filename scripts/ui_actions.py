@@ -15,7 +15,6 @@ the names. See .gitignore.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import pathlib
@@ -23,10 +22,11 @@ import re
 import sys
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import zd  # noqa: E402  - the single auth chokepoint for scripts/ (ADR-015)
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SUB = os.environ.get("ZENDESK_SUBDOMAIN", "")
-TOKEN = os.environ.get("CINO_CSA_ZENDESK", "")
-EMAIL = os.environ.get("CINO_CSA_ZENDESK_EMAIL", "")
 
 # Subjects whose choice lists name real people or internal groups. Counts only.
 PEOPLE = {"assignee_id", "follower", "group_id", "requester_id", "submitter_id",
@@ -49,9 +49,7 @@ ENDPOINTS = {
 
 def get(path: str) -> dict:
     req = urllib.request.Request(f"https://{SUB}.zendesk.com{path}", method="GET")
-    raw = base64.b64encode(f"{EMAIL}/token:{TOKEN}".encode()).decode()
-    req.add_header("Authorization", f"Basic {raw}")
-    req.add_header("Accept", "application/json")
+    zd.authorize(req)
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
 
@@ -86,8 +84,7 @@ def scrub(item: dict) -> dict:
 
 
 def main() -> int:
-    missing = [n for n, v in (("CINO_CSA_ZENDESK", TOKEN),
-                              ("CINO_CSA_ZENDESK_EMAIL", EMAIL)) if not v]
+    missing = zd.missing_credentials()
     if missing:
         print(f"not set: {', '.join(missing)}", file=sys.stderr); return 1
 
