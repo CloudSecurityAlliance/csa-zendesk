@@ -159,6 +159,16 @@ Registered ceiling: `read tickets:write ticket_attachments:write ticket_views:wr
 is deliberately absent — it is the one scope that would break the invariant that this tool can do
 nothing in Zendesk that its operator could not already do.
 
+### Getting a token
+
+`csa-zendesk` (`src/csa_zendesk/cli.py`) is a small console script, a door into OAuth rather than
+a product: `auth login` runs the flow once and persists the result — opening a browser, or
+printing a URL to paste back with `--paste` on a remote shell with no browser of its own —
+`auth status` reports whether a token file exists, its path, its expiry and its granted scope
+without a network call, and `auth whoami` confirms live which Zendesk identity it resolves to. All
+three print human-facing text to stderr except `whoami`'s and `status`'s own answer, which goes to
+stdout since either might reasonably be piped; none of the three can print the token itself.
+
 The **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`, `probe_families.py`,
 `probe_access.py` — which refresh `analysis/` and ship in no package, authenticate the same way
 as everything else: **OAuth, through the token file above** ([ADR-009](DECISIONS-ADR/ADR-009.md)),
@@ -172,13 +182,10 @@ own call.
 ```bash
 export CSA_ZENDESK_SUBDOMAIN=<subdomain>
 export CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id>
+csa-zendesk auth login               # once, per operator - opens a browser
 python3 scripts/inventory.py         # 882 operations
 python3 scripts/probe_families.py    # 43/49 families reachable (as last measured, under the API-token path)
 ```
-
-`scripts/zd.py` also still reads the request subdomain from the separate, unprefixed
-`ZENDESK_SUBDOMAIN` — a leftover from before the OAuth port. Both variables currently need
-setting, to the same value, for a script to run past its first request.
 
 ## License
 

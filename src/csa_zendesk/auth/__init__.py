@@ -30,7 +30,7 @@ import httpx
 from ._callback import PASTE_REDIRECT, CallbackError, Listener, paste_fallback
 from ._flow import AuthExchangeError, NotAuthorised, ScopeError, access_token, exchange_code
 from ._pkce import authorize_url, challenge_for, new_verifier
-from ._store import TokenFileError, Tokens, clear, token_path, write
+from ._store import TokenFileError, Tokens, clear, read, token_path, write
 from .whoami import NotAuthenticated, whoami
 
 __all__ = [
@@ -44,6 +44,7 @@ __all__ = [
     "access_token",
     "clear",
     "login",
+    "read",
     "token_path",
     "whoami",
 ]

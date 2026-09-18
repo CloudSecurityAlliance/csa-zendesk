@@ -361,19 +361,17 @@ python3 scripts/extract_config.py      # tenant configuration -> gitignored tena
 ```
 
 The environment above carries **no credential** — the tokens live in the token file
-([ADR-009](DECISIONS-ADR/ADR-009.md)), populated once per operator by the OAuth login flow
-(`csa_zendesk.auth.login`). `./.env` is not a credential source for anything in this repo
-([ADR-015](DECISIONS-ADR/ADR-015.md)): the **scripts** under `scripts/` —
+([ADR-009](DECISIONS-ADR/ADR-009.md)), populated once per operator by `csa-zendesk auth login`
+(the console script; `src/csa_zendesk/cli.py`). `csa-zendesk auth status` reports whether a token
+file exists, its expiry and its granted scope, without a network call; `csa-zendesk auth whoami`
+confirms the identity it resolves to, live. `./.env` is not a credential source for anything in
+this repo ([ADR-015](DECISIONS-ADR/ADR-015.md)): the **scripts** under `scripts/` —
 `zd.py`, `ui_actions.py`, `probe_families.py`, `probe_access.py` — authenticate through the same
-token file as the library, via `zd.authorize()`. There is no API-token path and no fallback
-anywhere. If you are adding auth to library or script code and reach for `CINO_CSA_ZENDESK`, stop
-— that is the deleted model. An operator's old API token may still physically sit in their local
-`./.env`; nothing in this repo reads it, and removing it is the operator's own call.
-
-**Known rough edge:** `scripts/zd.py` still reads the request subdomain from the unprefixed
-`ZENDESK_SUBDOMAIN`, separately from the OAuth layer's `CSA_ZENDESK_SUBDOMAIN` above — a leftover
-the scripts' OAuth port did not catch. Both must currently be set, to the same value, for a script
-to run past its first request. Not yet filed as a tracked `TODO.md` item.
+token file and the same `CSA_ZENDESK_SUBDOMAIN`, via `zd.authorize()`. There is no API-token path
+and no fallback anywhere. If you are adding auth to library or script code and reach for
+`CINO_CSA_ZENDESK`, stop — that is the deleted model. An operator's old API token may still
+physically sit in their local `./.env`; nothing in this repo reads it, and removing it is the
+operator's own call.
 
 ## Working in this repo
 

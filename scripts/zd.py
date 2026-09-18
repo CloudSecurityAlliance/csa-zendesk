@@ -14,12 +14,12 @@ import sys
 import urllib.error
 import urllib.request
 
-SUB = os.environ.get("ZENDESK_SUBDOMAIN", "")
+SUB = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
 
 
 def _require_subdomain() -> str:
     if not SUB:
-        raise SystemExit("set ZENDESK_SUBDOMAIN (no default: a hardcoded tenant is "
+        raise SystemExit("set CSA_ZENDESK_SUBDOMAIN (no default: a hardcoded tenant is "
                          "both a leak and a footgun)")
     return SUB
 

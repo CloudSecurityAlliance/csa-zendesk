@@ -26,6 +26,11 @@ classifiers = [
 # for sync now and async later without a second dependency.
 dependencies = ["httpx>=0.27"]
 
+# A door into OAuth, not a product: `auth login` / `auth whoami` / `auth status`
+# only. See `src/csa_zendesk/cli.py`.
+[project.scripts]
+csa-zendesk = "csa_zendesk.cli:main"
+
 [project.optional-dependencies]
 # mcp is NOT optional in the sibling project csa-skilljar - it was demoted to a
 # required dependency there because an optional extra meant users installed the

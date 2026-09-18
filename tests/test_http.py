@@ -198,7 +198,7 @@ def test_a_transport_level_failure_becomes_a_typed_error():
 
 
 def test_subdomain_is_required():
-    with pytest.raises(ValueError, match="ZENDESK_SUBDOMAIN"):
+    with pytest.raises(ValueError, match="CSA_ZENDESK_SUBDOMAIN"):
         HttpClient(subdomain="", token_provider=lambda: CANARY)
 
 

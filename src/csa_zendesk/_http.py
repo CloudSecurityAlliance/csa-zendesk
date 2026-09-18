@@ -143,7 +143,7 @@ class HttpClient:
         """
         if not subdomain:
             raise ValueError(
-                "a Zendesk subdomain is required; set ZENDESK_SUBDOMAIN. There is no "
+                "a Zendesk subdomain is required; set CSA_ZENDESK_SUBDOMAIN. There is no "
                 "default, deliberately: a hardcoded tenant is both a leak and a footgun."
             )
         if not callable(token_provider):
