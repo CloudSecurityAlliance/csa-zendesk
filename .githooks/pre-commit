@@ -1,14 +1,35 @@
 #!/bin/sh
-# Refuse a commit that would put tenant-specific material in this public repo.
+# Refuse a commit that would put tenant-specific material in this public repo, or
+# that would leave a document asserting a number its own data contradicts.
 # Enable with:  git config core.hooksPath .githooks
 #
 # This runs against tracked files, so it catches content already staged. It is a
 # backstop, not the control - the control is knowing the line. See
 # scripts/check_public_safe.py for what the line is and why.
+#
+# The two count guards are here rather than in CI because `main` has no CI yet.
+# Move them when it does; do not drop them.
 python3 scripts/check_public_safe.py || {
     echo
     echo "pre-commit: refused. Fix the findings, or move the material to the"
     echo "private tenant repo. To override for a deliberate exception:"
     echo "    git commit --no-verify"
+    exit 1
+}
+
+# A document that states a number about its own contents should have that number
+# checked, not proofread. check_spec.py guards the design spec; check_counts.py
+# guards README against the analysis CSVs it draws from.
+python3 scripts/check_spec.py || {
+    echo
+    echo "pre-commit: refused - the design spec contradicts itself."
+    exit 1
+}
+
+python3 scripts/check_counts.py || {
+    echo
+    echo "pre-commit: refused - README states a count that analysis/ contradicts."
+    echo "The numbers are derived, not authored: fix the prose, not the CSVs,"
+    echo "unless the inventory genuinely changed."
     exit 1
 }
