@@ -133,6 +133,32 @@ code path, no fallback, and no environment variable the library reads. A fallbac
 activates when OAuth is misconfigured turns an auth failure into something that reads like a
 permissions failure, which is the confusion the 401 handling goes out of its way to prevent.
 
+### OAuth client
+
+Registered in Zendesk Admin Center (**Apps and integrations › APIs › OAuth clients**) as
+`csa-zendesk`, 2026-09-18. Redirect URIs are the three loopback candidates the callback listener
+binds, in order; the client's scope list is a **ceiling**, and what a token actually receives is
+whatever `CSA_ZENDESK_SCOPES` requests within it.
+
+| Local variable | Zendesk's own label | What it is |
+|---|---|---|
+| `CSA_ZENDESK_SUBDOMAIN` | Subdomain | the `<subdomain>` in `https://<subdomain>.zendesk.com`, with no scheme and no suffix |
+| `CSA_ZENDESK_MCP_SERVER_IDENTIFIER` | **Identifier** | the OAuth `client_id` — `csa-zendesk`. Not a secret |
+| `CSA_ZENDESK_MCP_SERVER_SECRET` | **Secret** | issued to every client regardless of kind. **Retained, unused** — see [API-SURFACE §7.3](analysis/API-SURFACE.md) |
+| `CSA_ZENDESK_SCOPES` | scope (request) | space-separated, defaults to `read`. Must be a subset of the ceiling |
+| `CSA_ZENDESK_TOKEN_FILE` | — | override for the `0600` token file ([ADR-009](DECISIONS-ADR/ADR-009.md)) |
+
+**Why the names are long.** They are local names, not vendor names, and they are explicit on purpose:
+one machine runs many CSA projects against many vendors, so a variable has to say *which project*,
+*which role*, and *which vendor* without context. Where a name maps to something an operator reads
+off a vendor screen, it takes the vendor's own label for the last segment — Zendesk calls the client
+id the **Identifier**, so the variable does too, and nobody has to translate while looking at the
+form.
+
+Registered ceiling: `read tickets:write ticket_attachments:write ticket_views:write`. `impersonate`
+is deliberately absent — it is the one scope that would break the invariant that this tool can do
+nothing in Zendesk that its operator could not already do.
+
 The variables below are for the **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`,
 `probe_families.py` — which refresh `analysis/` and ship in no package. They come from `./.env`,
 which is gitignored:
