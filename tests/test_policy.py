@@ -49,10 +49,6 @@ def test_the_default_profile_holds_only_reversible_capabilities():
         pol.TICKET_REPLY,
         pol.TICKET_SOLVE,
         pol.TICKET_CLOSE,
-        pol.TICKET_PURGE,
-        pol.PEOPLE_MERGE,
-        pol.PEOPLE_SUSPEND,
-        pol.PEOPLE_PURGE,
         pol.RAW_READ,
         pol.RAW_WRITE,
         pol.BULK,
@@ -60,8 +56,8 @@ def test_the_default_profile_holds_only_reversible_capabilities():
         assert irreversible not in default, irreversible
 
 
-def test_no_profile_grants_purge_close_merge_or_raw():
-    never = {pol.TICKET_CLOSE, pol.TICKET_PURGE, pol.PEOPLE_PURGE, pol.PEOPLE_MERGE, pol.RAW_READ, pol.RAW_WRITE}
+def test_no_profile_grants_close_or_raw():
+    never = {pol.TICKET_CLOSE, pol.RAW_READ, pol.RAW_WRITE}
     for name, caps in pol.PROFILES.items():
         assert not (caps & never), f"profile {name!r} grants {sorted(caps & never)}"
 
@@ -377,3 +373,17 @@ def test_an_unpickled_policybackends_policy_property_is_also_a_typed_refusal():
     unpickled = pickle.loads(pickle.dumps(pb))
     with pytest.raises(exc.PolicyError, match="unpickled"):
         unpickled.policy  # noqa: B018
+
+
+def test_the_refused_operations_have_no_capability_at_all():
+    # analysis/scope-triage-exceptions.csv refuses purge, the two merges and
+    # mark_as_spam outright. They must not be grantable.
+    for gone in ("ticket.purge", "people.purge", "people.merge", "people.suspend"):
+        assert gone not in pol.ALL_CAPABILITIES
+
+
+def test_no_profile_grants_a_reach_capability():
+    # DEC-015: reach carries an operator switch SEPARATE from the capability
+    # profile. A profile that grants ticket.reply makes the switch decorative.
+    for name, caps in pol.PROFILES.items():
+        assert pol.TICKET_REPLY not in caps, f"profile {name!r} grants reach"
