@@ -50,3 +50,14 @@ Resolved when Block 0b ships and an OAuth flow has authenticated against the liv
 then the API tokens minted under action 1 are the whole margin.
 Resolved when Block 0b ships and an OAuth flow has authenticated against the live account. The
 research scripts are ported to OAuth as a follow-on, not as a precondition.
+
+**Amendment (2026-09-18):** still **Open** — not resolved by this note. What Block 0b has built:
+the full OAuth flow (public client, PKCE S256, the localhost-listener callback with a paste
+fallback, the token file and its refresh, `whoami`), the reactive refresh-on-`invalid_token` path,
+and the three research scripts (`zd.py`, `ui_actions.py`, `probe_families.py`) ported to
+authenticate the same way. All of it is unit-tested against a mock transport. What remains: **no
+run of any of this has yet gone against the live Zendesk account.** The token file has never been
+populated by a real authorization, because that step mints a real credential against a production
+tenant and is deliberately held back for a human at a browser rather than done by an agent. The
+only outstanding step to close this item is that human-performed live login — after which this
+entry should be marked Resolved with the date it happened, not before.

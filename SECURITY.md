@@ -38,14 +38,11 @@ default, and applied at the boundary rather than per-tool.
 
 ## Credential exposure
 
-**Today's development credential is the worst case**: a Zendesk **API token** that is
-unscoped, carries full administrator rights across every endpoint, and **bypasses the
-two-factor authentication enabled on the account**. It lives in a gitignored `./.env`.
-
-This is a deliberate, temporary trade for exploration speed, and it is why every probing script
-in `scripts/` issues **GET requests only**.
-
-**The shipped design authenticates with OAuth**, for reasons beyond the deprecation:
+**The shipped design authenticates with OAuth, and by nothing else**
+([ADR-015](DECISIONS-ADR/ADR-015.md)). No credential lives in the environment or in `./.env` —
+the tokens live in a token file, mode `0600`, holding a credential and nothing else
+([ADR-009](DECISIONS-ADR/ADR-009.md)). Reasons this shape was chosen over `client_credentials`,
+beyond the coming deprecation:
 
 - Zendesk offers **54 granular scopes**, so a deployment can be narrowed to what it needs.
 - Per-operator `authorization_code` means writes carry the operator's identity — their name on a
@@ -55,8 +52,15 @@ in `scripts/` issues **GET requests only**.
   existing tokens stop working.
 
 **Never**: interpolate a credential into an error message, a log line, or a `__repr__`; commit
-`.env`; or hardcode a tenant subdomain (it is both a leak and a footgun — `scripts/zd.py`
-refuses to run without `ZENDESK_SUBDOMAIN`).
+the token file or a copy of it; or hardcode a tenant subdomain (it is both a leak and a footgun
+— `scripts/zd.py` refuses to run without a subdomain set).
+
+**Historical note.** Early exploration, before OAuth existed, ran on an unscoped Zendesk API
+token in a gitignored `./.env`, which bypassed the account's two-factor authentication — a
+deliberate, temporary trade for exploration speed, compensated for by a GET-only discipline in
+every probing script. That path was removed once OAuth shipped (Block 0b, ADR-015): no code in
+this repository reads `./.env` any more. An operator's old token may still physically sit in a
+local copy of that file; nothing here reads it, and removing it is the operator's own call.
 
 ## Authority: scopes are not a policy
 
@@ -121,7 +125,7 @@ reduced coverage rather than a false pass when the private list is absent, and
 
 | Gap | Status |
 |---|---|
-| Development credential is unscoped admin and bypasses 2FA | Accepted for exploration; GET-only discipline compensates. OAuth is the shipped path. |
+| ~~Development credential is unscoped admin and bypasses 2FA~~ | **Closed, Block 0b.** OAuth shipped and the API-token path was removed everywhere, including `scripts/` — see the historical note above. |
 | `comment.public` default unverified | `TODO.md` C4 — the highest-value unknown, and cheap to resolve |
 | Prompt-injection controls not built | `TODO.md` A4; the design must not proceed far without settling it |
 | No CI gates yet | The repository is public before it meets the CSA public-repo standard — lint, type-check, test matrix, coverage floor and security scan are owed |

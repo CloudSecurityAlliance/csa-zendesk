@@ -159,25 +159,26 @@ Registered ceiling: `read tickets:write ticket_attachments:write ticket_views:wr
 is deliberately absent — it is the one scope that would break the invariant that this tool can do
 nothing in Zendesk that its operator could not already do.
 
-The variables below are for the **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`,
-`probe_families.py` — which refresh `analysis/` and ship in no package. They come from `./.env`,
-which is gitignored:
-
-| Variable | What |
-|---|---|
-| `CINO_CSA_ZENDESK` | API token (basic auth as `EMAIL/token:TOKEN`) |
-| `CINO_CSA_ZENDESK_EMAIL` | The account the token is paired with |
-
-That token is unscoped, carries full admin rights and bypasses account 2FA. Zendesk stops issuing
-new ones on **2026-10-27** and retires all of them on **2027-04-30**; we deliberately did not
-stockpile any before the cutoff ([WAITING-FOR-002](WAITING-FOR/WAITING-FOR-002.md) in the Block 0
-branch tracks the consequence). Porting the scripts to OAuth follows Block 0b.
+The **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`, `probe_families.py`,
+`probe_access.py` — which refresh `analysis/` and ship in no package, authenticate the same way
+as everything else: **OAuth, through the token file above** ([ADR-009](DECISIONS-ADR/ADR-009.md)),
+using the same `CSA_ZENDESK_SUBDOMAIN` and `CSA_ZENDESK_MCP_SERVER_IDENTIFIER` variables. `./.env`
+is **not a credential source for anything in this repo** ([ADR-015](DECISIONS-ADR/ADR-015.md)) —
+the interim API-token path (`CINO_CSA_ZENDESK` + `CINO_CSA_ZENDESK_EMAIL`, basic auth as
+`EMAIL/token:TOKEN`) was removed once the scripts were ported off it. An operator's old token may
+still physically sit in a local `./.env`; nothing here reads it, and removing it is the operator's
+own call.
 
 ```bash
-set -a; . ./.env; set +a
+export CSA_ZENDESK_SUBDOMAIN=<subdomain>
+export CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id>
 python3 scripts/inventory.py         # 882 operations
-python3 scripts/probe_families.py    # 43/49 families reachable
+python3 scripts/probe_families.py    # 43/49 families reachable (as last measured, under the API-token path)
 ```
+
+`scripts/zd.py` also still reads the request subdomain from the separate, unprefixed
+`ZENDESK_SUBDOMAIN` — a leftover from before the OAuth port. Both variables currently need
+setting, to the same value, for a script to run past its first request.
 
 ## License
 
