@@ -7,9 +7,10 @@ interesting part, and urllib raises on 4xx/5xx by default, which throws it away.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
+import pathlib
+import sys
 import urllib.error
 import urllib.request
 
@@ -23,45 +24,24 @@ def _require_subdomain() -> str:
     return SUB
 
 
-def _auth() -> str:
-    token = os.environ.get("CINO_CSA_ZENDESK", "")
-    email = os.environ.get("CINO_CSA_ZENDESK_EMAIL", "")
-    missing = [n for n, v in (("CINO_CSA_ZENDESK", token),
-                              ("CINO_CSA_ZENDESK_EMAIL", email)) if not v]
-    if missing:
-        raise SystemExit(f"not set: {', '.join(missing)}")
-    return base64.b64encode(f"{email}/token:{token}".encode()).decode()
-
-
 def missing_credentials() -> list[str]:
-    """Credential variables that are not set, named individually.
-
-    A preflight check so a script can exit cleanly instead of failing on the
-    first request. Named individually because "credentials not set" sends someone
-    hunting for the wrong one.
-
-    Lives here with `authorize` so both move together when `scripts/` goes to
-    OAuth: the names this reports and the header that function builds are the
-    same decision, and they used to be able to disagree.
-    """
-    return [n for n in ("CINO_CSA_ZENDESK", "CINO_CSA_ZENDESK_EMAIL") if not os.environ.get(n)]
+    """Configuration that is not set. OAuth needs a subdomain and a client id;
+    the tokens themselves live in the token file, not the environment."""
+    return [n for n in ("CSA_ZENDESK_SUBDOMAIN", "CSA_ZENDESK_MCP_SERVER_IDENTIFIER") if not os.environ.get(n)]
 
 
 def authorize(req: urllib.request.Request) -> None:
     """Attach credentials to a request. THE auth chokepoint for every script.
 
-    Every script in this directory goes through here, so moving `scripts/` to
-    OAuth is a change to this one function rather than a hunt through five files
-    (ADR-015). It used to be three implementations: this one, plus copies in
-    `ui_actions.py` and `probe_families.py` that drifted independently.
-
-    This is API-token auth and it is on death row - Zendesk issues no new tokens
-    after 2026-10-27 and honours none after 2027-04-30. It stays only until
-    Block 0b exists to replace it, at which point the body of this function
-    becomes `req.add_header("Authorization", "Bearer " + access_token())` and
-    nothing else in `scripts/` changes.
+    Scripts authenticate exactly as the library does (ADR-015): same token file,
+    same refresh, same failure modes. That is the point - the probes are the first
+    consumer of this flow, so if it is wrong here we find out before a tool
+    depends on it.
     """
-    req.add_header("Authorization", f"Basic {_auth()}")
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+    from csa_zendesk.auth import access_token
+
+    req.add_header("Authorization", f"Bearer {access_token()}")
     req.add_header("Accept", "application/json")
 
 
