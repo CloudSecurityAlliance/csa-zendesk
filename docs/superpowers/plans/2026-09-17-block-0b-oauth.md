@@ -423,6 +423,33 @@ git commit -m "feat(auth): PKCE S256 and the authorization URL"
 
 ---
 
+> **Correction (2026-09-18), before execution.** Task 3 as written binds **port 0** — a different
+> loopback port every run. `specs/zendesk-support-oas.yaml:30858` defines an OAuth client's
+> `redirect_uri` as *"an array of the valid redirect URIs for this client"*, i.e. a **pre-registered
+> list**. A dynamic port cannot match a pre-registered URI unless Zendesk implements RFC 8252's
+> any-port loopback rule for native apps, and **we have not probed whether it does** — this repo's
+> own standard is that an unprobed claim is a defect, not a fact.
+>
+> So `Listener` takes an ordered list of **candidate ports** and binds the first one free, rather than
+> binding 0. The operator registers those exact URIs plus the out-of-band URN, and the paste fallback
+> covers both the remote-shell case and the case where every candidate port is occupied:
+>
+> ```
+> http://localhost:8765/callback
+> http://localhost:8766/callback
+> http://localhost:8767/callback
+> urn:ietf:wg:oauth:2.0:oob
+> ```
+>
+> `127.0.0.1` and `localhost` are **not** interchangeable to a string-matching authorization server —
+> register whichever form the code sends, and send exactly what was registered. The plan's current
+> code emits `http://127.0.0.1:{port}/callback`; the registration above uses `localhost`, so one of
+> them must change and the tests must assert which.
+>
+> **Probe this before Task 3.** If Zendesk does honour any-port loopback, revert to binding 0 — it is
+> the better design, because a fixed port is a port that can be occupied. Record the answer in
+> `analysis/API-SURFACE.md` §7 either way, since it is a fact about the vendor and not about us.
+
 ### Task 3: The callback listener and the paste fallback
 
 **Files:**
