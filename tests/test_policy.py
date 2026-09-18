@@ -456,3 +456,56 @@ def test_get_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(mon
     monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
     pb = wrapped(tickets={44821: {"id": 44821}})
     assert pb.get_ticket(ticket_id=44821) == {"ticket": {"id": 44821}}
+
+
+def test_dispatch_fails_closed_when_the_read_allowlist_is_entirely_unset(monkeypatch):
+    # Fix round 1, finding 1: tests/conftest.py's autouse fixture defaults both
+    # allowlists to "*" for every OTHER test in this suite, so the fail-closed-
+    # on-unset behaviour was exercised at module level only (test_scope.py,
+    # against a synthetic variable name) and never through a REAL dispatched
+    # call. This is the one test that opts out of the default, to prove the
+    # thing that actually matters: an allowlist nobody configured at all - not
+    # a narrow one, not "*" - reaches _dispatch through a genuine
+    # PolicyBackend.get_ticket call and refuses, naming the variable an
+    # operator would set. Without this, a future "fix" that made
+    # assert_subject_permitted silently pass on an unset variable would keep
+    # the suite green while inverting the default from nothing-permitted to
+    # everything-permitted.
+    monkeypatch.delenv("CSA_ZD_ALLOWLIST_READ", raising=False)
+    monkeypatch.delenv("CSA_ZD_ALLOWLIST_WRITE", raising=False)
+    pb = wrapped()
+    with pytest.raises(exc.PolicyError, match="CSA_ZD_ALLOWLIST_READ"):
+        pb.get_ticket(ticket_id=1)
+
+
+# --- fix round 1, finding 2: the tool's own constraint enforced AT THE SEAM ----
+
+
+def test_a_tools_check_is_enforced_by_dispatch_itself_not_only_unit_tested(monkeypatch):
+    # ADR-016 / this block's central claim: "the constraint is enforced at the
+    # seam, not in the tool... PolicyBackend refuses the call." test_tools.py
+    # proves ToolSpec.check functions reject the right kwargs when called
+    # directly - that is a unit test of a function, not proof that _dispatch
+    # is the thing doing the refusing. This installs a fake tool with a real
+    # constraint, a fake gate, and a fake materialised method (the same
+    # technique the capability- and reach-wiring tests above use) and proves
+    # _dispatch calls spec.check(kwargs) itself: the malformed call is
+    # refused, and the well-formed one is not.
+    def reject_priority(kw: dict) -> None:
+        if "priority" in kw:
+            raise exc.PolicyError("this fake tool does not accept priority")
+
+    monkeypatch.setitem(
+        pol.tools.TOOLS, "fake_constrained", pol.tools.ToolSpec(capability=pol.TICKET_WRITE, check=reject_priority)
+    )
+    monkeypatch.setitem(pol._GATES, "fake_constrained", pol.TICKET_WRITE)
+    monkeypatch.setattr(pol.PolicyBackend, "fake_constrained", pol._make_gated("fake_constrained"), raising=False)
+
+    class BackendWithFakeConstrained(FakeBackend):
+        def fake_constrained(self, **kwargs: object) -> dict:
+            return {"ok": True, **kwargs}
+
+    pb = pol.PolicyBackend(BackendWithFakeConstrained(), pol.Policy(frozenset({pol.TICKET_WRITE})))
+    assert pb.fake_constrained(subject="x") == {"ok": True, "subject": "x"}
+    with pytest.raises(exc.PolicyError, match="priority"):
+        pb.fake_constrained(priority="high")

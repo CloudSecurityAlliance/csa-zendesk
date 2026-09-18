@@ -324,19 +324,24 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     capability, never the arguments - they may carry ticket content) or
     delegates to the real backend method.
 
-    The three controls fire in this order - capability, then scope, then reach
-    - so the most specific true refusal wins: a caller missing the capability
-    learns that first regardless of scope or reach, one who holds the
-    capability but targets an out-of-allowlist object learns THAT next, and
-    only a caller who clears both meets the outward-facing reach switch.
+    The four controls fire in this order - capability, then the tool's own
+    constraint, then scope, then reach - so the most specific true refusal
+    wins: a caller missing the capability learns that first regardless of
+    anything else; one who holds the capability but sent a malformed call
+    (a body key that would change what the call does) learns that next,
+    before we ever reason about which object it targets; one who clears both
+    but targets an out-of-allowlist object learns THAT next; and only a
+    caller who clears all three meets the outward-facing reach switch.
 
     The capability check happens before the `hasattr` check below on purpose:
     a caller without the capability gets that refusal regardless of whether
     the backend actually implements the method, since the capability refusal
     is the one that matters for authority, not implementation completeness.
-    Scope and reach are asserted before that same `hasattr` check for the
-    identical reason - they are refusals about authority, not about whether
-    the wrapped backend happens to implement the method.
+    The constraint, scope and reach checks are asserted before that same
+    `hasattr` check for the identical reason - they are refusals about
+    authority (or, for the constraint, about what the call is even asking
+    for), not about whether the wrapped backend happens to implement the
+    method.
     """
     backend, policy = _lookup(pb)
     gate = _GATES[name]
@@ -349,6 +354,15 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
             f"not grant. The capability must be granted in the server's own "
             f"configuration; it cannot be changed from here."
         )
+    # ADR-016 / this block's central claim: "the constraint is enforced at the
+    # seam, not in the tool." A ToolSpec.check that merely EXISTS, unreferenced
+    # from here, would be a unit-tested function, not a control - PolicyBackend
+    # is the thing that must refuse the call. `spec` is None for any dispatched
+    # method the tool table says nothing about (there is no obligation for
+    # every Backend method to be a tool), which is a no-op, not a refusal.
+    spec = tools.TOOLS.get(name)
+    if spec is not None:
+        spec.check(kwargs)
     assert_subject_permitted(name, kwargs)
     # REACH_CAPABILITIES is CONSUMED here, not hand-listed: whichever
     # capabilities this specific call required (a callable gate's kwargs-
