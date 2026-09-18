@@ -568,6 +568,31 @@ turned off once turned on"*). Refresh is therefore mandatory rather than an opti
 refresh token itself defaults to 30 days (line 22799) — an installation left unused for longer needs
 a full re-authorisation, not a refresh.
 
+### 7.2c One client, one token per person
+
+The OAuth **client** is an account-level object an admin registers once; the **token** is per user.
+The spec states that clients "access the Zendesk API on behalf of users" (line 106), and the token
+listing "returns the properties of the tokens for the current user … admins can view OAuth token
+properties for all users using the `all` parameter" (line 9640). There is no per-user client, and a
+**global** client (line 30838) is the other direction entirely — an app distributed to *other
+companies'* Zendesk accounts, requiring Zendesk's approval. Ours is local to the tenant.
+
+This is what actually delivers the project invariant. A token's authority is the intersection of
+three things, and only the first is ours to set:
+
+1. the scope requested, capped by the client's ceiling (§7.2b);
+2. **the authorising user's own Zendesk permissions** — role, group membership, ticket access;
+3. what the tool surface exposes at all.
+
+So `tickets:write` on a light agent's token still cannot reach tickets outside that agent's groups.
+The scopes cap what the application may *ask for*; the person caps what the token can *reach*.
+
+**It also decides the ADR-009 question in principle.** If `refresh_token` genuinely requires
+`client_secret` (§7.3), that secret would have to be distributed to every operator who runs the
+server — at which point it is not a secret, and RFC 8252 §8.4 treats the client as public regardless
+of the vendor's terminology. A probe can still tell us what Zendesk *accepts*; it cannot make a
+shared, widely-distributed string into a client credential.
+
 ### 7.3 Every client gets a secret, including a public one
 
 `secret` is documented as *"Generated automatically on creation and returned in full only at that
