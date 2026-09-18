@@ -344,9 +344,14 @@ python3 scripts/survey_tools.py        # re-run the ecosystem survey from the cl
 python3 scripts/extract_config.py      # tenant configuration -> gitignored tenant-config/
 ```
 
-Credentials come from `./.env`. The current one is an **API token**: unscoped, full admin, and
-it bypasses account 2FA. Zendesk deactivates all API tokens on **2027-04-30**, and no account
-can create one after **2026-10-27**. The shipped design authenticates with OAuth.
+Those are **scripts**, and the API token in `./.env` is theirs alone. **The library never reads it**
+([ADR-015](DECISIONS-ADR/ADR-015.md)): `HttpClient` takes a `token_provider` callable and sends a
+`Bearer` header, with no API-token path and no fallback. If you are adding auth to library code and
+reach for `CINO_CSA_ZENDESK`, stop — that is the deleted model.
+
+The script token is unscoped, full admin, and bypasses account 2FA. Zendesk deactivates all API
+tokens on **2027-04-30** and issues no new ones after **2026-10-27**. We chose not to stockpile
+spares before the cutoff, so it is irreplaceable; porting the scripts to OAuth follows Block 0b.
 
 ## Working in this repo
 

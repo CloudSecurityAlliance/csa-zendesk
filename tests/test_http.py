@@ -9,11 +9,15 @@ from csa_zendesk import _http
 from csa_zendesk import exceptions as exc
 from csa_zendesk._http import HttpClient
 
+#: The stand-in access token. Deliberately not a short word: the leak tests assert
+#: this string is absent from reprs, __dict__s and exception messages, and a canary
+#: that appears inside ordinary prose produces false positives. "tok" did - it is a
+#: substring of "token", which any credential-related error message will contain.
+CANARY = "zdt-CANARY-8f2a1c-DO-NOT-LOG"
+
 
 def client(handler, **kw):
-    return HttpClient(
-        subdomain="example", email="agent@example.com", api_token="tok", transport=httpx.MockTransport(handler), **kw
-    )
+    return HttpClient(subdomain="example", token_provider=lambda: CANARY, transport=httpx.MockTransport(handler), **kw)
 
 
 def test_a_get_returns_the_parsed_envelope_unshaped():
@@ -24,7 +28,7 @@ def test_a_get_returns_the_parsed_envelope_unshaped():
     assert client(handler).get("/api/v2/tickets/1.json") == {"ticket": {"id": 1, "subject": "hi"}}
 
 
-def test_it_sends_api_token_basic_auth_in_the_email_slash_token_form():
+def test_it_sends_the_oauth_access_token_as_a_bearer_header():
     seen = {}
 
     def handler(request):
@@ -32,8 +36,29 @@ def test_it_sends_api_token_basic_auth_in_the_email_slash_token_form():
         return httpx.Response(200, json={})
 
     client(handler).get("/api/v2/tickets.json")
-    expected = base64.b64encode(b"agent@example.com/token:tok").decode()
-    assert seen["auth"] == f"Basic {expected}"
+    assert seen["auth"] == f"Bearer {CANARY}"
+
+
+def test_the_provider_is_called_per_request_so_a_refreshed_token_is_picked_up():
+    # ADR-009: Zendesk issues a 30-minute expires_in automatically, so a token
+    # captured once at construction expires mid-session. The provider must be
+    # consulted on every request, not cached - this is the test that fails if
+    # someone "optimises" it into a constructor-time lookup.
+    tokens = iter(["first", "second", "third"])
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("authorization", ""))
+        return httpx.Response(200, json={})
+
+    c = _http.HttpClient(
+        subdomain="example",
+        token_provider=lambda: next(tokens),
+        transport=httpx.MockTransport(handler),
+    )
+    for _ in range(3):
+        c.get("/api/v2/tickets.json")
+    assert seen == ["Bearer first", "Bearer second", "Bearer third"]
 
 
 def test_no_credential_ever_appears_in_an_exception_message():
@@ -42,12 +67,12 @@ def test_no_credential_ever_appears_in_an_exception_message():
 
     with pytest.raises(exc.CredentialsRejected) as ei:
         client(handler).get("/api/v2/tickets.json")
-    assert "tok" not in str(ei.value)
+    assert CANARY not in str(ei.value)
 
 
 def test_no_credential_ever_appears_in_repr():
     c = client(lambda request: httpx.Response(200, json={}))
-    assert "tok" not in repr(c)
+    assert CANARY not in repr(c)
     assert "agent@example.com" not in repr(c)
 
 
@@ -174,17 +199,29 @@ def test_a_transport_level_failure_becomes_a_typed_error():
 
 def test_subdomain_is_required():
     with pytest.raises(ValueError, match="ZENDESK_SUBDOMAIN"):
-        HttpClient(subdomain="", email="agent@example.com", api_token="tok")
+        HttpClient(subdomain="", token_provider=lambda: CANARY)
 
 
-def test_email_is_required():
-    with pytest.raises(ValueError, match="email"):
-        HttpClient(subdomain="example", email="", api_token="tok")
+def test_a_non_callable_token_provider_is_refused_at_construction():
+    with pytest.raises(ValueError, match="callable"):
+        HttpClient(subdomain="example", token_provider="a-bare-string")  # type: ignore[arg-type]
 
 
-def test_api_token_is_required():
-    with pytest.raises(ValueError, match="token"):
-        HttpClient(subdomain="example", email="agent@example.com", api_token="")
+def test_an_empty_token_fails_at_request_time_rather_than_silently_unauthenticated():
+    # The provider is only consulted per request, so emptiness cannot be caught
+    # at construction. It must still never produce a bare "Bearer " header - an
+    # unauthenticated request to Zendesk answers 200 with an "Anonymous user"
+    # object (CLAUDE.md invariant 1), which is the silent failure this guards.
+    def handler(request):  # pragma: no cover - must never be reached
+        raise AssertionError("a request was sent with an empty access token")
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: "",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(exc.CredentialsRejected, match="empty access token"):
+        c.get("/api/v2/tickets.json")
 
 
 def test_the_client_sleeps_for_exactly_the_reported_retry_after_value(monkeypatch):
@@ -332,14 +369,13 @@ def test_the_credential_is_not_reachable_from_the_instance_dict():
     # shallow copy's __dict__) before asserting it is clean. This must fail
     # against the pre-fix code, where `vars(client)['_auth']` is the base64 of
     # exactly this string.
-    token = "tok"
-    email = "agent@example.com"
+    token = CANARY
     c = client(lambda request: httpx.Response(200, json={}))
 
     def leaks_credential(value: object) -> bool:
         if not isinstance(value, str):
             return False
-        if token in value or email in value:
+        if token in value:
             return True
         # A header value like "Basic <base64>" isn't itself valid base64 (the
         # scheme name and the space aren't in the alphabet), so try each
@@ -350,7 +386,7 @@ def test_the_credential_is_not_reachable_from_the_instance_dict():
                 decoded = base64.b64decode(padded, validate=False).decode("utf-8", errors="ignore")
             except (binascii.Error, ValueError):
                 continue
-            if token in decoded or email in decoded:
+            if token in decoded:
                 return True
         return False
 
@@ -372,7 +408,7 @@ def test_a_transport_error_does_not_chain_to_an_exception_carrying_the_auth_head
 
     assert ei.value.__cause__ is None
     assert ei.value.__context__ is None
-    assert "tok" not in str(ei.value)
+    assert CANARY not in str(ei.value)
 
 
 # --- cumulative retry budget --------------------------------------------------

@@ -34,10 +34,9 @@ parameter - there is deliberately no `sleep=` argument on `HttpClient`.
 
 from __future__ import annotations
 
-import base64
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import httpx
@@ -80,45 +79,74 @@ class HttpClient:
     `transport` is injectable so tests use `httpx.MockTransport` and never touch
     the network - this is the layer `FakeBackend` cannot exercise.
 
-    The credential is deliberately **not** an instance attribute. It is built once
-    inside `__init__` and captured only in an httpx request-hook closure, so
-    `vars(client)`, a `__dict__` walker, `json.dumps(vars(obj))`, a crash-reporter
-    object dump, `copy.copy`, and `pickle` all come up empty - none of them can see
-    inside a closure cell. This is **not** protection against a debugger or against
-    something that specifically walks `__closure__`; that is not achievable for an
-    object that must hold a usable credential to do its job (httpx's own
-    `BasicAuth` holds one too, the same way). The goal is narrower and stated
-    plainly: no *ordinary* observation path reveals it.
+    **No credential is stored at all.** Since ADR-015 this client authenticates
+    only by OAuth, and it holds a `token_provider` rather than a token: each
+    access token exists for the lifetime of one request and is never written to
+    an instance attribute. The provider itself is captured only in an httpx
+    request-hook closure, so `vars(client)`, a `__dict__` walker,
+    `json.dumps(vars(obj))`, a crash-reporter object dump, `copy.copy`, and
+    `pickle` all come up empty - none of them can see inside a closure cell.
+
+    This is **not** protection against a debugger or against something that
+    specifically walks `__closure__`; that is not achievable for an object that
+    must reach a usable credential to do its job. The goal is narrower and stated
+    plainly: no *ordinary* observation path reveals it. Holding a provider rather
+    than a token does narrow the window though - there is no long-lived secret in
+    this object to observe, only a callable that can fetch one.
     """
 
     def __init__(
         self,
         subdomain: str,
-        email: str,
-        api_token: str,
+        token_provider: Callable[[], str],
         transport: httpx.BaseTransport | None = None,
         timeout: float = 30.0,
     ) -> None:
+        """
+        `token_provider` returns a current OAuth access token and is called on
+        **every** request rather than once here (ADR-009, ADR-015).
+
+        That is not indirection for its own sake. Zendesk issues a 30-minute
+        `expires_in` automatically to any client created on or after 2026-04-30,
+        so a token captured at construction expires mid-session; the provider is
+        where Block 0b's refresh-before-expiry lives, and putting it here now
+        means the refresh machinery arrives behind this signature instead of
+        changing it.
+
+        There is no API-token path. ADR-015 removed it: Zendesk stops issuing
+        API tokens on 2026-10-27 and stops honouring them on 2027-04-30, and a
+        fallback that silently activates when OAuth is misconfigured turns an
+        auth failure into something that reads like a permissions failure -
+        which is the confusion the 401 handling below goes to some trouble to
+        prevent.
+        """
         if not subdomain:
             raise ValueError(
                 "a Zendesk subdomain is required; set ZENDESK_SUBDOMAIN. There is no "
                 "default, deliberately: a hardcoded tenant is both a leak and a footgun."
             )
-        if not email or not api_token:
+        if not callable(token_provider):
             raise ValueError(
-                "API-token auth needs both an email and a token; set CINO_CSA_ZENDESK_EMAIL and CINO_CSA_ZENDESK."
+                "token_provider must be a callable returning a current OAuth access token. "
+                "A bare string will not do: access tokens expire in 30 minutes, so the "
+                "credential has to be re-read per request rather than captured once."
             )
         self._host = f"{subdomain}.zendesk.com"
         self._base = f"https://{self._host}"
 
-        # The credential lives only in this closure's cell, never in self.__dict__.
-        # `header` is a local variable of __init__ - once __init__ returns, the only
-        # way to reach it is through _authorize.__closure__, which is exactly the
+        # The provider lives only in this closure's cell, never in self.__dict__,
+        # and no token is stored at all - each one exists for the lifetime of a
+        # single request. Once __init__ returns, the only way to reach the
+        # provider is through _authorize.__closure__, which is exactly the
         # residual, unavoidable path the class docstring names.
-        header = "Basic " + base64.b64encode(f"{email}/token:{api_token}".encode()).decode()
-
         def _authorize(request: httpx.Request) -> None:
-            request.headers["Authorization"] = header
+            token = token_provider()
+            if not token:
+                raise exc.CredentialsRejected(
+                    "the token provider returned an empty access token. Re-authorise; "
+                    "if this persists the stored refresh token is probably revoked."
+                )
+            request.headers["Authorization"] = "Bearer " + token
 
         self._client = httpx.Client(
             transport=transport,

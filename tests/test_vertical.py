@@ -17,8 +17,7 @@ from csa_zendesk import exceptions as exc
 def build(handler, policy=None):
     http = HttpClient(
         subdomain="example",
-        email="agent@example.com",
-        api_token="t",
+        token_provider=lambda: "tok",
         transport=httpx.MockTransport(handler),
     )
     if policy is None:
@@ -88,8 +87,7 @@ def test_a_pagination_conflict_is_refused_before_any_request_is_sent():
 
     http = HttpClient(
         subdomain="example",
-        email="agent@example.com",
-        api_token="t",
+        token_provider=lambda: "tok",
         transport=httpx.MockTransport(handler),
     )
     with pytest.raises(exc.PaginationError):

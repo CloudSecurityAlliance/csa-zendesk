@@ -125,8 +125,27 @@ PROFILES: dict[str, frozenset[str]] = {
     ),
     "editor": frozenset({HC_READ, HC_WRITE, TICKET_READ, PEOPLE_READ, ADMIN_READ}),
     "analyst": frozenset({TICKET_READ, PEOPLE_READ, HC_READ, REPORTING_READ, REPORTING_EXPORT, ADMIN_READ}),
-    # `full` is everything EXCEPT the six nobody should get by naming a word.
-    "full": frozenset(ALL_CAPABILITIES) - {TICKET_CLOSE, TICKET_PURGE, PEOPLE_PURGE, PEOPLE_MERGE, RAW_READ, RAW_WRITE},
+    # `full` is everything EXCEPT what nobody should get by naming a word.
+    #
+    # The excluded set is ordered by REACH first and destructiveness second
+    # (DEC-015). `ticket.reply` is excluded although it destroys nothing,
+    # because it is the one capability whose effect leaves the building:
+    # ADR-003 exists because "a public reply cannot be unsent". `people.suspend`
+    # is excluded for the same reason - mark-as-spam suspends a real requester's
+    # account. An earlier version of this set omitted both while excluding
+    # `ticket.close`, which reaches nobody; that ordered the list by internal
+    # destructiveness and got the most important case backwards.
+    "full": frozenset(ALL_CAPABILITIES)
+    - {
+        TICKET_REPLY,
+        TICKET_CLOSE,
+        TICKET_PURGE,
+        PEOPLE_SUSPEND,
+        PEOPLE_PURGE,
+        PEOPLE_MERGE,
+        RAW_READ,
+        RAW_WRITE,
+    },
 }
 
 #: A gate is a constant capability, `None` for an ungated read, or a function of

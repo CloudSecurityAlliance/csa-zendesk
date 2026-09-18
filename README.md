@@ -123,15 +123,25 @@ include this" rather than "this is broken".
 
 ## Configuration
 
-Credentials come from `./.env`, which is gitignored:
+**The library authenticates by OAuth and by nothing else** ([ADR-015](DECISIONS-ADR/ADR-015.md)).
+`HttpClient` takes a `token_provider` callable and sends a `Bearer` header; there is no API-token
+code path, no fallback, and no environment variable the library reads. A fallback that silently
+activates when OAuth is misconfigured turns an auth failure into something that reads like a
+permissions failure, which is the confusion the 401 handling goes out of its way to prevent.
+
+The variables below are for the **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`,
+`probe_families.py` — which refresh `analysis/` and ship in no package. They come from `./.env`,
+which is gitignored:
 
 | Variable | What |
 |---|---|
 | `CINO_CSA_ZENDESK` | API token (basic auth as `EMAIL/token:TOKEN`) |
 | `CINO_CSA_ZENDESK_EMAIL` | The account the token is paired with |
 
-The API token is a **stopgap**. It is unscoped, carries full admin rights, bypasses account 2FA,
-and Zendesk retires it on 2027-04-30. The shipped design authenticates with OAuth.
+That token is unscoped, carries full admin rights and bypasses account 2FA. Zendesk stops issuing
+new ones on **2026-10-27** and retires all of them on **2027-04-30**; we deliberately did not
+stockpile any before the cutoff ([WAITING-FOR-002](WAITING-FOR/WAITING-FOR-002.md) in the Block 0
+branch tracks the consequence). Porting the scripts to OAuth follows Block 0b.
 
 ```bash
 set -a; . ./.env; set +a

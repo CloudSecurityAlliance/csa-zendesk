@@ -21,8 +21,7 @@ def test_fake_backend_satisfies_the_protocol():
 def test_api_backend_satisfies_the_protocol():
     http = HttpClient(
         subdomain="example",
-        email="agent@example.com",
-        api_token="t",
+        token_provider=lambda: "tok",
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
     )
     assert isinstance(ApiBackend(http), Backend)
@@ -141,9 +140,7 @@ def test_api_backend_calls_the_documented_path():
         seen["path"] = request.url.path
         return httpx.Response(200, json={"ticket": {"id": 7}})
 
-    http = HttpClient(
-        subdomain="example", email="agent@example.com", api_token="t", transport=httpx.MockTransport(handler)
-    )
+    http = HttpClient(subdomain="example", token_provider=lambda: "tok", transport=httpx.MockTransport(handler))
     assert ApiBackend(http).get_ticket(ticket_id=7) == {"ticket": {"id": 7}}
     assert seen["path"] == "/api/v2/tickets/7"
 
@@ -154,8 +151,7 @@ def test_api_backend_returns_the_envelope_unshaped():
     body = {"ticket": {"id": 7, "subject": "hello", "custom_fields": [{"id": 1, "value": None}]}}
     http = HttpClient(
         subdomain="example",
-        email="agent@example.com",
-        api_token="t",
+        token_provider=lambda: "tok",
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)),
     )
     assert ApiBackend(http).get_ticket(ticket_id=7) == body
@@ -178,8 +174,7 @@ def test_fake_and_api_backend_are_mutually_consistent_on_envelope_shape():
 
     http = HttpClient(
         subdomain="example",
-        email="agent@example.com",
-        api_token="t",
+        token_provider=lambda: "tok",
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"ticket": ticket})),
     )
     api_env = ApiBackend(http).get_ticket(ticket_id=7)

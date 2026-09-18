@@ -113,7 +113,9 @@ def parse_error(status: int, body: object, *, headers: Mapping[str, str] | None 
         # is a static API token, not OAuth), so naming one would advertise a remedy
         # that does not exist. Check the two env vars that actually are read.
         return exc.CredentialsRejected(
-            f"Zendesk rejected the credential ({message}). Check CINO_CSA_ZENDESK and CINO_CSA_ZENDESK_EMAIL."
+            f"Zendesk rejected the credential ({message}). The access token is invalid, expired or "
+            f"revoked - re-authorise. Note this is not the same as a 403: a 403 means the token "
+            f"is good and the account lacks the permission."
         )
     if status == 403:
         return exc.PlanBoundary(
