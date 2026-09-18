@@ -532,6 +532,42 @@ attacker cannot reconfigure** — the toolset, capability profile and allowlist 
 so it is more likely to contain the unrecognised scope name that silently yields a token that 403s.
 Compare requested against granted on every token, without exception.
 
+### 7.2b The registered ceiling, and what it does and does not restrain
+
+Registered 2026-09-18 on the `csa-zendesk` client, verified against the spec's scope table (line
+22900ff):
+
+```
+read  tickets:write  ticket_attachments:write  ticket_views:write
+```
+
+`read` is documented as *"Read all data. Gives access to GET endpoints, including permission to
+sideload related resources."* Mixing a broad read with specific writes is explicitly legal — the spec
+gives `"organizations:write read"` as an example — so this combination is well-formed despite §7.2.
+
+Two consequences that the capability model, not the token, has to absorb:
+
+1. **`tickets:write` includes DELETE.** The spec defines the write action as *"access to POST, PUT,
+   and DELETE endpoints for creating, updating, and deleting resources"*, and resource-specific
+   scopes are `resource:action` over the same two actions. So the token cannot distinguish a reply
+   from a deletion, and **the reversibility axis of DEC-015 is enforced entirely by us**. Spec-derived
+   and unprobed — do not rely on a narrower reading without testing it.
+2. **`impersonate` is absent, and must stay absent.** It is the one scope that would break the
+   project's founding invariant — *you cannot do anything with this tool that you cannot already do
+   in Zendesk* — because it lets an admin act as another user. Its absence is a design decision, not
+   an oversight.
+
+**The ceiling is not the grant.** A token request may ask for any subset, and the client's list only
+caps it. That is the mechanism for "authority one rung at a time" *without re-registering the
+client*: start by requesting `read tickets:write`, and add the two narrower writes when a tool needs
+them. Requesting a scope outside the ceiling fails closed with `400 invalid_scope` and issues no
+token — unlike a typo'd scope, which fails open with a 403-everything token (§7).
+
+**Token expiration is on and cannot be turned off** (*"This includes existing tokens and cannot be
+turned off once turned on"*). Refresh is therefore mandatory rather than an optimisation, and the
+refresh token itself defaults to 30 days (line 22799) — an installation left unused for longer needs
+a full re-authorisation, not a refresh.
+
 ### 7.3 Every client gets a secret, including a public one
 
 `secret` is documented as *"Generated automatically on creation and returned in full only at that
