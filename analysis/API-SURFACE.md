@@ -489,6 +489,124 @@ and then 403s every request made with it* — so a typo produces a credential th
 looks valid and works for nothing. Any scope handling must compare requested
 against granted.
 
+### 7.1 Redirect URLs are pre-registered, and the OOB URN is not registrable
+
+The OAuth client form in Admin Center states, verbatim:
+
+> Add the absolute URLs for redirecting users after they authorize access to your app. URLs must be
+> absolute (not relative) and use HTTPS, unless they are for localhost or 127.0.0.1. List each URL on
+> a new line. For example, `http://localhost` or `http://127.0.0.1`
+
+Three facts fall out of that, and they constrain the auth design:
+
+1. **The list is a fixed set of strings.** Consistent with `specs/zendesk-support-oas.yaml:30858`
+   (`redirect_uri` = "an array of the valid redirect URIs for this client"). A dynamically-bound
+   loopback port cannot match unless Zendesk implements RFC 8252's any-port rule — still unprobed.
+2. **`urn:ietf:wg:oauth:2.0:oob` cannot be registered.** It is not an absolute URL, so the form's own
+   validator rejects it. There is therefore **no out-of-band redirect on Zendesk**, and any paste
+   fallback must redirect to a registered loopback URI and have the operator copy `code` out of the
+   browser's address bar after the connection fails.
+3. **Loopback is exempt from the HTTPS requirement**, so no local TLS is needed.
+
+**Use the literal `127.0.0.1`, not `localhost`** — RFC 8252 §8.3. `localhost` resolves through the
+host's resolver, so it can be redirected by `/etc/hosts` or DNS, and on a dual-stack machine it
+commonly resolves to `::1` first, which never reaches a listener bound to IPv4 `127.0.0.1`. Both are
+browser-trusted secure contexts, so nothing is lost by taking the literal. The two forms are **not**
+interchangeable to a string-matching authorization server: send byte-for-byte what was registered.
+
+### 7.2 Overlapping scopes are rejected at client registration
+
+Operator-observed, 2026-09-18, registering the `csa-zendesk` client: Admin Center **rejects a scope
+list that contains both a broad scope and a narrower member of it** — e.g. `read` together with
+`tickets:read`. This is not in the spec text, and it invalidated an earlier recommendation here to
+request `read` alongside per-family scopes. Pick one level and stay at it:
+
+- **Broad:** `read` plus the specific writes (`tickets:write`, …) — fewer strings to typo, but grants
+  read on every family Zendesk has, including ones deliberately out of scope for 1.0.0.
+- **Granular:** `tickets:read tickets:write ticket_views:read …` — the set the server actually needs,
+  and the one that makes the token itself the boundary rather than the allowlist.
+
+Granular is the better fit for this project, because **the token's scope is the only control an
+attacker cannot reconfigure** — the toolset, capability profile and allowlist are all local settings
+(`DECISIONS-ADR/ADR-012.md`). Note this interacts with the §7 typo trap: a granular list is longer,
+so it is more likely to contain the unrecognised scope name that silently yields a token that 403s.
+Compare requested against granted on every token, without exception.
+
+### 7.2b The registered ceiling, and what it does and does not restrain
+
+Registered 2026-09-18 on the `csa-zendesk` client, verified against the spec's scope table (line
+22900ff):
+
+```
+read  tickets:write  ticket_attachments:write  ticket_views:write
+```
+
+`read` is documented as *"Read all data. Gives access to GET endpoints, including permission to
+sideload related resources."* Mixing a broad read with specific writes is explicitly legal — the spec
+gives `"organizations:write read"` as an example — so this combination is well-formed despite §7.2.
+
+Two consequences that the capability model, not the token, has to absorb:
+
+1. **`tickets:write` includes DELETE.** The spec defines the write action as *"access to POST, PUT,
+   and DELETE endpoints for creating, updating, and deleting resources"*, and resource-specific
+   scopes are `resource:action` over the same two actions. So the token cannot distinguish a reply
+   from a deletion, and **the reversibility axis of DEC-015 is enforced entirely by us**. Spec-derived
+   and unprobed — do not rely on a narrower reading without testing it.
+2. **`impersonate` is absent, and must stay absent.** It is the one scope that would break the
+   project's founding invariant — *you cannot do anything with this tool that you cannot already do
+   in Zendesk* — because it lets an admin act as another user. Its absence is a design decision, not
+   an oversight.
+
+**The ceiling is not the grant.** A token request may ask for any subset, and the client's list only
+caps it. That is the mechanism for "authority one rung at a time" *without re-registering the
+client*: start by requesting `read tickets:write`, and add the two narrower writes when a tool needs
+them. Requesting a scope outside the ceiling fails closed with `400 invalid_scope` and issues no
+token — unlike a typo'd scope, which fails open with a 403-everything token (§7).
+
+**Token expiration is on and cannot be turned off** (*"This includes existing tokens and cannot be
+turned off once turned on"*). Refresh is therefore mandatory rather than an optimisation, and the
+refresh token itself defaults to 30 days (line 22799) — an installation left unused for longer needs
+a full re-authorisation, not a refresh.
+
+### 7.2c One client, one token per person
+
+The OAuth **client** is an account-level object an admin registers once; the **token** is per user.
+The spec states that clients "access the Zendesk API on behalf of users" (line 106), and the token
+listing "returns the properties of the tokens for the current user … admins can view OAuth token
+properties for all users using the `all` parameter" (line 9640). There is no per-user client, and a
+**global** client (line 30838) is the other direction entirely — an app distributed to *other
+companies'* Zendesk accounts, requiring Zendesk's approval. Ours is local to the tenant.
+
+This is what actually delivers the project invariant. A token's authority is the intersection of
+three things, and only the first is ours to set:
+
+1. the scope requested, capped by the client's ceiling (§7.2b);
+2. **the authorising user's own Zendesk permissions** — role, group membership, ticket access;
+3. what the tool surface exposes at all.
+
+So `tickets:write` on a light agent's token still cannot reach tickets outside that agent's groups.
+The scopes cap what the application may *ask for*; the person caps what the token can *reach*.
+
+**It also decides the ADR-009 question in principle.** If `refresh_token` genuinely requires
+`client_secret` (§7.3), that secret would have to be distributed to every operator who runs the
+server — at which point it is not a secret, and RFC 8252 §8.4 treats the client as public regardless
+of the vendor's terminology. A probe can still tell us what Zendesk *accepts*; it cannot make a
+shared, widely-distributed string into a client credential.
+
+### 7.3 Every client gets a secret, including a public one
+
+`secret` is documented as *"Generated automatically on creation and returned in full only at that
+time"* (line 30868), so **being handed a secret says nothing about the client's type**. The type is
+the separate `kind` field — `"public"` or `"confidential"` (line 30850).
+
+Unresolved, and it decides whether `DECISIONS-ADR/ADR-009.md`'s "public client, no secret" survives
+contact: the spec's **authorization-code example omits `client_secret` and sends `code_verifier`**
+(line 22805), while its **refresh-token example sends `client_secret`** (line 22827). If refresh
+genuinely requires the secret, this client is confidential in practice and ADR-009 needs a dated
+correction. Probe it at first refresh rather than assuming either way — and until then, retain the
+secret at `0600` rather than discarding it, since it is displayed exactly once and recovering it
+means rotating the client.
+
 ---
 
 ## 8. Re-checking this document

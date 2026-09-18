@@ -16,7 +16,7 @@ Block 0's constraints all still apply. Repeating the ones this block can break:
 
 - **Never interpolate a credential** into a message, a log line, or a `__repr__`. This block handles four of them — authorization code, code verifier, access token, refresh token — and all four are in scope.
 - **Nothing may write to stdout.** Under stdio MCP, stdout *is* the JSON-RPC channel. The browser-flow prompt is the obvious violation waiting to happen: it goes to **stderr**.
-- **`ZENDESK_SUBDOMAIN` has no default.** Neither does `CSA_ZENDESK_CLIENT_ID` — ADR-009 rejected embedding a CSA client id.
+- **`CSA_ZENDESK_SUBDOMAIN` has no default.** Neither does `CSA_ZENDESK_MCP_SERVER_IDENTIFIER` — ADR-009 rejected embedding a CSA client id.
 - **100% coverage, enforced.** `--cov-fail-under=100`. A gate below the measured state cannot fail.
 - **`mypy --strict` over `src` only.** `ruff` with line length 120.
 - **No network in tests, ever.** `httpx.MockTransport` for HTTP; a real loopback socket on port 0 is fine for the callback listener, as it is not the network.
@@ -450,6 +450,51 @@ git commit -m "feat(auth): PKCE S256 and the authorization URL"
 > the better design, because a fixed port is a port that can be occupied. Record the answer in
 > `analysis/API-SURFACE.md` §7 either way, since it is a fact about the vendor and not about us.
 
+> **Correction 2 (2026-09-18), before execution.** The correction above is superseded on two points
+> by the text of Zendesk's own OAuth client form (now recorded verbatim in `analysis/API-SURFACE.md`
+> §7.1): *"URLs must be absolute (not relative) and use HTTPS, unless they are for localhost or
+> 127.0.0.1."*
+>
+> **1. The URN is not registrable, so there is no out-of-band flow.** `urn:ietf:wg:oauth:2.0:oob` is
+> not an absolute URL and the form rejects it — this is the likely cause of the registration error
+> that blocked this block. Task 3's paste fallback therefore cannot use the URN. It must pass a
+> **registered loopback URI**, let the browser redirect fail to connect, and have the operator copy
+> the `code` parameter out of the address bar. The `_run` sketch below still names the URN in two
+> places; both become `PASTE_REDIRECT`, the first registered candidate URI, and the value sent to the
+> token endpoint must be that same string.
+>
+> **2. Register `127.0.0.1`, not `localhost`** — RFC 8252 §8.3, and because `localhost` on a
+> dual-stack host commonly resolves to `::1`, which never reaches a listener bound to IPv4. This
+> matches what the plan's code already emits, so the code does not change; the earlier correction's
+> registration list does. It becomes exactly:
+>
+> ```
+> http://127.0.0.1:8765/callback
+> http://127.0.0.1:8766/callback
+> http://127.0.0.1:8767/callback
+> ```
+>
+> Task 3's tests assert that every URI the code can emit is a member of that set, so the set is the
+> single source of truth and a drifted port fails a test rather than an authorization.
+>
+> The any-port probe from correction 1 still stands and is still unanswered.
+
+> **Correction 3 (2026-09-18), before execution.** The client is registered and the environment
+> names are settled by what is already on disk rather than by this plan — every `CSA_ZENDESK_CLIENT_ID`
+> above is now `CSA_ZENDESK_MCP_SERVER_IDENTIFIER`, and every `ZENDESK_SUBDOMAIN` is
+> `CSA_ZENDESK_SUBDOMAIN`. Zendesk calls the client id the **Identifier**, so the name matches the
+> field the operator actually reads off the screen.
+>
+> The registered scope ceiling is `read tickets:write ticket_attachments:write ticket_views:write`
+> (`analysis/API-SURFACE.md` §7.2b). Task 4's existing `CSA_ZENDESK_SCOPES` default of `read` is
+> therefore correct and deliberate: the ceiling is a cap, the request is the grant, and 0b brings the
+> server up read-only. Widening is an environment change, not a re-registration.
+>
+> `CSA_ZENDESK_MCP_SERVER_SECRET` also exists on disk. It is **retained and unused** — Zendesk issues
+> a secret to every client regardless of kind (§7.3), and whether refresh requires it is unprobed. No
+> task in this block may read it; if the refresh probe says it is needed, that is an ADR-009
+> correction first and a code change second.
+
 ### Task 3: The callback listener and the paste fallback
 
 **Files:**
@@ -861,8 +906,8 @@ def _ok(handler_calls):
 
 def test_a_token_inside_the_margin_is_refreshed_before_it_expires(monkeypatch, tmp_path):
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
-    monkeypatch.setenv("ZENDESK_SUBDOMAIN", "example")
-    monkeypatch.setenv("CSA_ZENDESK_CLIENT_ID", "cid")
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
     # Expires in 60s; the margin is 120s, so this must refresh rather than return it.
     _store.write(_store.Tokens("OLD-AT", "OLD-RT", 1_060.0))
     calls: list[dict] = []
@@ -874,8 +919,8 @@ def test_a_token_inside_the_margin_is_refreshed_before_it_expires(monkeypatch, t
 
 def test_a_healthy_token_is_returned_without_a_request(monkeypatch, tmp_path):
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
-    monkeypatch.setenv("ZENDESK_SUBDOMAIN", "example")
-    monkeypatch.setenv("CSA_ZENDESK_CLIENT_ID", "cid")
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
     _store.write(_store.Tokens("GOOD-AT", "RT", 9_999.0))
     monkeypatch.setattr(_flow.time, "time", lambda: 1_000.0)
 
@@ -887,8 +932,8 @@ def test_a_healthy_token_is_returned_without_a_request(monkeypatch, tmp_path):
 
 def test_no_token_file_says_how_to_fix_it(monkeypatch, tmp_path):
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "absent.json"))
-    monkeypatch.setenv("ZENDESK_SUBDOMAIN", "example")
-    monkeypatch.setenv("CSA_ZENDESK_CLIENT_ID", "cid")
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
     with pytest.raises(_flow.NotAuthorised, match="csa-zendesk auth login"):
         _flow.access_token()
 
@@ -897,10 +942,10 @@ def test_a_missing_client_id_is_refused_with_no_default(monkeypatch, tmp_path):
     # ADR-009 rejected embedding a CSA client id: every deployment would share one
     # client's scope ceiling and rate-limit attribution.
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
-    monkeypatch.setenv("ZENDESK_SUBDOMAIN", "example")
-    monkeypatch.delenv("CSA_ZENDESK_CLIENT_ID", raising=False)
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.delenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", raising=False)
     _store.write(_store.Tokens("AT", "RT", 9_999.0))
-    with pytest.raises(_flow.NotAuthorised, match="CSA_ZENDESK_CLIENT_ID"):
+    with pytest.raises(_flow.NotAuthorised, match="CSA_ZENDESK_MCP_SERVER_IDENTIFIER"):
         _flow.access_token()
 ```
 
@@ -957,11 +1002,11 @@ def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
     Called on every request (`HttpClient`'s `token_provider`), so the healthy path
     is a file read and a float comparison with no network at all.
     """
-    subdomain = os.environ.get("ZENDESK_SUBDOMAIN", "")
-    client_id = os.environ.get("CSA_ZENDESK_CLIENT_ID", "")
+    subdomain = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
+    client_id = os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "")
     if not client_id:
         raise NotAuthorised(
-            "CSA_ZENDESK_CLIENT_ID is not set. Register a public OAuth client in "
+            "CSA_ZENDESK_MCP_SERVER_IDENTIFIER is not set. Register a public OAuth client in "
             "Zendesk Admin Center (no secret is needed) and set its id. There is no "
             "default client id, deliberately: a shared one would pool every "
             "deployment's rate limit and scope ceiling."
@@ -1186,7 +1231,7 @@ class NotAuthenticated(exc.ZendeskError):
 def whoami(*, subdomain: str | None = None, transport: httpx.BaseTransport | None = None) -> dict[str, object]:
     import os
 
-    sub = subdomain or os.environ.get("ZENDESK_SUBDOMAIN", "")
+    sub = subdomain or os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
     with httpx.Client(transport=transport, timeout=30.0) as c:
         r = c.get(
             f"https://{sub}.zendesk.com/api/v2/users/me.json",
@@ -1237,8 +1282,8 @@ def login(*, scopes: Sequence[str], paste: bool = False, timeout: float = 300.0)
     from ._flow import exchange_code
     from .whoami import whoami as _whoami  # noqa: F401 - re-exported below
 
-    subdomain = os.environ["ZENDESK_SUBDOMAIN"]
-    client_id = os.environ["CSA_ZENDESK_CLIENT_ID"]
+    subdomain = os.environ["CSA_ZENDESK_SUBDOMAIN"]
+    client_id = os.environ["CSA_ZENDESK_MCP_SERVER_IDENTIFIER"]
     verifier, state = new_verifier(), secrets.token_urlsafe(16)
 
     if paste:
@@ -1304,7 +1349,7 @@ git commit -m "feat(auth): login flow and a whoami that does not trust a 200"
 def missing_credentials() -> list[str]:
     """Configuration that is not set. OAuth needs a subdomain and a client id;
     the tokens themselves live in the token file, not the environment."""
-    return [n for n in ("ZENDESK_SUBDOMAIN", "CSA_ZENDESK_CLIENT_ID") if not os.environ.get(n)]
+    return [n for n in ("CSA_ZENDESK_SUBDOMAIN", "CSA_ZENDESK_MCP_SERVER_IDENTIFIER") if not os.environ.get(n)]
 
 
 def authorize(req: urllib.request.Request) -> None:
@@ -1335,7 +1380,7 @@ Expected: `clean`
 - [ ] **Step 3: Verify against the live API**
 
 ```bash
-export ZENDESK_SUBDOMAIN=... CSA_ZENDESK_CLIENT_ID=...
+export CSA_ZENDESK_SUBDOMAIN=... CSA_ZENDESK_MCP_SERVER_IDENTIFIER=...
 python3 -c "import sys; sys.path.insert(0,'scripts'); import zd; print(zd.call('GET','/api/v2/ticket_fields.json')[0])"
 ```
 
@@ -1375,7 +1420,7 @@ Replace the flat *"no token file"* with the scoped form `SECURITY.md` already us
 
 - [ ] **Step 3: Update the credentials sections**
 
-`README.md` and `CLAUDE.md`: the environment carries `ZENDESK_SUBDOMAIN`, `CSA_ZENDESK_CLIENT_ID` and optionally `CSA_ZENDESK_SCOPES`. It carries **no credential**. `./.env` stops being a credential source.
+`README.md` and `CLAUDE.md`: the environment carries `CSA_ZENDESK_SUBDOMAIN`, `CSA_ZENDESK_MCP_SERVER_IDENTIFIER` and optionally `CSA_ZENDESK_SCOPES`. It carries **no credential**. `./.env` stops being a credential source.
 
 - [ ] **Step 4: Close the tracked items**
 
