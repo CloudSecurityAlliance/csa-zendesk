@@ -22,6 +22,19 @@ _REGISTERED_REDIRECT_URIS = {
     "http://127.0.0.1:8767/callback",
 }
 
+# A generous upper bound for tests where a background thread delivers the
+# request - not testing timeout behaviour itself, just guarding against a
+# genuine hang, so it can be short without risking flakiness under scheduler
+# jitter. `handle_request()` returns as soon as the connection is accepted,
+# typically in well under a millisecond, so none of these tests actually wait
+# this long in practice.
+_DELIVERY_TIMEOUT = 2.0
+
+# The one test that asserts timeout behaviour itself uses a much smaller bound
+# (tens of milliseconds) - the code path exercised is identical at any
+# magnitude, so there is no reason to pay seconds of wall-clock time for it.
+_NO_DELIVERY_TIMEOUT = 0.05
+
 
 def test_it_binds_a_loopback_port_and_reports_it():
     with _callback.Listener(state="st") as listener:
@@ -32,10 +45,10 @@ def test_it_returns_the_code_the_browser_delivers():
     with _callback.Listener(state="st") as listener:
 
         def deliver():
-            urllib.request.urlopen(listener.redirect_uri + "?code=THE-CODE&state=st", timeout=5).read()
+            urllib.request.urlopen(listener.redirect_uri + "?code=THE-CODE&state=st", timeout=_DELIVERY_TIMEOUT).read()
 
         threading.Thread(target=deliver, daemon=True).start()
-        assert listener.wait(timeout=5) == "THE-CODE"
+        assert listener.wait(timeout=_DELIVERY_TIMEOUT) == "THE-CODE"
 
 
 def test_a_mismatched_state_is_refused():
@@ -43,22 +56,23 @@ def test_a_mismatched_state_is_refused():
     with _callback.Listener(state="expected") as listener:
 
         def deliver():
-            urllib.request.urlopen(listener.redirect_uri + "?code=X&state=attacker", timeout=5).read()
+            urllib.request.urlopen(listener.redirect_uri + "?code=X&state=attacker", timeout=_DELIVERY_TIMEOUT).read()
 
         threading.Thread(target=deliver, daemon=True).start()
         with pytest.raises(_callback.CallbackError, match="state"):
-            listener.wait(timeout=5)
+            listener.wait(timeout=_DELIVERY_TIMEOUT)
 
 
 def test_an_error_response_is_surfaced_not_swallowed():
     with _callback.Listener(state="st") as listener:
 
         def deliver():
-            urllib.request.urlopen(listener.redirect_uri + "?error=access_denied&state=st", timeout=5).read()
+            url = listener.redirect_uri + "?error=access_denied&state=st"
+            urllib.request.urlopen(url, timeout=_DELIVERY_TIMEOUT).read()
 
         threading.Thread(target=deliver, daemon=True).start()
         with pytest.raises(_callback.CallbackError, match="access_denied"):
-            listener.wait(timeout=5)
+            listener.wait(timeout=_DELIVERY_TIMEOUT)
 
 
 def test_a_request_on_the_wrong_path_is_refused_not_hung():
@@ -66,28 +80,28 @@ def test_a_request_on_the_wrong_path_is_refused_not_hung():
         base = listener.redirect_uri.rsplit("/callback", 1)[0]
 
         def deliver():
-            urllib.request.urlopen(base + "/favicon.ico?state=st", timeout=5).read()
+            urllib.request.urlopen(base + "/favicon.ico?state=st", timeout=_DELIVERY_TIMEOUT).read()
 
         threading.Thread(target=deliver, daemon=True).start()
         with pytest.raises(_callback.CallbackError, match="path"):
-            listener.wait(timeout=5)
+            listener.wait(timeout=_DELIVERY_TIMEOUT)
 
 
 def test_a_callback_with_no_code_and_no_error_is_refused():
     with _callback.Listener(state="st") as listener:
 
         def deliver():
-            urllib.request.urlopen(listener.redirect_uri + "?state=st", timeout=5).read()
+            urllib.request.urlopen(listener.redirect_uri + "?state=st", timeout=_DELIVERY_TIMEOUT).read()
 
         threading.Thread(target=deliver, daemon=True).start()
         with pytest.raises(_callback.CallbackError, match="code"):
-            listener.wait(timeout=5)
+            listener.wait(timeout=_DELIVERY_TIMEOUT)
 
 
 def test_a_wait_with_nothing_delivered_times_out_rather_than_hanging():
     with _callback.Listener(state="st") as listener:
         with pytest.raises(_callback.CallbackError, match="no callback arrived"):
-            listener.wait(timeout=0.2)
+            listener.wait(timeout=_NO_DELIVERY_TIMEOUT)
 
 
 def test_every_candidate_port_occupied_names_all_three_in_the_error():
@@ -115,12 +129,12 @@ def test_a_response_never_carries_the_code_back_to_the_browser():
 
         def deliver():
             url = listener.redirect_uri + "?code=SECRET-CODE&state=st"
-            bodies.append(urllib.request.urlopen(url, timeout=5).read())
+            bodies.append(urllib.request.urlopen(url, timeout=_DELIVERY_TIMEOUT).read())
 
         thread = threading.Thread(target=deliver, daemon=True)
         thread.start()
-        assert listener.wait(timeout=5) == "SECRET-CODE"
-        thread.join(timeout=5)
+        assert listener.wait(timeout=_DELIVERY_TIMEOUT) == "SECRET-CODE"
+        thread.join(timeout=_DELIVERY_TIMEOUT)
     assert bodies and b"SECRET-CODE" not in bodies[0]
 
 

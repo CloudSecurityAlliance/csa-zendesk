@@ -80,13 +80,24 @@ def test_nothing_writes_to_stdout_when_any_module_is_imported_fresh():
     # maintains about itself - an import-time guard that only checked modules
     # the package already claims to have would not be independent of the thing
     # it is guarding.
-    module_names = sorted(f"csa_zendesk.{info.name}" for info in pkgutil.iter_modules(csa_zendesk.__path__))
+    #
+    # `walk_packages`, not `iter_modules`: `iter_modules` does not recurse, so
+    # it sees a subpackage like `auth` as a single opaque entry and never looks
+    # inside it - `auth._store`, `auth._pkce`, `auth._callback` and whatever
+    # `auth` gains next would all sit outside this guard entirely, unchecked,
+    # while the test kept passing. That is exactly the failure mode the
+    # comment below warns about, and it is the likeliest place for it to bite:
+    # the auth package is where a browser prompt and a paste-fallback prompt
+    # live - the two things in this codebase most likely to reach for print().
+    # `walk_packages` already yields fully-qualified names when given `prefix`,
+    # so they are used as-is rather than prefixed again.
+    module_names = sorted(info.name for info in pkgutil.walk_packages(csa_zendesk.__path__, prefix="csa_zendesk."))
     module_names.append("csa_zendesk")  # the package's own __init__.py
     # If this count ever changes, a module was added or removed - update the
     # number, but do not delete the assertion: without it, a module quietly
     # excluded from the loop below would leave this guard passing while
     # covering less than it claims to.
-    assert len(module_names) == 10, f"expected 10 modules, found {module_names}"
+    assert len(module_names) == 14, f"expected 14 modules, found {module_names}"
 
     for name in module_names:
         for cached in [n for n in sys.modules if n == "csa_zendesk" or n.startswith("csa_zendesk.")]:
