@@ -339,6 +339,25 @@ and the tests derived from each agree with it while both are wrong — `GOALS.md
 **30–50 tools** — near the 51 of the widest server surveyed, well above the ~10 of the core loop.
 Everything uncurated stays reachable through the hatch.
 
+> **Correction (2026-09-18, Block 0c Task 6, [`analysis/SLICE-FINDINGS.md`](../../../analysis/SLICE-FINDINGS.md)).**
+> This estimate assumed tools would be built by **grouping** operations — fewer tools than
+> operations. ADR-016 replaced that assumption with **splitting**: a tool is `(operation ×
+> constrained arguments)`, and one operation may back several tools. The validation slice tested
+> this on `PUT /tickets/{id}` and got a **6:1 split** — one operation, six tools — driven entirely by
+> that operation spanning five impact levels. `create_ticket`, `merge_tickets`, `get_ticket`,
+> `search_tickets` and `update_trigger` stayed 1:1 in the same slice, so the true multiplier is not
+> uniform; a full recount needs **B18**'s corrected per-operation classification before it can be
+> exact. But the admitted "now" bucket (335 operations, 33 families,
+> [`analysis/SCOPING-TRIAGE.md`](../../../analysis/SCOPING-TRIAGE.md)) includes several config-object
+> families — triggers, automations, macros, views, ticket forms, workspaces — whose update operations
+> have the same "one write endpoint, several impact levels" shape that produced the 6:1 split here,
+> not one isolated case. If a meaningful fraction of them split the way the ticket write path did,
+> the honest range is not "near 51" — it plausibly **exceeds** the widest server surveyed by a wide
+> margin. This estimate should be treated as superseded pending a real recount, not as current
+> guidance, and the design question it raises — a bucket-pure surface and a surface a model can
+> usefully choose from may not be simultaneously achievable at Zendesk's actual granularity — is open
+> and tracked as **B28**.
+
 ---
 
 ## 5. Build order and enable order are different things
