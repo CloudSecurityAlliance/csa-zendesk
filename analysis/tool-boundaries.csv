@@ -1,0 +1,12 @@
+tool,method,path,constraint,effect,reversibility,reach,capability
+get_ticket,GET,/api/v2/tickets/{ticket_id},none,read,n/a,internal,ticket.read
+search_tickets,GET,/api/v2/search,none,read,n/a,internal,ticket.read
+create_ticket,POST,/api/v2/tickets,no public comment; body must not contain status,write,reversible,internal,ticket.write
+update_ticket,PUT,/api/v2/tickets/{ticket_id},body must not contain comment or status,write,reversible,internal,ticket.write
+assign_ticket,PUT,/api/v2/tickets/{ticket_id},body may contain only assignee_id or group_id,write,reversible,internal,ticket.write
+add_internal_note,PUT,/api/v2/tickets/{ticket_id},comment only; public forced false,note,reversible,internal,ticket.note
+reply_publicly,PUT,/api/v2/tickets/{ticket_id},comment only; public forced true,reply,irreversible,contacts-a-person,ticket.reply
+solve_ticket,PUT,/api/v2/tickets/{ticket_id},status only; solved,solve,reversible-for-a-period,internal,ticket.solve
+close_ticket,PUT,/api/v2/tickets/{ticket_id},status only; closed,close,irreversible,internal,ticket.close
+merge_tickets,POST,/api/v2/tickets/{ticket_id}/merge,none,close,irreversible,internal,ticket.close
+update_trigger,PUT,/api/v2/triggers/{trigger_id},none,write,reversible,internal,admin.write
