@@ -1,5 +1,3 @@
-import pathlib
-
 import pytest
 
 from csa_zendesk.auth import _store
@@ -109,18 +107,26 @@ def test_clear_succeeds_when_no_file(monkeypatch, tmp_path):
 
 
 def test_write_cleans_up_temp_file_on_exception(monkeypatch, tmp_path):
-    import os
-
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "tokens.json"))
-    original_replace = os.replace
+
+    # A valid file already on disk - the state a crash mid-write must never
+    # destroy. `write()` is atomic via `os.replace`, so a failure there must
+    # leave this exact file behind: not truncated, not empty, not partially
+    # overwritten with the new attempt's bytes.
+    _store.write(_store.Tokens("old-at", "old-rt", 1000.0))
+    before = _store.token_path().read_bytes()
 
     def failing_replace(src, dst):
-        # Clean up the temp file manually so we can verify it was cleaned up
-        pathlib.Path(src).unlink()
+        # Raise without touching either file, so the assertions below observe
+        # write()'s own recovery - not behavior this mock performed for it.
         raise RuntimeError("Simulated failure")
 
     monkeypatch.setattr("os.replace", failing_replace)
     with pytest.raises(RuntimeError, match="Simulated failure"):
-        _store.write(_store.Tokens("at", "rt", 1000.0))
-    # Verify no temp files left behind
+        _store.write(_store.Tokens("new-at", "new-rt", 2000.0))
+
+    # The previously-valid file is untouched - the atomic-write guarantee.
+    assert _store.token_path().read_bytes() == before
+    # And write()'s own except-block unlinked the temp file it created,
+    # rather than leaving an orphan behind.
     assert len(list(tmp_path.glob(".tokens-*"))) == 0
