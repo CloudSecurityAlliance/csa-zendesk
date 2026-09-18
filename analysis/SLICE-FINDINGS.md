@@ -335,8 +335,17 @@ commit:**
   "a denylist constraint cannot be verified closed by comparing tools." See the Claim 1 correction
   above and `TODO.md`'s corrected B24 row.
 - **C8** *(extended)* — `merge_tickets`' wrong-subject case (checks the surviving target, never the
-  tickets closed via `ids` — fail-**open**) is added alongside `update_trigger`'s existing
-  fail-**closed** case. See `TODO.md`'s extended C8 row.
+  tickets closed via `ids` — fail-**open**, unlike `update_trigger`'s existing fail-**closed** case
+  below it) is added alongside `update_trigger`'s. **This is not cleared by anything in this
+  document.** It is currently exercisable only by calling `assert_subject_permitted` directly, the
+  way `TODO.md`'s C8 row does — `merge_tickets` has no `_GATES` entry (see Claim/finding **C7**
+  above: ten of eleven tools, `merge_tickets` included, have no backing `Backend` method and cannot
+  reach `_dispatch` at all today), so no real call can hit it *yet*. That is an accident of
+  sequencing, not a mitigation: the bug lands live the moment `merge_tickets` gets a backing
+  `Backend` method and a `_GATES` entry, unless the per-tool subject-key concept `TODO.md` calls for
+  ships first. See `TODO.md`'s extended C8 row for the exact scope-bypass example
+  (`CSA_ZD_ALLOWLIST_WRITE=44821`, `merge_tickets(ticket_id=44821, ids=[99999])` closes `99999`
+  outside the allowlist).
 - **I1** *(new; filed and closed in the same commit)* — reach enforcement hung on `_GATES`,
   uncross-checked against `TOOLS`. Closed by two new tests in `tests/test_policy.py`. See `TODO.md`'s
   I1 row.

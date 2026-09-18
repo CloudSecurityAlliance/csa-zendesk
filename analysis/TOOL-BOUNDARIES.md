@@ -24,14 +24,14 @@ OK - 11 tools over 6 operations
 |---|---|---|---|---|---|---|---|
 | `get_ticket` | GET | `/api/v2/tickets/{ticket_id}` | none | read | n/a | internal | `ticket.read` |
 | `search_tickets` | GET | `/api/v2/search` | none | read | n/a | internal | `ticket.read` |
-| `create_ticket` | POST | `/api/v2/tickets` | no public comment; body must not contain status | write | reversible | internal | `ticket.write` |
-| `update_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | body must not contain comment or status | write | reversible | internal | `ticket.write` |
+| `create_ticket` | POST | `/api/v2/tickets` | no public comment; body must not contain status / custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids | write | reversible | internal | `ticket.write` |
+| `update_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | body must not contain comment or status; nor custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids | write | reversible | internal | `ticket.write` |
 | `assign_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | body may contain only assignee_id or group_id | write | reversible | internal | `ticket.write` |
 | `add_internal_note` | PUT | `/api/v2/tickets/{ticket_id}` | comment only; public forced false | note | reversible | internal | `ticket.note` |
 | `reply_publicly` | PUT | `/api/v2/tickets/{ticket_id}` | comment only; public forced true | reply | irreversible | contacts-a-person | `ticket.reply` |
 | `solve_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | status only; solved | solve | reversible-for-a-period | internal | `ticket.solve` |
 | `close_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | status only; closed | close | irreversible | internal | `ticket.close` |
-| `merge_tickets` | POST | `/api/v2/tickets/{ticket_id}/merge` | none | close | irreversible | internal | `ticket.close` |
+| `merge_tickets` | POST | `/api/v2/tickets/{ticket_id}/merge` | forbid source_comment_is_public and target_comment_is_public | close | irreversible | contacts-a-person | `ticket.merge` |
 | `update_trigger` | PUT | `/api/v2/triggers/{trigger_id}` | none | write | reversible | internal | `admin.write` |
 
 `scripts/check_boundaries.py` enforces bucket purity mechanically: every tool has exactly one
@@ -71,10 +71,27 @@ this split — the checker passes, because the constraints differ — but does n
 impact split, and the table records it as one so the distinction doesn't get lost and mistaken for a
 second impact boundary later.
 
-**`merge_tickets` is `ticket.close`, not `ticket.write`.** Reading the axes rather than the tool's
-name shows a merge is irreversible and terminal for the ticket being merged away — the same bucket as
-`close_ticket`, on a different operation. Filed as **TODO C6**: prior handling of `merge_tickets`
-(anywhere it was informally assumed to be a generic write) should be corrected to gate it as a close.
+**`merge_tickets` is not `ticket.write` — reading the axes moved it, correctly, off that bucket.**
+Reading the axes rather than the tool's name shows a merge is irreversible and terminal for the
+ticket being merged away — not the same bucket as a routine field edit. Filed as **TODO C6**: prior
+handling of `merge_tickets` (anywhere it was informally assumed to be a generic write) should be
+corrected to gate it beyond `ticket.write`.
+
+**Where it landed is not `ticket.close` either, and that took a second pass to see.** The first
+reading of the axes stopped at "irreversible and terminal" and filed `merge_tickets` alongside
+`close_ticket` under `ticket.close`. That reading was incomplete: `POST .../merge` also accepts
+`source_comment_is_public` / `target_comment_is_public`, so a merge can email the requester the same
+way `reply_publicly` does — it carries **reach**, which `close_ticket` does not. Once the reach
+invariant existed (every `reach=True` tool's capability must be in `REACH_CAPABILITIES`, and no
+profile may grant a `REACH_CAPABILITIES` member — see `src/csa_zendesk/policy.py`), sharing
+`ticket.close` with the non-reaching `close_ticket` became unsatisfiable: a profile granting
+`ticket.close` for routine closes would, transitively, grant a reach-carrying operation too, and a
+profile that couldn't grant `ticket.close` at all (correct for `close_ticket`, which reaches no one)
+would wrongly block a merge that has nothing to do with reach in the caller's mental model. The fix
+wave gave `merge_tickets` its own capability, `ticket.merge` — distinct from `ticket.close`, in
+`REACH_CAPABILITIES`, and granted by no profile, same as `ticket.close`. See
+[`DECISIONS-ADR/ADR-010.md`](../DECISIONS-ADR/ADR-010.md)'s correction for the decision-log side of
+this, and `analysis/tool-boundaries.csv` / `src/csa_zendesk/tools.py` for the current table.
 
 ## A discrepancy the brief's own prose had, caught only by running the checker
 

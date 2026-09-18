@@ -92,11 +92,16 @@ share their architecture.
    to the server: required fields are tenant-specific and the API already 422s naming what is
    missing. The server states what is *true*; a plugin states what to *do*.
 7. **Authority is ordered by reversibility** (ADR-003): `ticket.read` < `ticket.note` <
-   `ticket.write` < `ticket.reply` < `ticket.solve` < `ticket.close`. The default profile is
-   everything that can be undone — read, note, write. Reply, solve and close are opt-in, and no
-   profile grants close. Solving is not itself terminal but it is the **on-ramp** to terminal: a
-   tenant automation closes solved tickets after a fixed period, and solving also removes the
-   ticket from active views, which is why nobody notices before the timer expires.
+   `ticket.write` < `ticket.reply` < `ticket.solve` < `ticket.close` < `ticket.merge`. The default
+   profile is everything that can be undone — read, note, write. Reply, solve, close and merge are
+   opt-in, and no profile grants close or merge. Solving is not itself terminal but it is the
+   **on-ramp** to terminal: a tenant automation closes solved tickets after a fixed period, and
+   solving also removes the ticket from active views, which is why nobody notices before the timer
+   expires. `ticket.merge` sits last, not merely alongside `ticket.close`: a merge is irreversible
+   and terminal for the source ticket like a close, *and* it can email the requester
+   (`source_comment_is_public` / `target_comment_is_public`) the way `ticket.reply` does — it is the
+   one capability that combines both properties, so it is also, with `ticket.reply`, in
+   `REACH_CAPABILITIES` and requires `CSA_ZD_ALLOW_REACH` in addition to being granted.
 
 ## Invariants that fail silently — check these when editing
 
