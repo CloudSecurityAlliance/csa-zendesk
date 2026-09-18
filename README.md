@@ -30,8 +30,12 @@ coverage**.
 | Voice (Talk) | 60 | post-1.0 |
 | Live Chat, Messaging, AI Agents, Custom Data, Sales CRM | no published spec | post-1.0 |
 
-**825 of 882 machine-readable operations at 1.0.0** — which is coverage of the published
-specs, not of the API. The Help Center spec describes roughly 18 of ~30 documented families;
+**822 of 882 machine-readable operations at 1.0.0** — which is coverage of the published
+specs, not of the API. The 60 deferred are all Voice. Status's three operations have no
+published spec and are not in the inventory at all, so they sit outside both figures — which
+is what made the earlier count wrong: 825 counted them in a numerator measured against a
+denominator that excludes them. Guarded by `scripts/check_counts.py`.
+The Help Center spec describes roughly 18 of ~30 documented families;
 about a dozen, several of them live, have no spec entry and need hand-written methods. See
 `analysis/API-SURFACE.md` §4b.
 
