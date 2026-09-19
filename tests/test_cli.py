@@ -35,14 +35,33 @@ def _tokens(*, expires_at: float = 0.0, scope: str = "read") -> auth.Tokens:
         (0, "0 seconds"),
         (1, "1 second"),
         (59, "59 seconds"),
+        # just over the 60-second boundary: the next unit down (seconds) is
+        # non-zero, so it is carried rather than truncated away.
         (60, "1 minute"),
+        (61, "1 minute 1 second"),
+        (119, "1 minute 59 seconds"),
         (120, "2 minutes"),
-        (3599, "59 minutes"),
+        (125, "2 minutes 5 seconds"),
+        # just under the 60-minute boundary: previously truncated to "59
+        # minutes", which is the exact bug this fix closes.
+        (3599, "59 minutes 59 seconds"),
         (3600, "1 hour"),
+        # just over 1 hour: minutes is the next unit down, and it IS zero here
+        # even though seconds is not - only one unit below the primary is ever
+        # shown, so the leftover second is dropped, not carried past minutes.
+        (3601, "1 hour"),
+        (3660, "1 hour 1 minute"),
         (7200, "2 hours"),
-        (86399, "23 hours"),
+        # just under the 24-hour boundary: previously truncated to "23 hours".
+        (86399, "23 hours 59 minutes"),
         (86400, "1 day"),
+        (90000, "1 day 1 hour"),
         (172800, "2 days"),
+        # the case that exposed the bug: a freshly-issued 2-day access token
+        # (172,800s max) measured a few seconds later reads as "1 day" under
+        # the old truncating implementation, as if half its life were already
+        # gone.
+        (172753, "1 day 23 hours"),
     ],
 )
 def test_human_duration_every_scale(seconds, want):
@@ -50,7 +69,7 @@ def test_human_duration_every_scale(seconds, want):
 
 
 def test_human_expiry_in_the_future():
-    assert cli._human_expiry(1_400.0, now=0.0) == "expires in 23 minutes"
+    assert cli._human_expiry(1_400.0, now=0.0) == "expires in 23 minutes 20 seconds"
 
 
 def test_human_expiry_in_the_past():

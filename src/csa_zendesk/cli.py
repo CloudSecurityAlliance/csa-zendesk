@@ -45,20 +45,36 @@ from . import exceptions as exc
 __all__ = ["main"]
 
 
+def _unit(n: int, name: str) -> str:
+    return f"{n} {name}{'s' if n != 1 else ''}"
+
+
 def _human_duration(seconds: float) -> str:
     """`23 minutes`, not `1379.4` - `status`'s whole reason to exist is to be
-    read by a person deciding whether to re-authorise."""
-    seconds = int(seconds)
-    if seconds < 60:
-        return f"{seconds} second{'s' if seconds != 1 else ''}"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours} hour{'s' if hours != 1 else ''}"
-    days = hours // 24
-    return f"{days} day{'s' if days != 1 else ''}"
+    read by a person deciding whether to re-authorise.
+
+    Reports the largest applicable unit, plus the next unit down when its
+    remainder is non-zero - never more than two. Truncating straight to the
+    largest unit (the previous behaviour) reads as a fault once lifetimes are
+    measured in days rather than minutes: a token with 47.99 hours left is
+    genuinely fresh, but `hours // 24` alone reports "1 day", suggesting half
+    its life is already gone. `2 days`, not `2 days 0 hours`, when the
+    remainder actually is zero - the single-unit form stays for the exact
+    case a freshly-issued token at `_flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS`
+    produces.
+    """
+    total = int(seconds)
+    days, rem = divmod(total, 86_400)
+    hours, rem = divmod(rem, 3_600)
+    minutes, secs = divmod(rem, 60)
+
+    if days:
+        return _unit(days, "day") if hours == 0 else f"{_unit(days, 'day')} {_unit(hours, 'hour')}"
+    if hours:
+        return _unit(hours, "hour") if minutes == 0 else f"{_unit(hours, 'hour')} {_unit(minutes, 'minute')}"
+    if minutes:
+        return _unit(minutes, "minute") if secs == 0 else f"{_unit(minutes, 'minute')} {_unit(secs, 'second')}"
+    return _unit(secs, "second")
 
 
 def _human_expiry(expires_at: float, *, now: float | None = None) -> str:
