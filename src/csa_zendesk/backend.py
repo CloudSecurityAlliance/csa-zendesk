@@ -103,13 +103,11 @@ class ApiBackend:
         # unrelated Countries family carries one anywhere in the inventory, so
         # neither presence nor absence generalises from it.
         #
-        # No paging parameter: specs/zendesk-support-oas.yaml (operationId
-        # ListTicketComments) caps this endpoint at 100 records per page and
-        # sorts ascending by creation date by default. A ticket with more than
-        # 100 comments would have its later comments silently missing from
-        # this envelope - this method does not add a paging parameter the
-        # brief did not ask for, so a caller reading a long ticket must not
-        # assume the result is complete.
+        # No paging parameter: API-SURFACE.md §5.4g - this endpoint caps at 100
+        # records per page and defaults to oldest-first, so a ticket with more
+        # than 100 comments silently omits its newest ones here. This method
+        # does not add a paging parameter the brief did not ask for; a caller
+        # reading a long ticket must not assume the result is complete.
         return self._http.get(f"/api/v2/tickets/{ticket_id}/comments")
 
 

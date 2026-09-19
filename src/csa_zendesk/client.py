@@ -66,10 +66,10 @@ class ZendeskClient:
         ticket's first comment) - never flattened, since a reader needs to know
         which prior messages actually reached the customer.
 
-        Takes no paging parameter. The endpoint caps at 100 comments per page
-        (specs/zendesk-support-oas.yaml, operationId ListTicketComments); a
-        ticket with more than that will have its later comments missing from
-        this envelope.
+        Takes no paging parameter. API-SURFACE.md §5.4g: the endpoint caps at
+        100 comments per page and defaults to oldest-first, so a ticket with
+        more than 100 will have its newest comments missing from this envelope,
+        with nothing in the envelope's shape announcing the gap.
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.list_comments(ticket_id=ticket_id))
