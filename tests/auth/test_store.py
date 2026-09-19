@@ -61,6 +61,72 @@ def test_read_returns_none_when_there_is_no_file(monkeypatch, tmp_path):
     assert _store.read() is None
 
 
+def test_a_dangling_symlink_is_not_reported_as_no_token_file(monkeypatch, tmp_path):
+    # path.exists() is False for a symlink whose target is gone - the same
+    # return value as "no token file at all" - which would make `auth status`
+    # print "no token file, run auth login" for a dangling symlink instead of
+    # naming the actual problem.
+    target = tmp_path / "nonexistent-target.json"
+    link = tmp_path / "tokens.json"
+    link.symlink_to(target)
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(link))
+    with pytest.raises(_store.TokenFileError, match="symlink"):
+        _store.read()
+
+
+def test_an_os_error_reading_the_file_is_a_token_file_error_not_a_traceback(monkeypatch, tmp_path):
+    # A PermissionError (or any other OSError) must be reported the same way
+    # every other unreadable-token-file case is, not escape as a raw
+    # traceback from `auth status` - the one command whose job is to report
+    # what state you are in.
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "tokens.json"))
+    _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
+
+    def raise_permission_error(self):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(_store.pathlib.Path, "read_text", raise_permission_error)
+    with pytest.raises(_store.TokenFileError, match="not a readable token file"):
+        _store.read()
+
+
+def test_an_existing_directory_we_did_not_create_is_verified_not_chmodded(monkeypatch, tmp_path):
+    # Regression: `_ensure_dir` used to `chmod(0o700)` the token file's parent
+    # directory unconditionally, on every write - i.e. every refresh -
+    # regardless of who created it or what else lives there.
+    # CSA_ZENDESK_TOKEN_FILE=/var/lib/myservice/zd.json would silently reduce
+    # that shared directory to owner-only. A pre-existing, correctly-private
+    # directory must be left exactly as it was: verified, not touched.
+    directory = tmp_path / "shared"
+    directory.mkdir()
+    directory.chmod(0o700)  # explicit, not relying on umask to land exactly here
+    before = directory.stat().st_mode
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(directory / "tokens.json"))
+    _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
+    assert directory.stat().st_mode == before
+
+
+def test_an_existing_directory_looser_than_0700_is_refused_not_silently_fixed(monkeypatch, tmp_path):
+    directory = tmp_path / "loose"
+    directory.mkdir()
+    directory.chmod(0o755)  # explicit, not relying on umask to land exactly here
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(directory / "tokens.json"))
+    with pytest.raises(_store.TokenFileError, match="0755"):
+        _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
+
+
+def test_intermediate_parents_created_along_the_way_are_also_private(monkeypatch, tmp_path):
+    # mkdir(mode=0o700, parents=True) applies `mode` to the leaf directory
+    # only - any intermediate parents it creates are left at the umask unless
+    # each one created is chmodded too.
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "a" / "b" / "tokens.json"))
+    _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
+    import stat
+
+    assert stat.S_IMODE((tmp_path / "a").stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "a" / "b").stat().st_mode) == 0o700
+
+
 def test_a_credential_never_appears_in_a_repr(monkeypatch, tmp_path):
     t = _store.Tokens("SECRET-ACCESS", "SECRET-REFRESH", 1.0, "tickets:read")
     assert "SECRET-ACCESS" not in repr(t)
