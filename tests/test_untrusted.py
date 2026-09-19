@@ -270,6 +270,8 @@ def test_wrap_search_wraps_a_user_result_from_an_unconstrained_query():
         "results": [
             {
                 "id": 5,
+                "result_type": "user",
+                "role": "end-user",
                 "name": "Attacker Name",
                 "email": "attacker@example.com",
                 "details": "free text",
@@ -285,6 +287,11 @@ def test_wrap_search_wraps_a_user_result_from_an_unconstrained_query():
     for field in ("name", "email", "details", "notes", "alias", "signature"):
         assert _untrusted.MARKER_OPEN in user[field], field
     assert user["id"] == 5
+    # A consumer branches on these, so wrapping would break the switch
+    # (unlike `via.channel`/`satisfaction_rating.score`, which nobody switches
+    # on and are accepted noise) - they stay exactly as Zendesk sent them.
+    assert user["result_type"] == "user"
+    assert user["role"] == "end-user"
 
 
 def test_wrap_search_skips_a_non_dict_result_without_error():

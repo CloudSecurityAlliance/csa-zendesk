@@ -103,6 +103,15 @@ _ANGLE_BRACKETS = str.maketrans({"<": "‹", ">": "›"})
 #: Keys whose value Zendesk itself sets - never a requester - so `_walk_dict`
 #: leaves them alone even though it wraps any other string by default.
 #:
+#: The test for membership: a key belongs here when a CONSUMER COMPARES its
+#: value rather than reads it - an enum, a discriminator, an id, a timestamp,
+#: a URL. `result_type` (OAS: the `ticket`/`user`/`organization`/`group`
+#: discriminator on a search result) and `role` (a user's `end-user`/`agent`/
+#: `admin` enum) are exactly this: code branches or filters on them, so
+#: wrapping breaks the switch rather than merely costing legibility. Anything
+#: a human wrote - a name, a comment, a subject line - stays wrapped, even
+#: when it happens to look enum-like.
+#:
 #: Deliberately NOT a `*_id`-suffix rule. `external_id` ends the same way and
 #: is requester/integration-authored text (OAS: "Unique identifier of the
 #: external resource ... string"), not a foreign-key reference - it MUST be
@@ -111,8 +120,10 @@ _ANGLE_BRACKETS = str.maketrans({"<": "‹", ">": "›"})
 #: ...) is an integer, which `_walk_dict` already leaves untouched by type
 #: (only `str` values are ever passed to `wrap`) - so this set only needs to
 #: name the STRING-typed fields that are machine-set, not every field whose
-#: name merely contains "id".
-_MACHINE_SET_KEYS = frozenset({"id", "url", "type", "status", "priority", "public"})
+#: name merely contains "id". Extend this set by naming a key explicitly,
+#: never by adding a pattern: a pattern acquires members the vendor adds
+#: without anyone deciding.
+_MACHINE_SET_KEYS = frozenset({"id", "url", "type", "status", "priority", "public", "result_type", "role"})
 
 
 def _is_machine_set(key: str) -> bool:
