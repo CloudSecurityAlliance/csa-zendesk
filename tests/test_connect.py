@@ -1,21 +1,8 @@
-import importlib
-
 import httpx
 import pytest
 
+from csa_zendesk import _connect as connect_mod
 from csa_zendesk import exceptions as exc
-
-# `importlib.import_module`, not `from csa_zendesk import connect` or even
-# `import csa_zendesk.connect as connect_mod` - __init__.py exports the
-# *callable* `connect` under the same name (`from .connect import connect`),
-# which shadows the submodule as an attribute of the `csa_zendesk` package
-# once __init__.py has run. Both of those forms resolve through that
-# attribute (`import a.b as c` walks the parent package's namespace just like
-# `from a import b` does) and would hand back the function, not the module -
-# verified live. `importlib.import_module` reads `sys.modules` directly
-# instead, which the shadowing attribute assignment never touches, so it is
-# the only one of the three that reliably returns the submodule.
-connect_mod = importlib.import_module("csa_zendesk.connect")
 
 
 def test_connect_returns_a_gated_client(monkeypatch):
@@ -71,13 +58,15 @@ def test_a_missing_subdomain_is_a_typed_error_not_a_keyerror(monkeypatch):
 
 def test_profile_and_capabilities_are_mutually_exclusive(monkeypatch):
     monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
-    with pytest.raises(ValueError, match="not both"):
+    with pytest.raises(ValueError, match="exactly one"):
         connect_mod.connect(profile="read_only", capabilities=frozenset({"ticket.read"}))
 
 
-# The four tests above are the brief's verbatim spec. The two below are added
-# here to reach 100% coverage: neither the profile= success path nor the
-# neither-given default path is exercised above.
+# The five tests above are the brief's spec (with the `granted` -> `capabilities`
+# fix noted inline). The two below are added for coverage and for the
+# no-default-authority requirement (review finding 2): `connect()` must refuse
+# when neither `profile` nor `capabilities` is given, not silently grant some
+# policy nobody asked for.
 
 
 def test_a_named_profile_resolves_to_its_capabilities(monkeypatch):
@@ -90,11 +79,7 @@ def test_a_named_profile_resolves_to_its_capabilities(monkeypatch):
     assert client.policy.capabilities == policy.PROFILES["readonly"]
 
 
-def test_neither_profile_nor_capabilities_defaults_to_the_default_profile(monkeypatch):
-    from csa_zendesk import policy
-
+def test_neither_profile_nor_capabilities_is_a_refusal_not_a_default(monkeypatch):
     monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
-    monkeypatch.setattr(connect_mod.auth, "access_token", lambda: "AT")
-    client = connect_mod.connect()
-    assert client.policy is not None
-    assert client.policy.capabilities == policy.PROFILES["default"]
+    with pytest.raises(ValueError, match="exactly one"):
+        connect_mod.connect()

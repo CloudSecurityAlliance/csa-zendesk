@@ -13,10 +13,10 @@ annotations of its own that need it deferred.
 """
 
 from . import auth, exceptions
+from ._connect import connect
 from ._http import HttpClient
 from .backend import ApiBackend, Backend, Envelope, FakeBackend
 from .client import ZendeskClient
-from .connect import connect
 from .policy import ALL_CAPABILITIES, PROFILES, Policy, PolicyBackend
 
 __version__ = "0.0.1"
