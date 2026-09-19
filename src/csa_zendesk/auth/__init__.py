@@ -177,6 +177,10 @@ def logout(*, transport: httpx.BaseTransport | None = None) -> str:
     - `"revoked"` - the server-side revoke succeeded; the local file is
       cleared.
 
+    Revoking the access token this way also invalidates its paired refresh
+    token - confirmed 2026-09-19 against the live tenant, see `_flow.revoke`'s
+    docstring and TODO.md E20. A stolen token file cannot outlive a `logout`.
+
     Any other failure (`RevokeError`, or `exc.ApiError` for a transport
     failure) propagates instead of returning, and the local file is
     deliberately left untouched - see `_flow.revoke`'s docstring for why.

@@ -135,9 +135,9 @@ def _cmd_logout(args: argparse.Namespace) -> int:
     token already being dead, the local file is left in place on purpose: it
     is the one thing that could still revoke a possibly-live credential.
 
-    Whether revoking the access token this way also invalidates its paired
-    refresh token is **not stated** by Zendesk's API spec, and this command
-    does not guess: see `auth.revoke`'s docstring and TODO.md E20.
+    Revoking the access token this way also invalidates its paired refresh
+    token - **not stated** by Zendesk's API spec, but confirmed 2026-09-19
+    against the live tenant: see `auth.revoke`'s docstring and TODO.md E20.
     """
     try:
         outcome = auth.logout()
@@ -189,8 +189,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "logout",
         help=(
             "revoke the stored access token server-side, then clear the local file. "
-            "Whether this also invalidates the paired refresh token is not stated by the "
-            "Zendesk API spec and is not known."
+            "This also invalidates the paired refresh token - not stated by the Zendesk "
+            "API spec, but confirmed against the live tenant."
         ),
     )
 

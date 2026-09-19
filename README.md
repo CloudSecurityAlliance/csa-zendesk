@@ -180,9 +180,10 @@ resent on every refresh, not just at login, because Zendesk rotates the refresh 
 This is deliberately paired with `auth logout`: both tokens already live in the same `0600` file, so
 a short access-token lifetime buys nothing against file theft while costing a refresh every 30
 minutes instead — maximising lifetimes without a real revoke path would be careless (TODO.md E11,
-E15). `auth logout` revokes the access token via `DELETE /api/v2/oauth/tokens/current`; **whether
-that also invalidates the paired refresh token is not stated by Zendesk's API spec and is not
-known** — see TODO.md E20 for the live check that would settle it.
+E15). `auth logout` revokes the access token via `DELETE /api/v2/oauth/tokens/current`; **this also
+invalidates the paired refresh token** — not stated by Zendesk's API spec, but confirmed 2026-09-19
+against the live tenant (TODO.md E20, `analysis/API-SURFACE.md` §7.4). This is what makes the
+maximal lifetimes above defensible: a stolen token file does not survive a `logout`.
 
 The **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`, `probe_families.py`,
 `probe_access.py` — which refresh `analysis/` and ship in no package, authenticate the same way

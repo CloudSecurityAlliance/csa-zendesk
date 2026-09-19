@@ -377,12 +377,15 @@ def revoke(*, subdomain: str, tokens: Tokens, transport: httpx.BaseTransport | N
     the same shape the spec documents, and the only one it documents; there is
     no separate "revoke this refresh token" endpoint.
 
-    **Whether this also invalidates the paired refresh token is unknown.** The
-    spec says only that it revokes "the current OAuth token" and returns `204
-    No Content`; it documents nothing about the refresh token issued alongside
-    it, and this module does not guess. See TODO.md E20 for the live check
-    that would settle it - deliberately not run here (no network in tests, and
-    Kurt asked that nothing run against the live API for this change).
+    **This also invalidates the paired refresh token - confirmed 2026-09-19
+    against the live tenant.** The spec itself says only that this revokes
+    "the current OAuth token" and returns `204 No Content`; it documents
+    nothing about the refresh token issued alongside it, so the answer could
+    not be read off the spec and had to be settled by probe (TODO.md E20): log
+    in, preserve a copy of the pre-logout refresh token, run `logout`, then
+    attempt a `refresh()` with the preserved token. Zendesk refused it. See
+    `analysis/API-SURFACE.md` §7.4 for the full method and why it matters for
+    the maximal token lifetimes this module requests.
 
     Callers distinguish two failure shapes, because they call for opposite
     handling of the local token file:
