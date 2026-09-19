@@ -203,6 +203,26 @@ python3 scripts/inventory.py         # 882 operations
 python3 scripts/probe_families.py    # 43/49 families reachable (as last measured, under the API-token path)
 ```
 
+## Development
+
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install -e '.[dev,server]'
+```
+
+`server` is an optional extra (`[project.optional-dependencies]`), not a hard dependency — the
+library stays importable without the MCP SDK. Install it anyway in a dev environment: it backs
+`src/csa_zendesk/server.py` (the `csa-zendesk-mcp` console script), and
+`tests/test_public_api.py`'s import-time stdout guard imports every module in the package,
+`server.py` included, so the test suite fails to collect without it.
+
+```bash
+./.venv/bin/pytest --cov=csa_zendesk --cov-fail-under=100 -q
+./.venv/bin/ruff check src tests && ./.venv/bin/ruff format --check src tests
+./.venv/bin/mypy --strict src
+python3 scripts/check_public_safe.py
+```
+
 ## License
 
 [Apache 2.0](LICENSE).
