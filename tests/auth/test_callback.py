@@ -10,6 +10,7 @@ amendment on the task 3 brief.
 import io
 import socket
 import threading
+import time
 import urllib.request
 
 import pytest
@@ -39,6 +40,54 @@ _NO_DELIVERY_TIMEOUT = 0.05
 def test_it_binds_a_loopback_port_and_reports_it():
     with _callback.Listener(state="st") as listener:
         assert listener.redirect_uri in _REGISTERED_REDIRECT_URIS
+
+
+def test_it_binds_loopback_only_not_every_interface():
+    # Two lines guarding a real property, not inspection alone: a listener
+    # bound to 0.0.0.0 would accept the authorization code from anywhere on
+    # the network, not just this machine.
+    with _callback.Listener(state="st") as listener:
+        assert listener._server.server_address[0] == "127.0.0.1"
+
+
+def test_a_connection_that_never_sends_a_request_does_not_hang_wait_forever():
+    # HTTPServer.timeout bounds only select() before accept() - the accepted
+    # connection's rfile.readline() has no timeout of its own by default and
+    # blocks forever on a TCP connect that sends no bytes (a browser's
+    # speculative connection, a local dev tool, a port scanner). This is the
+    # regression test for that: without a handler-level socket timeout, this
+    # test would hang the suite rather than fail it.
+    with _callback.Listener(state="st") as listener:
+        stalled = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            stalled.connect(("127.0.0.1", listener._server.server_port))
+            start = time.monotonic()
+            with pytest.raises(_callback.CallbackError, match="no callback arrived"):
+                listener.wait(timeout=_NO_DELIVERY_TIMEOUT)
+            elapsed = time.monotonic() - start
+        finally:
+            stalled.close()
+    # Bounded by a small multiple of the timeout given, not by nothing at all.
+    assert elapsed < 2.0
+
+
+def test_log_message_never_writes_the_authorization_code_to_stderr(capsys):
+    # An empty log_message override is invisible to a coverage report - the
+    # line still "executes" - so this asserts the property the override
+    # exists for, not merely that the method runs. The stdlib default writes
+    # the full request line, query string included, to stderr; the code in
+    # that query string is a credential (see the module and do_GET docstrings).
+    with _callback.Listener(state="st") as listener:
+
+        def deliver():
+            url = listener.redirect_uri + "?code=DO-NOT-LOG-ME&state=st"
+            urllib.request.urlopen(url, timeout=_DELIVERY_TIMEOUT).read()
+
+        threading.Thread(target=deliver, daemon=True).start()
+        assert listener.wait(timeout=_DELIVERY_TIMEOUT) == "DO-NOT-LOG-ME"
+    captured = capsys.readouterr()
+    assert "DO-NOT-LOG-ME" not in captured.err
+    assert "DO-NOT-LOG-ME" not in captured.out
 
 
 def test_it_returns_the_code_the_browser_delivers():

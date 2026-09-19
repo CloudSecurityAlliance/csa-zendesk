@@ -113,6 +113,7 @@ class Listener:
             tried = ", ".join(str(p) for p in ports)
             raise CallbackError(f"every candidate callback port is already in use ({tried}); free one and retry")
         self._server = server
+        self._handler_cls = Handler
 
     @property
     def redirect_uri(self) -> str:
@@ -136,7 +137,32 @@ class Listener:
         accepts and fully handles one connection before returning - or, if
         none arrives, returns having handled none. Either way this method
         returns; a hung authorization does not hang the caller forever.
+
+        `HTTPServer.timeout` bounds only the `select()` before `accept()` - it
+        says nothing about a connection once accepted. `BaseHTTPRequestHandler
+        .timeout` defaults to `None`, so `rfile.readline()` on an accepted
+        connection that never sends a request line blocks forever: any process
+        that opens a TCP connection to this loopback port without sending
+        bytes - a browser's speculative connection, a local dev tool, a port
+        scanner - would consume the one shot and hang here past `timeout`,
+        contradicting the promise above and, on the live 300s default, hanging
+        `auth login` indefinitely. Setting the handler class's own `timeout`
+        closes that: `StreamRequestHandler.setup()` applies it via
+        `connection.settimeout()` when it is not `None`, and the stdlib's
+        `handle_one_request()` already catches `socket.timeout` and simply
+        closes the connection rather than raising - so a stalled connection
+        ends this call the same way "nothing arrived at all" does (`_got_request`
+        stays `False`), rather than hanging it forever.
+
+        Bounded by `timeout` itself, the same budget already given to
+        `select()` - not "whatever is left of it": `select()` returning early
+        because a connection arrived is not this call spending less of its
+        budget, it is this call *starting* to spend it on the accepted
+        connection, so re-arming the same `timeout` for the read is what keeps
+        one call to `wait(timeout)` bounded by a small, fixed multiple of
+        `timeout` in the worst case, rather than by nothing at all.
         """
+        self._handler_cls.timeout = timeout
         self._server.timeout = timeout
         self._server.handle_request()
         if not self._got_request:
