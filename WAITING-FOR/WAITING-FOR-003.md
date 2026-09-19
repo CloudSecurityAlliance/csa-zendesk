@@ -1,6 +1,6 @@
 # WAITING-FOR-003: Zendesk stops issuing API tokens on 2026-10-27
 
-**Status:** Open
+**Status:** Resolved (2026-09-19)
 **Date identified:** 2026-09-17
 **Type:** Deadline — the window closes on a date, whether or not we act
 
@@ -61,3 +61,12 @@ populated by a real authorization, because that step mints a real credential aga
 tenant and is deliberately held back for a human at a browser rather than done by an agent. The
 only outstanding step to close this item is that human-performed live login — after which this
 entry should be marked Resolved with the date it happened, not before.
+
+**Resolved 2026-09-19.** The human-performed live login happened 2026-09-18 (late) — the OAuth
+client authenticated against the live CSA tenant for the first time, populating the token file
+from a real authorization. Refresh behaviour was then probed on 2026-09-19: refresh with no
+client secret was accepted, refresh tokens rotate, and a consumed refresh token is not
+reuse-detected. Full findings are recorded in `analysis/API-SURFACE.md` §7.3 and
+`DECISIONS-ADR/ADR-009.md`'s 2026-09-19 amendment. This closes the item this entry existed to
+wait for: an OAuth flow authenticating against the live account. The research scripts' own
+port to OAuth remains tracked separately, as this entry always said it would be.
