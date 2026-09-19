@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python ≥3.10 · `httpx` · the official `mcp` SDK (new optional dependency) · stdlib `argparse` · `pytest` · `ruff` · `mypy --strict`
 
-**Spec:** [`docs/superpowers/specs/2026-09-17-csa-zendesk-whole-project-design.md`](../specs/2026-09-17-csa-zendesk-whole-project-design.md) — §1 three controls, §5 build order vs enable order, and the **E1** rung of the enablement track. Vendor behaviour is [`analysis/API-SURFACE.md`](../../../analysis/API-SURFACE.md). Auth is [`ADR-009`](../../../DECISIONS-ADR/ADR-009.md) and [`ADR-015`](../../../DECISIONS-ADR/ADR-015.md); the backend seam is [`ADR-002`](../../../DECISIONS-ADR/ADR-002.md); capabilities are [`ADR-010`](../../../DECISIONS-ADR/ADR-010.md).
+**Spec:** [`docs/superpowers/specs/2026-09-17-csa-zendesk-whole-project-design.md`](../specs/2026-09-17-csa-zendesk-whole-project-design.md) — §1 three controls, §5 build order vs enable order, and the **E1** rung of the enablement track. Vendor behaviour is [`analysis/API-SURFACE.md`](../../../analysis/API-SURFACE.md). Auth is [`ADR-009`](../../../DECISIONS-ADR/ADR-009.md) and [`ADR-015`](../../../DECISIONS-ADR/ADR-015.md); the backend seam is [`ADR-002`](../../../DECISIONS-ADR/ADR-002.md); capabilities are [`ADR-010`](../../../DECISIONS-ADR/ADR-010.md); the server's `logout` tool is [`ADR-017`](../../../DECISIONS-ADR/ADR-017.md).
 
 ## Why this block exists, and what it deliberately is not
 
@@ -537,26 +537,77 @@ git add -A && git commit -m "feat(server): three read tools over MCP stdio"
 
 **Interfaces:**
 - Consumes: `auth.login`, `auth.logout`, `auth.read`, `auth.token_path`.
-- Produces: two further tools — `authenticate`, `auth_status` — and the server's `instructions` string.
+- Produces: three further tools — `authenticate`, `auth_status`, `logout` — and the server's `instructions` string.
 
 **Why (TODO E21).** Without this, a user of the server in Claude Code who is logged out, or whose 90-day refresh token has lapsed, gets `NotAuthorised` telling them to run `csa-zendesk auth login` — which means leaving the client, finding the right directory and venv, setting two environment variables, and coming back, while every tool call fails.
 
 **The precedent is ours and it is directly applicable.** `csa-google-workspace`'s server instructions read: *"IF A TOOL REPORTS THAT THE SERVER IS NOT AUTHORIZED: call the `authenticate` tool… Do not search the filesystem for credential files and do not retry other tools until authorization completes."* **The second half matters as much as the tool.** Without it a model burns turns retrying a call that cannot succeed, or starts grepping for token files. Carry that instruction.
 
-**`logout` is not a tool in this block.** It revokes a live 90-day credential server-side and irreversibly — confirmed against the live tenant on 2026-09-19 — so it is a destructive write, not auth housekeeping, and it belongs in the capability model that this read-only block does not exercise. `auth_status` reports; `authenticate` acquires; revocation stays at the CLI. Record that reasoning in the module docstring so it is a decision rather than an omission.
+**`logout` is a tool in this block, by [ADR-017](../../../DECISIONS-ADR/ADR-017.md).** An earlier version of this plan left it out, reasoning that revoking a live 90-day credential server-side is a destructive write belonging to the capability model, not to "auth housekeeping." ADR-017 overrules that: a surface that can authenticate must be able to log out, reachable at least as easily as authentication itself, because the alternative makes the easy path "get more access" and the hard path "give it up." Read ADR-017 before touching this task — it also has the measured fact this task depends on: revoking the access token invalidates its paired refresh token too, so `logout` is complete, and its recovery path is a single `authenticate` call, not a trip to the CLI.
+
+`logout` calls `auth.logout()`, which already distinguishes three outcomes (see its docstring in `src/csa_zendesk/auth/__init__.py`), and the tool must report each one distinctly rather than collapsing them into a single "done":
+
+- **`"revoked"`** — the server-side revoke succeeded and the local file is cleared. Report that the credential is revoked.
+- **`"already-invalid"`** — the token was already dead; the local file is cleared anyway. Report that the caller is logged out, and say the credential was already invalid rather than implying this call did the revoking.
+- **`"no-token"`** — nothing was on disk. Report that there was nothing to log out of.
+- **The exception case is the dangerous direction and must not be reported as success.** `auth.logout()` deliberately lets `RevokeError` and transport failures (`exc.ApiError`) propagate instead of returning, and leaves the local file untouched when that happens, because clearing the file after a failed revoke would leave a live credential with nothing left on disk that could revoke it. The tool must catch that, and report a **failure** — the credential may still be live, try again — never "logged out." Getting this backwards is worse than not having the tool at all.
+
+**Never print or return the token value.** `authenticate` and `auth_status` already keep the credential out of their output; `logout` inherits the same rule even though it is destroying the credential, not disclosing it — the failure path still surfaces the token file's path and the underlying error, never its contents.
+
+**Annotate `logout` honestly, not by copying `authenticate`'s annotation.** It is not read-only (`readOnlyHint: false`) and it does destroy something a caller may not intend to lose (`destructiveHint: true`) — the opposite of `authenticate`'s `destructiveHint: false`. It is idempotent (`idempotentHint: true`): calling it again after a successful logout finds `"no-token"` and reports the same end state, "logged out," rather than erroring or doing something new. It is open-world (`openWorldHint: true`): it makes a network call to Zendesk's revoke endpoint, the same reason `authenticate` talks to an external OAuth server.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
 # append to tests/test_server.py
-def test_authenticate_and_auth_status_are_registered():
-    assert {"authenticate", "auth_status"} <= {t.name for t in srv.TOOLS}
+def test_authenticate_auth_status_and_logout_are_registered():
+    assert {"authenticate", "auth_status", "logout"} <= {t.name for t in srv.TOOLS}
 
 
-def test_logout_is_deliberately_not_a_tool():
-    # It revokes a live 90-day credential irreversibly: a destructive write,
-    # not auth housekeeping. CLI only until the capability model covers it.
-    assert "logout" not in {t.name for t in srv.TOOLS}
+def test_logout_is_annotated_as_a_destructive_idempotent_open_world_write():
+    (t,) = [t for t in srv.TOOLS if t.name == "logout"]
+    assert t.annotations.readOnlyHint is False, t.name
+    assert t.annotations.destructiveHint is True, t.name
+    assert t.annotations.idempotentHint is True, t.name
+    assert t.annotations.openWorldHint is True, t.name
+
+
+def test_logout_never_returns_a_token(monkeypatch):
+    monkeypatch.setattr(srv.auth, "logout", lambda: "revoked")
+    out = srv.call_tool_sync("logout", {})
+    assert "AT-" not in out and "RT-" not in out
+
+
+def test_logout_reports_revoked(monkeypatch):
+    monkeypatch.setattr(srv.auth, "logout", lambda: "revoked")
+    out = srv.call_tool_sync("logout", {})
+    assert "revoked" in out.lower()
+
+
+def test_logout_reports_already_invalid_without_claiming_it_did_the_revoking(monkeypatch):
+    monkeypatch.setattr(srv.auth, "logout", lambda: "already-invalid")
+    out = srv.call_tool_sync("logout", {})
+    assert "logged out" in out.lower()
+    assert "already" in out.lower()
+
+
+def test_logout_reports_no_token(monkeypatch):
+    monkeypatch.setattr(srv.auth, "logout", lambda: "no-token")
+    out = srv.call_tool_sync("logout", {})
+    assert "nothing to log out of" in out.lower() or "no token" in out.lower()
+
+
+def test_a_genuine_revoke_failure_is_reported_as_failure_not_as_logged_out(monkeypatch):
+    # The dangerous direction: a failed revoke must never be reported as success.
+    from csa_zendesk.auth import _flow
+
+    def _raise() -> str:
+        raise _flow.RevokeError("revoke request failed")
+
+    monkeypatch.setattr(srv.auth, "logout", _raise)
+    out = srv.call_tool_sync("logout", {})
+    assert "logged out" not in out.lower()
+    assert "fail" in out.lower() or "may still be" in out.lower()
 
 
 def test_auth_status_never_returns_a_token(monkeypatch):
@@ -586,16 +637,16 @@ def test_the_server_instructions_tell_the_model_not_to_retry_or_hunt_for_files()
 
 - [ ] **Step 2: Run them and watch them fail**
 
-- [ ] **Step 3: Implement the two tools and the `INSTRUCTIONS` constant**
+- [ ] **Step 3: Implement the three tools and the `INSTRUCTIONS` constant**
 
-`authenticate` calls `auth.login(...)` and returns the resolved identity and granted scope — never a token. `auth_status` reports the token path, a human-readable expiry and the granted scope, and says to call `authenticate` when there is no token. Annotate `authenticate` `readOnlyHint: false` (it writes a credential file) and `destructiveHint: false`.
+`authenticate` calls `auth.login(...)` and returns the resolved identity and granted scope — never a token. `auth_status` reports the token path, a human-readable expiry and the granted scope, and says to call `authenticate` when there is no token. `logout` calls `auth.logout()` inside a `try`/`except` that catches `_flow.RevokeError` and `exc.ApiError`, maps the three return strings and the exception case to four distinct human-readable outcomes as specified above, and never includes a token value in any of them. Annotate `authenticate` `readOnlyHint: false` (it writes a credential file) and `destructiveHint: false`; annotate `logout` `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: true` (see ADR-017 for why destructive-but-cheaply-recoverable still gets `destructiveHint: true` — the hint is honest about the action, ADR-017 is the argument for why that honesty doesn't justify hiding the tool).
 
 - [ ] **Step 4: Run the tests until they pass, then the full suite**
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A && git commit -m "feat(server): authenticate from inside the session, and say not to retry"
+git add -A && git commit -m "feat(server): authenticate from inside the session, and give it a way out"
 ```
 
 ---
@@ -623,9 +674,12 @@ def test_the_server_requests_only_read_capabilities():
 
 
 def test_no_registered_tool_maps_to_a_write_operation():
+    # authenticate/auth_status/logout are auth-lifecycle tools, not Support API
+    # operations, and sit outside policy._GATES by design (ADR-017) — reachable
+    # at every rung, not just the ones that hold a write capability.
     from csa_zendesk import policy
     for t in srv.TOOLS:
-        if t.name in {"authenticate", "auth_status"}:
+        if t.name in {"authenticate", "auth_status", "logout"}:
             continue
         assert policy._GATES[t.name] == policy.TICKET_READ, t.name
 
@@ -655,7 +709,7 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
 
 - [ ] **Step 4: Document the install in `README.md`**
 
-Give the exact `claude mcp add` invocation (or the `claude_desktop_config.json` stanza), naming `csa-zendesk-mcp` and the two environment variables `CSA_ZENDESK_SUBDOMAIN` and `CSA_ZENDESK_MCP_SERVER_IDENTIFIER`. **Use a placeholder subdomain** — `check_public_safe.py` refuses the real one and this repo is public. State that the server is read-only at this rung, and that `logout` is CLI-only and why.
+Give the exact `claude mcp add` invocation (or the `claude_desktop_config.json` stanza), naming `csa-zendesk-mcp` and the two environment variables `CSA_ZENDESK_SUBDOMAIN` and `CSA_ZENDESK_MCP_SERVER_IDENTIFIER`. **Use a placeholder subdomain** — `check_public_safe.py` refuses the real one and this repo is public. State that the server is read-only at this rung, and that `logout` is available from inside the session (per [ADR-017](../../../DECISIONS-ADR/ADR-017.md)) precisely because the server can also authenticate.
 
 - [ ] **Step 5: Close the TODO items this block settles**
 
@@ -675,7 +729,7 @@ git add -A && git commit -m "feat(server): rung E1 - read the queue, change noth
 
 ## Self-Review
 
-**Spec coverage.** The whole-project design's §1 three controls: the capability profile is `E1_CAPABILITIES` (Task 7), the toolset is `TOOLS` (Task 5), the allowlist is `READ=*` with no write allowlist (Task 7). §5's E1 rung — *"triage the live queue; propose everything, change nothing"* — is asserted by `test_no_registered_tool_maps_to_a_write_operation`. TODO E12/E13 close in Task 1, E21 in Task 6, A4 in Task 4. **Deliberately not covered:** B1–B5 (the full surface), the hatch, rate limiting, and the E11 lock-file mitigation — each is named in "what this block is not" or left open in Task 7 Step 5.
+**Spec coverage.** The whole-project design's §1 three controls: the capability profile is `E1_CAPABILITIES` (Task 7), the toolset is `TOOLS` (Task 5), the allowlist is `READ=*` with no write allowlist (Task 7). §5's E1 rung — *"triage the live queue; propose everything, change nothing"* — is asserted by `test_no_registered_tool_maps_to_a_write_operation`, which now also documents that `authenticate`/`auth_status`/`logout` sit outside the capability gate by design rather than by omission. TODO E12/E13 close in Task 1, E21 in Task 6, A4 in Task 4. Task 6's tool set — `authenticate`, `auth_status`, and `logout` — follows [ADR-017](../../../DECISIONS-ADR/ADR-017.md); an earlier draft of this plan omitted `logout` and that reasoning is superseded, not merely dropped. **Deliberately not covered:** B1–B5 (the full surface), the hatch, rate limiting, and the E11 lock-file mitigation — each is named in "what this block is not" or left open in Task 7 Step 5.
 
 **Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Two steps deliberately instruct the implementer to *derive* a value rather than giving it — the search and comments paths, which must come from `analysis/operation-inventory.csv` — because `get_ticket`'s own comment records that guessing the `.json` suffix is a real trap here. That is a specific instruction with a named source, not a placeholder.
 

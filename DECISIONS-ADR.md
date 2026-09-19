@@ -19,3 +19,4 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 | [ADR-010](DECISIONS-ADR/ADR-010.md) | Capabilities are derived from a classification of every operation | Active | 2026-09-08 |
 | [ADR-015](DECISIONS-ADR/ADR-015.md) | OAuth only — API token support is removed, and no further tokens are minted | Active | 2026-09-17 |
 | [ADR-016](DECISIONS-ADR/ADR-016.md) | Tools are atomic and bucket-pure; workflow lives in plugins | Active | 2026-09-17 |
+| [ADR-017](DECISIONS-ADR/ADR-017.md) | If a surface can authenticate, it must be able to log out | Active | 2026-09-19 |
