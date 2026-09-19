@@ -69,14 +69,19 @@ def _post(subdomain: str, body: dict[str, str], transport: httpx.BaseTransport |
     credentials pass through this module (authorization code, verifier, access
     token, refresh token) and none of them may ever reach an exception message.
 
-    That standard applies one level below the message too: `body` is `del`eted
-    from this frame before either raise below, and before the normal return -
-    an error tracker that captures frame locals (Sentry does by default) would
-    otherwise see this frame's `body` and upload a live refresh token or
-    authorization code to a third party on the very first failed call. Doing
-    this here, in the one function that ever builds this dict, is cheaper and
-    more reliable than trying to scrub every caller that happens to hold a
-    reference to the same object.
+    That standard applies one level below the message too, but only for THIS
+    frame: `body` is `del`eted from this function's locals before either raise
+    below, and before the normal return, so an error tracker that captures
+    frame locals (Sentry does by default) does not see it here. This is
+    partial, not the whole guarantee the paragraph above might suggest -
+    `refresh()`'s own `body` dict and `exchange_code()`'s own `code` and
+    `verifier` parameters are separate bindings to the same values in their
+    own frames, still live for the life of the call, and a full-stack-capturing
+    tracker sees those regardless of what this function does to its own. Closing
+    that fully needs credentials passed through as an opaque payload built by a
+    helper that closes over nothing, rather than as plain locals in every frame
+    that touches them - a design change, deliberately deferred; see TODO.md
+    E18.
 
     A transport failure (`httpx.HTTPError` - offline, DNS, a proxy, a read
     timeout) is translated to `exc.ApiError` naming the OAuth token endpoint,
