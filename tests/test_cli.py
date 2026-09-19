@@ -276,3 +276,93 @@ def test_status_failure_is_a_message_not_a_traceback(monkeypatch, capsys, tmp_pa
     assert rc == 1
     assert out == ""
     assert "0644" in err
+
+
+# ---------------------------------------------------------------------------
+# auth logout
+# ---------------------------------------------------------------------------
+
+
+def test_logout_with_no_token_file_exits_zero(monkeypatch, capsys):
+    monkeypatch.setattr(auth, "logout", lambda **_: "no-token")
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "already logged out" in err
+
+
+def test_logout_of_an_already_invalid_token_still_exits_zero(monkeypatch, capsys):
+    monkeypatch.setattr(auth, "logout", lambda **_: "already-invalid")
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "already invalid" in err
+
+
+def test_a_successful_logout_exits_zero_and_says_revoked(monkeypatch, capsys):
+    monkeypatch.setattr(auth, "logout", lambda **_: "revoked")
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "revoked" in err
+
+
+def test_a_revoke_error_exits_nonzero_names_the_admin_center_fallback_and_never_a_token(monkeypatch, capsys):
+    def fake_logout(**_):
+        raise auth.RevokeError("Zendesk refused to revoke the token (HTTP 503).")
+
+    monkeypatch.setattr(auth, "logout", fake_logout)
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 1
+    assert out == ""
+    assert "503" in err
+    assert "may still be live" in err
+    assert "Admin Center" in err
+    assert "AT-SECRET" not in err and "RT-SECRET" not in err
+
+
+def test_a_transport_failure_during_logout_also_names_the_admin_center_fallback(monkeypatch, capsys):
+    from csa_zendesk import exceptions as exc
+
+    def fake_logout(**_):
+        raise exc.ApiError("could not reach the Zendesk OAuth revoke endpoint (ConnectError)")
+
+    monkeypatch.setattr(auth, "logout", fake_logout)
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 1
+    assert out == ""
+    assert "Admin Center" in err
+
+
+def test_logout_with_no_subdomain_configured_is_a_message_not_a_traceback(monkeypatch, capsys):
+    # NotAuthorised (missing CSA_ZENDESK_SUBDOMAIN) is not a revoke failure -
+    # it must fall through to main()'s generic ZendeskError handler, not the
+    # logout-specific "may still be live" message, which would be misleading
+    # here: no revoke attempt was ever made.
+    def fake_logout(**_):
+        raise auth.NotAuthorised("CSA_ZENDESK_SUBDOMAIN is not set.")
+
+    monkeypatch.setattr(auth, "logout", fake_logout)
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 1
+    assert out == ""
+    assert "CSA_ZENDESK_SUBDOMAIN is not set." in err
+    assert "Admin Center" not in err

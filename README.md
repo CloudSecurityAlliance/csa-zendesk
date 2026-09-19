@@ -165,9 +165,24 @@ nothing in Zendesk that its operator could not already do.
 a product: `auth login` runs the flow once and persists the result — opening a browser, or
 printing a URL to paste back with `--paste` on a remote shell with no browser of its own —
 `auth status` reports whether a token file exists, its path, its expiry and its granted scope
-without a network call, and `auth whoami` confirms live which Zendesk identity it resolves to. All
-three print human-facing text to stderr except `whoami`'s and `status`'s own answer, which goes to
-stdout since either might reasonably be piped; none of the three can print the token itself.
+without a network call, `auth whoami` confirms live which Zendesk identity it resolves to, and
+`auth logout` revokes the stored token server-side and then clears the local file. All four print
+human-facing text to stderr except `whoami`'s and `status`'s own answer, which goes to stdout
+since either might reasonably be piped; none of the four can print the token itself.
+
+**Token lifetimes are requested at their documented maxima, on every login and every refresh:**
+`expires_in` at 172,800 seconds (2 days) and `refresh_token_expires_in` at 7,776,000 seconds (90
+days) — the ceilings Zendesk's OAuth token endpoint documents, not arbitrary choices (see
+`_flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS` / `MAX_REFRESH_TOKEN_LIFETIME_SECONDS`). Both fields are
+resent on every refresh, not just at login, because Zendesk rotates the refresh token on every use
+(single-use, confirmed against the live tenant): re-requesting the maximum each time makes the
+90-day window slide forward instead of shrinking back to Zendesk's 30-day default on first refresh.
+This is deliberately paired with `auth logout`: both tokens already live in the same `0600` file, so
+a short access-token lifetime buys nothing against file theft while costing a refresh every 30
+minutes instead — maximising lifetimes without a real revoke path would be careless (TODO.md E11,
+E15). `auth logout` revokes the access token via `DELETE /api/v2/oauth/tokens/current`; **whether
+that also invalidates the paired refresh token is not stated by Zendesk's API spec and is not
+known** — see TODO.md E20 for the live check that would settle it.
 
 The **research scripts under `scripts/`** — `zd.py`, `ui_actions.py`, `probe_families.py`,
 `probe_access.py` — which refresh `analysis/` and ship in no package, authenticate the same way

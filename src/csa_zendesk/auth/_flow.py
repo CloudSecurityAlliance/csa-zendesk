@@ -42,11 +42,37 @@ __all__ = [
     "exchange_code",
     "refresh",
     "access_token",
+    "revoke",
     "ScopeError",
     "AuthExchangeError",
     "NotAuthorised",
+    "TokenAlreadyInvalid",
+    "RevokeError",
     "REFRESH_MARGIN_SECONDS",
+    "MAX_ACCESS_TOKEN_LIFETIME_SECONDS",
+    "MAX_REFRESH_TOKEN_LIFETIME_SECONDS",
 ]
+
+
+#: Zendesk's documented maximum access-token lifetime - `specs/zendesk-support-oas.yaml`,
+#: `CreateTokenForGrantType` (around line 22798): "greater than or equal to 300 seconds
+#: (5 minutes) and less than or equal to 172,800 seconds (2 days), or less than
+#: `refresh_token_expires_in`, whichever is the shorter." This is the ceiling, not a
+#: made-up value: sent as `expires_in` on both `exchange_code` and `refresh` so every
+#: grant asks for the longest-lived access token Zendesk will issue. See TODO.md E11 -
+#: both tokens live in the same 0600 file, so a short access-token lifetime buys nothing
+#: against file theft while costing a refresh (and its own failure modes) every 30
+#: minutes instead.
+MAX_ACCESS_TOKEN_LIFETIME_SECONDS = 172_800  # 2 days
+
+#: Zendesk's documented maximum refresh-token lifetime - same spec section, same line
+#: range: "greater than or equal to 604,800 seconds (7 days) or `expires_in` (if given),
+#: and less than or equal to 7,776,000 seconds (90 days)." Sent as `refresh_token_expires_in`
+#: on both `exchange_code` and `refresh` - resending it on every refresh matters because
+#: Zendesk rotates the refresh token on every use (single-use, confirmed against the live
+#: tenant), so re-requesting the maximum on each refresh makes the 90-day window slide
+#: forward instead of counting down from the original login.
+MAX_REFRESH_TOKEN_LIFETIME_SECONDS = 7_776_000  # 90 days
 
 
 class ScopeError(exc.ZendeskError):
@@ -183,6 +209,8 @@ def exchange_code(
             "redirect_uri": redirect_uri,
             "code_verifier": verifier,
             "scope": " ".join(requested_scopes),
+            "expires_in": str(MAX_ACCESS_TOKEN_LIFETIME_SECONDS),
+            "refresh_token_expires_in": str(MAX_REFRESH_TOKEN_LIFETIME_SECONDS),
         },
         transport,
     )
@@ -249,11 +277,22 @@ def refresh(
     could never fail a subset check against anything. A registered-scope
     ceiling narrowed since issuance must still be caught on refresh even
     though this request never asks for anything in particular.
+
+    **Sends `expires_in` and `refresh_token_expires_in`, both pinned to this
+    module's documented maxima, on every refresh.** Rotation means each refresh
+    mints a brand-new refresh token; without re-requesting the maximum lifetime
+    here, that new token would fall back to Zendesk's 30-day default and the
+    90-day window this credential started with would shrink back down on the
+    very first refresh. Re-sending the maxima instead makes the 90-day window
+    *slide* forward on every use - an operator who runs this server continuously
+    (or even just once a quarter) never has to log in again after the first time.
     """
     body: dict[str, str] = {
         "grant_type": "refresh_token",
         "refresh_token": tokens.refresh_token,
         "client_id": client_id,
+        "expires_in": str(MAX_ACCESS_TOKEN_LIFETIME_SECONDS),
+        "refresh_token_expires_in": str(MAX_REFRESH_TOKEN_LIFETIME_SECONDS),
     }
     payload = _post(subdomain, body, transport)
     payload.setdefault("refresh_token", tokens.refresh_token)
@@ -312,3 +351,70 @@ def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
             "get a new token."
         ) from e
     return fresh.access_token
+
+
+class TokenAlreadyInvalid(exc.ZendeskError):
+    """Revocation was refused because the token is already invalid or expired
+    (HTTP 401 on the revoke call itself). The credential is already dead, so
+    clearing the local file is safe - there is nothing left to protect."""
+
+
+class RevokeError(exc.ZendeskError):
+    """Revocation failed for a reason other than the token already being
+    invalid - a network failure, a 5xx, or some other refusal.
+
+    The credential may still be live server-side. Callers must NOT clear the
+    local token file on this exception: doing so would delete the one thing
+    that could still revoke it, and leave a possibly-stolen credential both
+    live and un-revocable by this tool.
+    """
+
+
+def revoke(*, subdomain: str, tokens: Tokens, transport: httpx.BaseTransport | None = None) -> None:
+    """Revoke `tokens.access_token` server-side via `DELETE
+    /api/v2/oauth/tokens/current` (spec: `RevokeCurrentOAuthToken`, around line
+    9712), authenticated by `Authorization: Bearer <the token being revoked>` -
+    the same shape the spec documents, and the only one it documents; there is
+    no separate "revoke this refresh token" endpoint.
+
+    **Whether this also invalidates the paired refresh token is unknown.** The
+    spec says only that it revokes "the current OAuth token" and returns `204
+    No Content`; it documents nothing about the refresh token issued alongside
+    it, and this module does not guess. See TODO.md E20 for the live check
+    that would settle it - deliberately not run here (no network in tests, and
+    Kurt asked that nothing run against the live API for this change).
+
+    Callers distinguish two failure shapes, because they call for opposite
+    handling of the local token file:
+
+    - `TokenAlreadyInvalid` (HTTP 401 on this call): the access token was
+      already invalid or expired, so there is nothing left to revoke. Safe to
+      treat as success and clear the local file.
+    - `RevokeError` (anything else >= 400) or `exc.ApiError` (the request
+      never reached Zendesk at all): the token may still be live. The local
+      file must be left in place, so the operator still holds the one
+      credential that can revoke it - by retrying, or by hand in Zendesk
+      Admin Center (Apps and integrations > APIs > OAuth clients).
+
+    A transport failure is translated to `exc.ApiError`, same as `_post` and
+    `whoami` - never a raw `httpx` exception.
+    """
+    headers = {"Authorization": f"Bearer {tokens.access_token}"}
+    try:
+        with httpx.Client(transport=transport, timeout=30.0) as client:
+            response = client.delete(
+                f"https://{subdomain}.zendesk.com/api/v2/oauth/tokens/current",
+                headers=headers,
+            )
+    except httpx.HTTPError as e:
+        kind = type(e).__name__
+        del headers
+        raise exc.ApiError(f"could not reach the Zendesk OAuth revoke endpoint ({kind})") from None
+    status = response.status_code
+    del headers, response  # never let the bearer token linger in this frame past this point
+    if status == 401:
+        raise TokenAlreadyInvalid(
+            "Zendesk says this access token is already invalid or expired (HTTP 401) - nothing left to revoke."
+        )
+    if status >= 400:
+        raise RevokeError(f"Zendesk refused to revoke the token (HTTP {status}).")

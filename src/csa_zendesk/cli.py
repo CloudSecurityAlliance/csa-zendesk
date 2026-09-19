@@ -2,12 +2,13 @@
 
 Every `NotAuthorised`/`TokenFileError`/etc. message across `auth/*` already tells
 an operator to "run `csa-zendesk auth login`" - this module is what makes that
-command exist. Three subcommands, on purpose, matching ADR-009's shape and
-nothing past it:
+command exist. Four subcommands, on purpose, matching ADR-009's shape plus the
+revoke path E15 originally called out as missing:
 
   `auth login`   run the OAuth flow once, persist the result
   `auth whoami`  identity the *stored* credential resolves to, live
   `auth status`  what is on disk right now - no network call
+  `auth logout`  revoke the stored token server-side, then clear the local file
 
 **Output channel, decided deliberately and applied consistently:** this module
 lives inside the package, so the same stdout prohibition CLAUDE.md states for
@@ -112,6 +113,42 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_logout(args: argparse.Namespace) -> int:
+    """Revoke the stored access token server-side, then clear the local
+    file - in that order. If revocation fails for a reason other than the
+    token already being dead, the local file is left in place on purpose: it
+    is the one thing that could still revoke a possibly-live credential.
+
+    Whether revoking the access token this way also invalidates its paired
+    refresh token is **not stated** by Zendesk's API spec, and this command
+    does not guess: see `auth.revoke`'s docstring and TODO.md E20.
+    """
+    try:
+        outcome = auth.logout()
+    except (auth.RevokeError, exc.ApiError) as e:
+        print(  # noqa: T201 - stderr, not stdout
+            f"{e} The local token file was left in place - the credential may still be "
+            f"live. Retry this command, or revoke it by hand in Zendesk Admin Center "
+            f"(Apps and integrations › APIs › OAuth clients).",
+            file=sys.stderr,
+        )
+        return 1
+    if outcome == "no-token":
+        print("no token file - already logged out.", file=sys.stderr)  # noqa: T201 - stderr, not stdout
+        return 0
+    if outcome == "already-invalid":
+        print(  # noqa: T201 - stderr, not stdout
+            "the stored token was already invalid or expired; local file cleared anyway.",
+            file=sys.stderr,
+        )
+        return 0
+    print(  # noqa: T201 - stderr, not stdout
+        "logged out: the token was revoked server-side and the local file cleared.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="csa-zendesk", description=__doc__.splitlines()[0])
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -132,6 +169,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     auth_sub.add_parser("whoami", help="the identity the stored credential resolves to")
     auth_sub.add_parser("status", help="whether a token file exists, its expiry and scope")
+    auth_sub.add_parser(
+        "logout",
+        help=(
+            "revoke the stored access token server-side, then clear the local file. "
+            "Whether this also invalidates the paired refresh token is not stated by the "
+            "Zendesk API spec and is not known."
+        ),
+    )
 
     return parser
 
@@ -143,6 +188,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "login": _cmd_login,
     "whoami": _cmd_whoami,
     "status": _cmd_status,
+    "logout": _cmd_logout,
 }
 
 
