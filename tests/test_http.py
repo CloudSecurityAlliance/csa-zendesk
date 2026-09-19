@@ -711,3 +711,48 @@ def test_the_retried_request_is_identical_except_for_the_bearer_token():
     assert first["content"] == second["content"]
     assert first["auth"] == "Bearer stale-token"
     assert second["auth"] == "Bearer fresh-token"
+
+
+def test_a_token_endpoint_failure_inside_on_invalid_token_names_the_token_endpoint_not_the_ticket_path(
+    monkeypatch, tmp_path
+):
+    # Regression (final review, item 6): a ConnectError raised deep inside
+    # `on_invalid_token` (ADR-009's sanctioned use for it is a forced refresh)
+    # used to propagate up through `_send`'s own `except (httpx.HTTPError,
+    # ...)`, which cannot tell it apart from a failure talking to the ticket
+    # endpoint this request was actually for - so it was reported as "could
+    # not reach Zendesk ... requesting GET /api/v2/tickets/123.json", naming
+    # an endpoint that was never even attempted. `_flow._post` now translates
+    # its own httpx errors into a typed `exc.ApiError` naming the OAuth token
+    # endpoint before they can reach `_send`'s except clause at all.
+    from csa_zendesk.auth import _flow, _store
+
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
+    _store.write(_store.Tokens("STALE-AT", "RT", 0.0, "read"))
+
+    def oauth_handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    def force_refresh() -> None:
+        stored = _store.read()
+        assert stored is not None
+        _flow.refresh(
+            subdomain="example",
+            client_id="cid",
+            tokens=stored,
+            transport=httpx.MockTransport(oauth_handler),
+        )
+
+    def ticket_handler(request):
+        return httpx.Response(401, json={"error": "invalid_token"})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: "STALE-AT",
+        transport=httpx.MockTransport(ticket_handler),
+        on_invalid_token=force_refresh,
+    )
+    with pytest.raises(exc.ApiError) as ei:
+        c.get("/api/v2/tickets/123.json")
+    assert "token endpoint" in str(ei.value)
+    assert "tickets/123.json" not in str(ei.value)
