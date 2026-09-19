@@ -53,6 +53,52 @@ from "100 of many more" any better than this module can, and warning on a
 false positive costs a sentence, while missing a real truncation costs a
 triage decision made on an incomplete conversation.
 
+**`AUTH_TOOLS` - `authenticate`, `auth_status`, `logout` - make authentication
+reachable without leaving the session (TODO E21).** A user of this server who
+is logged out, or whose 90-day refresh token has lapsed, would otherwise have
+to leave Claude Code, find the right directory and venv, and run `csa-zendesk
+auth login` by hand while every tool call fails in the meantime. `TOOLS` is
+reassigned here to `READ_TOOLS + AUTH_TOOLS` - a plain concatenation, per the
+note above - and `INSTRUCTIONS` is threaded into `build_server()` so a model
+that hits `NotAuthorised` knows to call `authenticate` itself rather than
+retrying a call that cannot succeed or going looking for a token file on disk
+(the precedent is `csa-google-workspace`'s server instructions).
+
+**`logout` exists because [ADR-017](../../DECISIONS-ADR/ADR-017.md) says a
+surface that can authenticate must be able to log out.** `auth.logout()`
+already distinguishes three outcomes - `"revoked"`, `"already-invalid"`,
+`"no-token"` - and `_cmd_logout` reports each one distinctly rather than
+collapsing them into one "done" message. The dangerous direction is a failed
+revoke (`auth.RevokeError` or `exc.ApiError`, both left to propagate by
+`auth.logout()` so the local file is never cleared out from under a
+credential that might still be live): `_cmd_logout` catches exactly those two
+and reports failure, never "logged out" - getting that backwards would tell a
+user their live credential is gone when it is not. `logout` is annotated
+`read_only_hint=False, destructive_hint=True, idempotent_hint=True,
+open_world_hint=True` - honestly destructive (it revokes a real credential),
+but idempotent (calling it again after success just finds `"no-token"`) and
+open-world (it calls Zendesk's revoke endpoint), which is what ADR-017 argues
+does not justify hiding the tool.
+
+**`authenticate` never offers the paste fallback.** `auth.login(paste=True)`
+prints a URL and then reads the pasted redirect back from `sys.stdin` - safe
+for a human at a terminal, but `sys.stdin` under stdio MCP is the same
+channel carrying inbound JSON-RPC, symmetric with why this module never
+writes to `sys.stdout`. `_cmd_authenticate` always calls `auth.login` with
+`paste=False`: the loopback-listener path only opens a browser and waits on a
+local socket, touching neither stdio stream.
+
+**Identity fields are the one place this module's own auth tools return
+requester-influenced text.** `auth_status` and `logout`'s outcomes are almost
+entirely this library's own diagnostics (statuses, expiries, scope names) and
+stay unwrapped for the same reason the truncation warning does. `whoami`'s
+`name`/`email`, called from `_cmd_authenticate`, are the exception: they are
+whatever the authenticated Zendesk account holder set them to, so they pass
+through `_untrusted.wrap` individually before being reported - the identity
+is trustworthy (it is genuinely who this credential belongs to), but the
+*string value* of a name field is still requester-set text, and the same rule
+that governs a ticket's `subject` applies to it.
+
 **Synchronous dispatch, deliberately.** `call_tool_sync` takes a tool name and
 already-parsed arguments and returns a plain string - no `asyncio`, no MCP
 types. That is what lets `tests/test_server.py` exercise dispatch, the
@@ -77,18 +123,28 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 from typing import Any
 
 from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from . import _untrusted
+from . import _untrusted, auth
 from . import exceptions as exc
 from ._connect import connect
 from .client import ZendeskClient
 
-__all__ = ["READ_TOOLS", "TOOLS", "build_server", "call_tool_sync", "main"]
+__all__ = [
+    "AUTH_TOOLS",
+    "INSTRUCTIONS",
+    "READ_TOOLS",
+    "TOOLS",
+    "build_server",
+    "call_tool_sync",
+    "main",
+]
 
 #: API-SURFACE.md §5.4g: `ListTicketComments` never returns more than this many
 #: comments in one call - `client.ZendeskClient.list_comments` takes no paging
@@ -186,9 +242,176 @@ READ_TOOLS: list[mcp_types.Tool] = [
     ),
 ]
 
-#: A plain list, not a re-derivation of `READ_TOOLS` - so a later task can
-#: write `TOOLS = READ_TOOLS + AUTH_TOOLS` as an ordinary concatenation.
-TOOLS: list[mcp_types.Tool] = READ_TOOLS
+#: None of the three auth-lifecycle tools takes an argument - see the module
+#: docstring's `AUTH_TOOLS` note for why each is a plain, no-input action.
+_NO_ARGS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
+
+#: `authenticate`, `auth_status`, `logout` - reachable at every rung by
+#: design (ADR-017, and see the module docstring). Annotated honestly rather
+#: than by copying a neighbour's annotation: `authenticate` writes a
+#: credential file and talks to Zendesk's OAuth server but destroys nothing;
+#: `auth_status` only reads the local file, with no network call at all;
+#: `logout` is the one destructive, idempotent, open-world write in this
+#: server.
+AUTH_TOOLS: list[mcp_types.Tool] = [
+    mcp_types.Tool(
+        name="authenticate",
+        description=(
+            "Run the OAuth login flow and store the resulting credential. Opens a browser for "
+            "the user to sign in, then reports the authenticated identity and granted scope - "
+            "never the token itself. Call this whenever another tool reports the server is not "
+            "authorized."
+        ),
+        input_schema=_NO_ARGS_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=False,
+            open_world_hint=True,
+        ),
+    ),
+    mcp_types.Tool(
+        name="auth_status",
+        description=(
+            "Report whether a stored credential exists, the token file's path, a human-readable "
+            "expiry, and the granted scope. Makes no network call and never returns the token "
+            "itself."
+        ),
+        input_schema=_NO_ARGS_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
+        ),
+    ),
+    mcp_types.Tool(
+        name="logout",
+        description=(
+            "Revoke the stored credential on Zendesk's side, then delete the local token file. "
+            "Revoking also invalidates the paired refresh token, so this is a complete logout. "
+            "Safe to call even when already logged out."
+        ),
+        input_schema=_NO_ARGS_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=True,
+            idempotent_hint=True,
+            open_world_hint=True,
+        ),
+    ),
+]
+
+#: `READ_TOOLS + AUTH_TOOLS`, an ordinary concatenation - reassigning the
+#: module-level name Task 5 defined, not shadowing it, so `srv.TOOLS` means
+#: the same thing to every caller regardless of which task's code they read.
+TOOLS: list[mcp_types.Tool] = READ_TOOLS + AUTH_TOOLS
+
+#: Threaded into `build_server()`. The second sentence is the load-bearing
+#: one - see `csa-google-workspace`'s identical precedent in the module
+#: docstring: without it a model burns turns retrying a call that cannot
+#: succeed, or starts grepping the filesystem for a credential file.
+INSTRUCTIONS = (
+    "IF A TOOL REPORTS THAT THE SERVER IS NOT AUTHORIZED: call the `authenticate` tool, which "
+    "runs the OAuth login flow and opens a browser for the user to sign in. Do not search the "
+    "filesystem for a credential file and do not retry other tools until authorization "
+    "completes. Call `auth_status` at any time to see whether a stored credential exists, its "
+    "expiry, and its granted scope, with no network call. Call `logout` to revoke the stored "
+    "credential; it is safe to call even when already logged out, and the only way back is a "
+    "fresh `authenticate` call."
+)
+
+
+def _human_expiry(expires_at: float) -> str:
+    """A short, human-readable statement of a token's remaining lifetime.
+
+    Deliberately simpler than `cli.py`'s own `_human_expiry` (which renders
+    two units of precision for an operator staring at a terminal): this
+    module's `auth_status` tool only needs to distinguish "expired" from
+    "expires in about N hours," and importing a private helper out of
+    `cli.py` would tie this module to a leaf entry point that documents
+    itself as "a door into OAuth, nothing more" - not a library other modules
+    reach into.
+    """
+    remaining = expires_at - time.time()
+    if remaining <= 0:
+        return "expired"
+    return f"expires in about {remaining / 3600:.1f} hours"
+
+
+def _cmd_authenticate() -> str:
+    """Run the OAuth flow synchronously, inside this tool call, and report
+    the resulting identity - never the token.
+
+    Always `paste=False`: the loopback-listener path only opens a browser and
+    waits on a local socket, touching neither `sys.stdin` nor `sys.stdout` -
+    unlike `paste=True`, which reads the pasted redirect back from
+    `sys.stdin`, the same channel carrying inbound JSON-RPC under stdio MCP.
+    `CSA_ZENDESK_SCOPES` is read the same way `cli.py`'s `_cmd_login` reads
+    it - the one browser consent screen a human sees - defaulting to `read`.
+
+    `auth.whoami()`'s `name`/`email` are wrapped individually before being
+    reported: they are genuinely who this credential belongs to, but the
+    string VALUE of a name field is still requester-set text, exactly like a
+    ticket's `subject` - see the module docstring's note on this.
+    """
+    scopes = tuple(os.environ.get("CSA_ZENDESK_SCOPES", "read").split())
+    tokens = auth.login(scopes=scopes, open_browser=True, paste=False)
+    try:
+        identity = auth.whoami()
+    except auth.NotAuthenticated as e:
+        return (
+            f"A token was written (granted scope: {tokens.scope}), but the identity check just after login failed: {e}"
+        )
+    lines = [f"Authenticated. Granted scope: {tokens.scope}."]
+    name = identity.get("name")
+    if isinstance(name, str) and name:
+        lines.append("Name: " + _untrusted.wrap(name, source="auth-identity.name"))
+    email = identity.get("email")
+    if isinstance(email, str) and email:
+        lines.append("Email: " + _untrusted.wrap(email, source="auth-identity.email"))
+    return "\n".join(lines)
+
+
+def _cmd_auth_status() -> str:
+    """What is on disk right now - no network call, and never the token."""
+    tokens = auth.read()
+    if tokens is None:
+        return "Not authenticated: no token file on disk. Call the `authenticate` tool to log in."
+    return f"Authenticated. Token file: {auth.token_path()}. {_human_expiry(tokens.expires_at)}. Scope: {tokens.scope}."
+
+
+def _cmd_logout() -> str:
+    """Revoke the stored credential, reporting each of `auth.logout()`'s
+    three outcomes distinctly, and reporting a failed revoke as a failure -
+    never as "logged out."
+
+    `auth.RevokeError` and `exc.ApiError` are the two ways `auth.logout()`
+    lets a failed revoke propagate rather than returning - both mean the
+    credential may still be live and the local file was deliberately left in
+    place, so a caller can retry or revoke it by hand. Reporting that as
+    success would be the dangerous direction: a user told they are logged out
+    while a live 90-day credential remains on Zendesk's side is worse off
+    than one told the logout failed.
+    """
+    try:
+        outcome = auth.logout()
+    except (auth.RevokeError, exc.ApiError) as e:
+        return (
+            f"Logout failed: {e} The credential may still be live on Zendesk's side, and the "
+            f"local token file was left in place on purpose. Try again, or revoke it by hand in "
+            f"Zendesk Admin Center (Apps and integrations › APIs › OAuth clients)."
+        )
+    if outcome == "no-token":
+        return "Nothing to log out of: no token file was on disk."
+    if outcome == "already-invalid":
+        return "Logged out. The stored credential was already invalid; the local file has been cleared."
+    # The only outcome string left once "no-token" and "already-invalid" are handled.
+    return "Logged out: the credential was revoked server-side and the local file cleared."
 
 
 def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
@@ -201,12 +424,24 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
     subclass) for anything the backend or the policy refuses - both are left
     to the caller to handle; `_on_call_tool` is where this server does that.
 
+    The three `AUTH_TOOLS` names are dispatched first, before the unknown-name
+    check below: they never call `_client()` (no policy-gated Zendesk client
+    is involved in logging in, checking status, or logging out - see
+    `ADR-017`), and each returns a plain string already safe to hand back,
+    exactly like the read-tool branches below.
+
     The unknown-name check runs BEFORE `_client()` is ever called: `_client()`
     calls `connect()`, which can itself raise (`CSA_ZENDESK_SUBDOMAIN` unset,
     no stored credential, ...) - a caller who passed a bad tool name should
     see that mistake, not a connection failure that has nothing to do with
     what they asked for.
     """
+    if name == "authenticate":
+        return _cmd_authenticate()
+    if name == "auth_status":
+        return _cmd_auth_status()
+    if name == "logout":
+        return _cmd_logout()
     if name not in {"get_ticket", "search_tickets", "list_comments"}:
         raise ValueError(f"unknown tool: {name!r}")
     client = _client()
@@ -268,7 +503,7 @@ async def _on_call_tool(
 
 
 def build_server() -> Server[None]:
-    """Construct the MCP `Server`, wired to the three read tools above.
+    """Construct the MCP `Server`, wired to `TOOLS` and `INSTRUCTIONS`.
 
     Building the server registers handlers; it makes no network call and
     starts no I/O loop - `main()` is what actually serves stdio.
@@ -276,6 +511,7 @@ def build_server() -> Server[None]:
     return Server(
         "csa-zendesk",
         version="0.0.1",
+        instructions=INSTRUCTIONS,
         on_list_tools=_on_list_tools,
         on_call_tool=_on_call_tool,
     )
