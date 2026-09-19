@@ -60,10 +60,17 @@ unknown-tool refusal and the untrusted-wrap guarantee without running an
 event loop. `_on_call_tool` is the thin async adapter the MCP `Server` (with
 one running) actually calls; the only work IT does beyond `call_tool_sync`
 is catching this library's own typed errors (`exceptions.ZendeskError`, a
-bad tool name's `ValueError`) and turning them into an `isError` tool result
+bad tool name's `ValueError`) and turning them into an `is_error` tool result
 instead of letting them tear down the session - a policy refusal or an
 upstream 404 is an ordinary, expected outcome for a tool call, not a reason
-to crash the server.
+to crash the server. The two exception types are NOT handled identically:
+a `ZendeskError`'s message is Zendesk's own HTTP error text (`_errors.py`'s
+`parse_error()` builds it from the response body) and gets wrapped through
+`_untrusted` like any other vendor-sourced string; a `ValueError` is this
+library's own diagnostic and is left unwrapped, for the same reason the
+truncation warning below sits outside the markers - wrapping our own text
+would invite the model to discount it. See the provenance comment at
+`_on_call_tool`'s `except` clauses for the one-line rule.
 """
 
 from __future__ import annotations
@@ -232,14 +239,29 @@ async def _on_call_tool(
     context: Any,
     params: mcp_types.CallToolRequestParams,
 ) -> mcp_types.CallToolResult:
+    # Provenance rule for the two branches below: THEIR TEXT IS WRAPPED, OURS
+    # IS NOT. A bad tool name or connect()'s own "no default policy" refusal
+    # (ValueError) is this library's own diagnostic text - wrapping it would
+    # invite the model to discount our own error, the same reason the
+    # truncation warning above sits outside the markers. An
+    # `exceptions.ZendeskError`'s message, by contrast, is built by
+    # `_errors.parse_error()` from Zendesk's OWN HTTP error body (title /
+    # message / description / detail) - the vendor's text, reaching the model
+    # exactly as a ticket's subject or comment body does, so `_untrusted`'s own
+    # rule applies with no exemption: "wrap everything, then name the
+    # exceptions... when in doubt, wrap." Both branches return `is_error=True`
+    # either way - only whether the content is wrapped differs.
     try:
         text = call_tool_sync(params.name, params.arguments or {})
-    except (ValueError, exc.ZendeskError) as e:
-        # A bad tool name, a policy refusal, or an upstream failure is an
-        # ordinary, expected tool outcome - reported to the model as a failed
-        # tool call, not allowed to tear down the session.
+    except ValueError as e:
         return mcp_types.CallToolResult(
             content=[mcp_types.TextContent(type="text", text=str(e))],
+            is_error=True,
+        )
+    except exc.ZendeskError as e:
+        wrapped = _untrusted.wrap(str(e), source=f"zendesk-error.{params.name}")
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text=wrapped)],
             is_error=True,
         )
     return mcp_types.CallToolResult(content=[mcp_types.TextContent(type="text", text=text)])
