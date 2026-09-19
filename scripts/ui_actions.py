@@ -26,7 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import zd  # noqa: E402  - the single auth chokepoint for scripts/ (ADR-015)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SUB = os.environ.get("ZENDESK_SUBDOMAIN", "")
+SUB = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
 
 # Subjects whose choice lists name real people or internal groups. Counts only.
 PEOPLE = {"assignee_id", "follower", "group_id", "requester_id", "submitter_id",

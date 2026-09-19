@@ -22,7 +22,7 @@ import os, pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts"))
 from zd import call
 
-SUB = f"https://{os.environ.get('ZENDESK_SUBDOMAIN', '')}.zendesk.com"
+SUB = f"https://{os.environ.get('CSA_ZENDESK_SUBDOMAIN', '')}.zendesk.com"
 ASSIGNEE_FIELD_ID = 360028956373   # a system field, not in ticket.custom_fields
 
 

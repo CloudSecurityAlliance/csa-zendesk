@@ -1,0 +1,146 @@
+"""OAuth. ADR-009 (the flow) and ADR-015 (it is the only one).
+
+This module is the package's public surface for authentication: `login`,
+`whoami`, `access_token`, and the error types a caller of those needs to
+catch. Every private module (`_pkce`, `_store`, `_callback`, `_flow`) stays
+private - nothing outside this file imports them directly.
+
+**No out-of-band redirect.** `urn:ietf:wg:oauth:2.0:oob` is not an absolute
+URL, so Zendesk's OAuth client registration form rejects it - it is not one of
+the three redirect URIs actually registered on the live client. `login`'s
+paste fallback instead reuses `_callback.PASTE_REDIRECT`
+(`http://127.0.0.1:8765/callback`, the first of those three): the operator
+opens the authorization URL, Zendesk redirects the browser to that loopback
+address, nothing is listening there so the connection fails, and the operator
+copies the `code` parameter out of the browser's address bar. PKCE is what
+makes that safe - the code is useless without the verifier that never left
+this machine.
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+import sys
+import webbrowser
+from collections.abc import Sequence
+
+import httpx
+
+from ._callback import PASTE_REDIRECT, CallbackError, Listener, paste_fallback
+from ._flow import AuthExchangeError, NotAuthorised, ScopeError, access_token, exchange_code
+from ._pkce import authorize_url, challenge_for, new_verifier
+from ._store import TokenFileError, Tokens, clear, read, token_path, write
+from .whoami import NotAuthenticated, whoami
+
+__all__ = [
+    "AuthExchangeError",
+    "CallbackError",
+    "NotAuthenticated",
+    "NotAuthorised",
+    "ScopeError",
+    "TokenFileError",
+    "Tokens",
+    "access_token",
+    "clear",
+    "login",
+    "read",
+    "token_path",
+    "whoami",
+]
+
+
+def _required_env(name: str, *, hint: str) -> str:
+    """A required environment variable, or a `NotAuthorised` that says what to
+    set. Never a bare `KeyError` - every other entry point in this package
+    (`_flow.access_token`) fails closed on a missing variable with a message
+    naming it and what to do; `login` is a user-facing entry point too, so it
+    matches rather than surfacing a stack trace as the first thing a new
+    operator sees."""
+    value = os.environ.get(name, "")
+    if not value:
+        raise NotAuthorised(f"{name} is not set. {hint} There is no default.")
+    return value
+
+
+def login(
+    *,
+    scopes: Sequence[str],
+    open_browser: bool = True,
+    paste: bool = False,
+    timeout: float = 300.0,
+    transport: httpx.BaseTransport | None = None,
+) -> Tokens:
+    """Run the authorization-code + PKCE flow once, end to end, and persist
+    the result.
+
+    Two paths, chosen by `paste`:
+
+    - `paste=False` (default): a one-shot loopback `Listener` binds a
+      registered redirect port, `login` opens (or, with `open_browser=False`,
+      just prints) the authorization URL, and waits for the browser's
+      redirect to deliver the code.
+    - `paste=True`: for a remote shell with no browser that can reach this
+      machine's loopback address. The authorization URL is printed for the
+      operator to open elsewhere; the redirect fails to connect, and the
+      operator pastes the failed URL back in, from which the code is read.
+
+    Every prompt goes to stderr, never stdout - under stdio MCP, stdout is the
+    JSON-RPC channel. `transport` exists only so tests can inject
+    `httpx.MockTransport`; production callers never pass it.
+    """
+    subdomain = _required_env(
+        "CSA_ZENDESK_SUBDOMAIN",
+        hint="Set it to the Zendesk subdomain this server talks to (the 'example' in example.zendesk.com).",
+    )
+    client_id = _required_env(
+        "CSA_ZENDESK_MCP_SERVER_IDENTIFIER",
+        hint="Register a public OAuth client in Zendesk Admin Center (no secret is needed) and set its id.",
+    )
+    verifier = new_verifier()
+    state = secrets.token_urlsafe(16)
+    challenge = challenge_for(verifier)
+
+    if paste:
+        url = authorize_url(
+            subdomain=subdomain,
+            client_id=client_id,
+            redirect_uri=PASTE_REDIRECT,
+            scopes=scopes,
+            challenge=challenge,
+            state=state,
+        )
+        print(  # noqa: T201 - stderr, never stdout: stdout is the MCP JSON-RPC channel
+            f"Open this URL, authorise, then paste the URL your browser lands on "
+            f"(the connection will fail - that's expected):\n{url}\n",
+            file=sys.stderr,
+        )
+        code = paste_fallback(prompt_to=sys.stderr, read_from=sys.stdin, state=state)
+        redirect_uri = PASTE_REDIRECT
+    else:
+        with Listener(state=state) as listener:
+            url = authorize_url(
+                subdomain=subdomain,
+                client_id=client_id,
+                redirect_uri=listener.redirect_uri,
+                scopes=scopes,
+                challenge=challenge,
+                state=state,
+            )
+            print(f"Opening your browser to authorise:\n{url}\n", file=sys.stderr)  # noqa: T201 - stderr, not stdout
+            if open_browser:
+                webbrowser.open(url)
+            code = listener.wait(timeout)
+            redirect_uri = listener.redirect_uri
+
+    tokens = exchange_code(
+        subdomain=subdomain,
+        client_id=client_id,
+        code=code,
+        verifier=verifier,
+        redirect_uri=redirect_uri,
+        requested_scopes=list(scopes),
+        transport=transport,
+    )
+    write(tokens)
+    return tokens

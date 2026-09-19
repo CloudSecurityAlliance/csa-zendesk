@@ -73,6 +73,21 @@ _NON_IDEMPOTENT_RETRYABLE = frozenset({429})
 _IDEMPOTENT_RETRYABLE = frozenset({429, 503})
 
 
+def _is_invalid_token(response: httpx.Response) -> bool:
+    """True only for Zendesk's `invalid_token`, never for a scope or permission 401.
+
+    A positive match on one discriminator, not a blanket "was this a 401" - the
+    envelope is not uniform (API-SURFACE.md §5.5), so this must not assume one
+    shape and must not raise on a malformed or empty body; it falls through to
+    "not invalid_token" instead.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("error") == "invalid_token"
+
+
 class HttpClient:
     """A thin, synchronous Zendesk HTTP client.
 
@@ -101,6 +116,7 @@ class HttpClient:
         token_provider: Callable[[], str],
         transport: httpx.BaseTransport | None = None,
         timeout: float = 30.0,
+        on_invalid_token: Callable[[], None] | None = None,
     ) -> None:
         """
         `token_provider` returns a current OAuth access token and is called on
@@ -119,10 +135,15 @@ class HttpClient:
         auth failure into something that reads like a permissions failure -
         which is the confusion the 401 handling below goes to some trouble to
         prevent.
+
+        `on_invalid_token`, if given, is called once and the request retried once
+        when Zendesk rejects a token as `invalid_token` despite it looking
+        unexpired (ADR-009's reactive path). `None` by default: the 401 then
+        surfaces as `CredentialsRejected`, today's behaviour, unchanged.
         """
         if not subdomain:
             raise ValueError(
-                "a Zendesk subdomain is required; set ZENDESK_SUBDOMAIN. There is no "
+                "a Zendesk subdomain is required; set CSA_ZENDESK_SUBDOMAIN. There is no "
                 "default, deliberately: a hardcoded tenant is both a leak and a footgun."
             )
         if not callable(token_provider):
@@ -133,6 +154,7 @@ class HttpClient:
             )
         self._host = f"{subdomain}.zendesk.com"
         self._base = f"https://{self._host}"
+        self._on_invalid_token = on_invalid_token
 
         # The provider lives only in this closure's cell, never in self.__dict__,
         # and no token is stored at all - each one exists for the lifetime of a
@@ -179,11 +201,27 @@ class HttpClient:
 
         attempt = 0
         slept = 0  # cumulative seconds actually spent sleeping in this call, so far
+        retried_auth = False  # ADR-009: at most one refresh-and-retry per logical call
         while True:
             response = self._send(method, path, params=sendable, json=json)
 
             if response.status_code < 400:
                 return self._envelope(response)
+
+            # ADR-009: refresh on rejection, retried ONCE, and only when Zendesk says
+            # `invalid_token`. A 401 or 403 arising from scope or from the operator's
+            # own Zendesk permissions is passed through unchanged, so a permissions
+            # problem stays visible as a permissions problem rather than looking like
+            # auth flakiness.
+            if (
+                response.status_code == 401
+                and not retried_auth
+                and self._on_invalid_token is not None
+                and _is_invalid_token(response)
+            ):
+                retried_auth = True
+                self._on_invalid_token()
+                continue
 
             error = parse_error(response.status_code, self._body_or_none(response), headers=dict(response.headers))
 

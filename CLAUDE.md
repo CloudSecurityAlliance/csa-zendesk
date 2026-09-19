@@ -312,7 +312,10 @@ export runs at ten requests a minute.
   nobody wants ten thousand tickets, they want the distribution.
 - **`export_*`** writes a file for a *person*, to an operator-configured directory. The model
   gets a summary and a path and **does not query the file**. There is no query tool over exports.
-- **Nothing is cached.** No response persistence, no attachment cache, no token file.
+- **Nothing is cached.** No response persistence, no attachment cache, no token file for
+  `client_credentials`. The one exception is the OAuth token file — a credential, not customer
+  data — which ADR-005's no-persistence position was amended to admit
+  ([ADR-009](DECISIONS-ADR/ADR-009.md)).
 
 Two rules the aggregation path must keep: **scope is mandatory** — an unbounded `summarise_*` is
 refused, not silently run for an hour — and it **reports how much it sampled**, so a truncated
@@ -346,8 +349,9 @@ from *pass*; a check that cannot fail is theatre.
 **Always work inside a virtual environment.** Never `pip install` into a system Python.
 
 ```bash
-set -a; . ./.env; set +a          # CINO_CSA_ZENDESK + CINO_CSA_ZENDESK_EMAIL
-export ZENDESK_SUBDOMAIN=<subdomain>   # no default, deliberately
+export CSA_ZENDESK_SUBDOMAIN=<subdomain>               # no default, deliberately
+export CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id>   # the OAuth client's Identifier
+# optional: CSA_ZENDESK_SCOPES, space-separated, defaults to `read`
 
 python3 scripts/check_public_safe.py   # the publication gate; run before every push
 python3 scripts/inventory.py           # regenerate the operation inventory from specs/
@@ -356,14 +360,18 @@ python3 scripts/survey_tools.py        # re-run the ecosystem survey from the cl
 python3 scripts/extract_config.py      # tenant configuration -> gitignored tenant-config/
 ```
 
-Those are **scripts**, and the API token in `./.env` is theirs alone. **The library never reads it**
-([ADR-015](DECISIONS-ADR/ADR-015.md)): `HttpClient` takes a `token_provider` callable and sends a
-`Bearer` header, with no API-token path and no fallback. If you are adding auth to library code and
-reach for `CINO_CSA_ZENDESK`, stop — that is the deleted model.
-
-The script token is unscoped, full admin, and bypasses account 2FA. Zendesk deactivates all API
-tokens on **2027-04-30** and issues no new ones after **2026-10-27**. We chose not to stockpile
-spares before the cutoff, so it is irreplaceable; porting the scripts to OAuth follows Block 0b.
+The environment above carries **no credential** — the tokens live in the token file
+([ADR-009](DECISIONS-ADR/ADR-009.md)), populated once per operator by `csa-zendesk auth login`
+(the console script; `src/csa_zendesk/cli.py`). `csa-zendesk auth status` reports whether a token
+file exists, its expiry and its granted scope, without a network call; `csa-zendesk auth whoami`
+confirms the identity it resolves to, live. `./.env` is not a credential source for anything in
+this repo ([ADR-015](DECISIONS-ADR/ADR-015.md)): the **scripts** under `scripts/` —
+`zd.py`, `ui_actions.py`, `probe_families.py`, `probe_access.py` — authenticate through the same
+token file and the same `CSA_ZENDESK_SUBDOMAIN`, via `zd.authorize()`. There is no API-token path
+and no fallback anywhere. If you are adding auth to library or script code and reach for
+`CINO_CSA_ZENDESK`, stop — that is the deleted model. An operator's old API token may still
+physically sit in their local `./.env`; nothing in this repo reads it, and removing it is the
+operator's own call.
 
 ## Working in this repo
 

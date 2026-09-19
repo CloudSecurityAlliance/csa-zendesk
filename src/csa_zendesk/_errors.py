@@ -109,13 +109,14 @@ def parse_error(status: int, body: object, *, headers: Mapping[str, str] | None 
     code, message = _code(body), _message(body)
 
     if status == 401:
-        # Not "or re-run authorisation" - there is no re-auth flow to run yet (this
-        # is a static API token, not OAuth), so naming one would advertise a remedy
-        # that does not exist. Check the two env vars that actually are read.
+        # ADR-015: authentication is OAuth only, and ADR-009 gives it a real
+        # re-auth flow (`csa-zendesk auth login`) - so naming it here is
+        # naming a remedy that actually exists, not advertising one that does
+        # not.
         return exc.CredentialsRejected(
             f"Zendesk rejected the credential ({message}). The access token is invalid, expired or "
-            f"revoked - re-authorise. Note this is not the same as a 403: a 403 means the token "
-            f"is good and the account lacks the permission."
+            f"revoked - run `csa-zendesk auth login`. Note this is not the same as a 403: a 403 means "
+            f"the token is good and the account lacks the permission."
         )
     if status == 403:
         return exc.PlanBoundary(

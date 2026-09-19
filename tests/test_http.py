@@ -198,7 +198,7 @@ def test_a_transport_level_failure_becomes_a_typed_error():
 
 
 def test_subdomain_is_required():
-    with pytest.raises(ValueError, match="ZENDESK_SUBDOMAIN"):
+    with pytest.raises(ValueError, match="CSA_ZENDESK_SUBDOMAIN"):
         HttpClient(subdomain="", token_provider=lambda: CANARY)
 
 
@@ -575,3 +575,184 @@ def test_a_path_httpx_itself_refuses_to_parse_becomes_a_typed_apierror():
     with pytest.raises(exc.ApiError):
         client(handler).get("/api/v2/tickets/\x00.json")
     assert calls["n"] == 0
+
+
+def test_a_401_with_invalid_token_refreshes_once_and_retries():
+    # ADR-009: retried once, and ONLY on invalid_token.
+    calls = {"n": 0, "refreshed": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(401, json={"error": "invalid_token"})
+        return httpx.Response(200, json={"ok": True})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: CANARY,
+        transport=httpx.MockTransport(handler),
+        on_invalid_token=lambda: calls.__setitem__("refreshed", calls["refreshed"] + 1),
+    )
+    assert c.get("/api/v2/tickets.json") == {"ok": True}
+    assert calls["refreshed"] == 1
+    assert calls["n"] == 2
+
+
+def test_a_401_from_a_scope_problem_is_passed_through_unchanged():
+    # Blanket-retrying 401/403 would mask a scope misconfiguration as a transient
+    # fault - and Zendesk issues tokens for unrecognised scope names, so this is
+    # the common case, not the rare one.
+    refreshed = []
+
+    def handler(request):
+        return httpx.Response(401, json={"error": "insufficient_scope"})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: CANARY,
+        transport=httpx.MockTransport(handler),
+        on_invalid_token=lambda: refreshed.append(1),
+    )
+    with pytest.raises(exc.CredentialsRejected):
+        c.get("/api/v2/tickets.json")
+    assert refreshed == []
+
+
+def test_a_second_invalid_token_is_not_retried_again():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(401, json={"error": "invalid_token"})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: CANARY,
+        transport=httpx.MockTransport(handler),
+        on_invalid_token=lambda: None,
+    )
+    with pytest.raises(exc.CredentialsRejected):
+        c.get("/api/v2/tickets.json")
+    assert calls["n"] == 2  # the original and exactly one retry
+
+
+def test_a_401_with_invalid_token_but_no_on_invalid_token_hook_surfaces_unchanged():
+    # A caller that has not wired up access_token() gets today's behaviour: no
+    # retry attempted, and the 401 surfaces as CredentialsRejected.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(401, json={"error": "invalid_token"})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: CANARY,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(exc.CredentialsRejected):
+        c.get("/api/v2/tickets.json")
+    assert calls["n"] == 1
+
+
+def test_a_401_with_a_malformed_body_does_not_crash_the_discriminator():
+    # _is_invalid_token must not raise on a body that is not JSON, and must not
+    # treat it as invalid_token - the request surfaces as whatever ordinary error
+    # parse_error assigns a non-JSON-object body, never a retry.
+    refreshed = []
+
+    def handler(request):
+        return httpx.Response(401, content=b"not json at all")
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: CANARY,
+        transport=httpx.MockTransport(handler),
+        on_invalid_token=lambda: refreshed.append(1),
+    )
+    with pytest.raises(exc.ApiError):
+        c.get("/api/v2/tickets.json")
+    assert refreshed == []
+
+
+def test_the_retried_request_is_identical_except_for_the_bearer_token():
+    # A retry that rebuilds the request from partial state is a silent
+    # correctness bug that only shows up on non-idempotent calls - assert the
+    # method, path, query and body are unchanged across the retry, and only the
+    # bearer token differs.
+    seen: list[dict[str, object]] = []
+    tokens = iter(["stale-token", "fresh-token"])
+
+    def handler(request):
+        seen.append(
+            {
+                "method": request.method,
+                "url": str(request.url),
+                "content": request.content,
+                "auth": request.headers.get("authorization", ""),
+            }
+        )
+        if len(seen) == 1:
+            return httpx.Response(401, json={"error": "invalid_token"})
+        return httpx.Response(200, json={"ok": True})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: next(tokens),
+        transport=httpx.MockTransport(handler),
+        on_invalid_token=lambda: None,
+    )
+    result = c.request("PUT", "/api/v2/tickets/1.json", json={"ticket": {"subject": "hi"}})
+    assert result == {"ok": True}
+    assert len(seen) == 2
+    first, second = seen
+    assert first["method"] == second["method"] == "PUT"
+    assert first["url"] == second["url"]
+    assert first["content"] == second["content"]
+    assert first["auth"] == "Bearer stale-token"
+    assert second["auth"] == "Bearer fresh-token"
+
+
+def test_a_token_endpoint_failure_inside_on_invalid_token_names_the_token_endpoint_not_the_ticket_path(
+    monkeypatch, tmp_path
+):
+    # Regression (final review, item 6): a ConnectError raised deep inside
+    # `on_invalid_token` (ADR-009's sanctioned use for it is a forced refresh)
+    # used to propagate up through `_send`'s own `except (httpx.HTTPError,
+    # ...)`, which cannot tell it apart from a failure talking to the ticket
+    # endpoint this request was actually for - so it was reported as "could
+    # not reach Zendesk ... requesting GET /api/v2/tickets/123.json", naming
+    # an endpoint that was never even attempted. `_flow._post` now translates
+    # its own httpx errors into a typed `exc.ApiError` naming the OAuth token
+    # endpoint before they can reach `_send`'s except clause at all.
+    from csa_zendesk.auth import _flow, _store
+
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
+    _store.write(_store.Tokens("STALE-AT", "RT", 0.0, "read"))
+
+    def oauth_handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    def force_refresh() -> None:
+        stored = _store.read()
+        assert stored is not None
+        _flow.refresh(
+            subdomain="example",
+            client_id="cid",
+            tokens=stored,
+            transport=httpx.MockTransport(oauth_handler),
+        )
+
+    def ticket_handler(request):
+        return httpx.Response(401, json={"error": "invalid_token"})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: "STALE-AT",
+        transport=httpx.MockTransport(ticket_handler),
+        on_invalid_token=force_refresh,
+    )
+    with pytest.raises(exc.ApiError) as ei:
+        c.get("/api/v2/tickets/123.json")
+    assert "token endpoint" in str(ei.value)
+    assert "tickets/123.json" not in str(ei.value)

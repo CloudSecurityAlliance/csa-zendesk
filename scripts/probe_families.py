@@ -19,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import zd  # noqa: E402  - the single auth chokepoint for scripts/ (ADR-015)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SUB = os.environ.get("ZENDESK_SUBDOMAIN", "")
+SUB = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
 
 # capability, family, path. One cheap representative GET each.
 PROBES = [
@@ -124,7 +124,9 @@ def main() -> int:
     missing = zd.missing_credentials()
     if missing:
         # Named individually: "credentials not set" sends someone hunting for the
-        # wrong one. Both live in ./.env; neither has a default worth guessing.
+        # wrong one. Neither is a credential and neither has a default worth
+        # guessing - the tokens themselves live in the token file (ADR-009), not
+        # in the environment and not in ./.env, which nothing here reads.
         print(f"not set: {', '.join(missing)}", file=sys.stderr); return 1
     results = []
     for cap, family, path in PROBES:
