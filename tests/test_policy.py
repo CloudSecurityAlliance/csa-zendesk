@@ -32,6 +32,20 @@ def test_the_default_profile_can_read_a_ticket():
     assert wrapped().get_ticket(ticket_id=1) == {"ticket": {"id": 1}}
 
 
+def test_the_default_profile_can_search_tickets():
+    assert wrapped().search_tickets(query="type:ticket") == {"results": [], "count": 0}
+
+
+def test_a_policy_without_ticket_read_refuses_search_before_reaching_the_backend():
+    class ExplodingSearch(FakeBackend):
+        def search_tickets(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingSearch(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.read"):
+        pb.search_tickets(query="x")
+
+
 def test_a_profile_without_the_capability_is_refused_with_a_remedy():
     pb = pol.PolicyBackend(FakeBackend({1: {"id": 1}}), pol.Policy(frozenset()))
     with pytest.raises(exc.PolicyError) as ei:

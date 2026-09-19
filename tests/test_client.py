@@ -37,3 +37,16 @@ def test_a_policy_refusal_reaches_the_caller_unchanged():
     c = ZendeskClient(PolicyBackend(FakeBackend({1: {"id": 1}}), Policy(frozenset())))
     with pytest.raises(exc.PolicyError):
         c.get_ticket(ticket_id=1)
+
+
+def test_the_client_passes_search_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.search_tickets(query="type:ticket status:open") == {"results": [], "count": 0}
+
+
+def test_a_search_ceiling_refusal_reaches_the_caller_through_the_client():
+    # Proves page/per_page actually reach the backend through the client, not
+    # just that a canned envelope comes back.
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.SearchLimitExceeded, match="1000"):
+        c.search_tickets(query="x", page=101, per_page=10)

@@ -46,3 +46,14 @@ class ZendeskClient:
         # variable's declared type), so the return is cast to the type the
         # Backend Protocol actually promises instead.
         return cast(Envelope, self._backend.get_ticket(ticket_id=ticket_id))
+
+    def search_tickets(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
+        """Search results, as the raw upstream envelope: `{"results": [...], "count": ...}`.
+
+        Offset paging only (`page`/`per_page`); Zendesk stops answering past
+        1000 results (API-SURFACE.md §5.2), and the backend refuses a
+        combination that would exceed that ceiling before making the request
+        rather than let an opaque HTTP 422 escape.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.search_tickets(query=query, page=page, per_page=per_page))

@@ -9,6 +9,11 @@ from csa_zendesk._http import HttpClient
 from csa_zendesk.backend import ApiBackend, Backend, FakeBackend
 
 
+def _client(handler) -> HttpClient:
+    """A throwaway HttpClient over a MockTransport - no network, ever."""
+    return HttpClient(subdomain="example", token_provider=lambda: "tok", transport=httpx.MockTransport(handler))
+
+
 def _public_methods(cls: Any) -> set[str]:
     """Public callables declared on a class, Protocol machinery and dunders excluded."""
     return {n for n in dir(cls) if not n.startswith("_") and callable(getattr(cls, n, None))}
@@ -34,6 +39,9 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
     # agree on how they are called.
     class NameOnlyImpostor:
         def get_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def search_tickets(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
     assert isinstance(NameOnlyImpostor(), Backend)
@@ -181,3 +189,86 @@ def test_fake_and_api_backend_are_mutually_consistent_on_envelope_shape():
 
     assert fake_env == api_env
     assert set(fake_env) == {"ticket"}  # both are the raw envelope, not the inner object
+
+
+# --- search_tickets: offset paging only, refused past the 1000-result ceiling -
+
+
+def test_search_sends_offset_paging_and_the_query():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"results": [], "count": 0})
+
+    b = ApiBackend(_client(handler))
+    b.search_tickets(query="type:ticket status:open", page=2, per_page=25)
+    assert "per_page=25" in seen["url"]
+    assert "page=2" in seen["url"]
+    assert "page%5Bsize%5D" not in seen["url"]  # cursor paging is a 400 here
+
+
+def test_a_request_past_the_thousand_result_ceiling_is_refused_before_the_call():
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.ZendeskError, match="1000"):
+        b.search_tickets(query="x", page=101, per_page=10)
+    assert called["n"] == 0
+
+
+def test_the_ceiling_error_names_the_uncapped_alternative():
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.ZendeskError, match="search/export"):
+        b.search_tickets(query="x", page=101, per_page=10)
+
+
+def test_the_last_retrievable_page_is_allowed():
+    def handler(request):
+        return httpx.Response(200, json={"results": [], "count": 999999})
+
+    b = ApiBackend(_client(handler))
+    assert b.search_tickets(query="x", page=100, per_page=10) == {"results": [], "count": 999999}
+
+
+def test_the_raw_envelope_is_returned_unshaped():
+    # ADR-002: the backend never maps, renames or prunes.
+    body = {"results": [{"id": 1}], "count": 999999, "facets": None, "next_page": None}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).search_tickets(query="x") == body
+
+
+def test_search_uses_the_documented_path():
+    # Path from analysis/operation-inventory.csv row: ticketing,Search,GET,
+    # /api/v2/search,ListSearchResults,List Search Results,,,yes - confirmed
+    # against specs/zendesk-support-oas.yaml (operationId ListSearchResults).
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"results": [], "count": 0})
+
+    b = ApiBackend(_client(handler))
+    b.search_tickets(query="x")
+    assert seen["path"] == "/api/v2/search"
+
+
+def test_fake_backend_returns_a_canned_search_envelope():
+    assert FakeBackend().search_tickets(query="type:ticket") == {"results": [], "count": 0}
+
+
+def test_fake_backend_also_refuses_past_the_search_ceiling():
+    # If the fake did not enforce this, a test written against it would pass a
+    # call the real API rejects outright with HTTP 422.
+    with pytest.raises(exc.ZendeskError, match="1000"):
+        FakeBackend().search_tickets(query="x", page=101, per_page=10)
