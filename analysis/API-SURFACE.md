@@ -625,6 +625,34 @@ The secret is still retained at `0600` as a matter of course (it is displayed ex
 recovering it means rotating the client), but nothing in the live client's behaviour depends on
 it — refresh works identically with it absent.
 
+### 7.4 Revoking the access token also revokes its paired refresh token
+
+`DELETE /api/v2/oauth/tokens/current` (`RevokeCurrentOAuthToken`, around line 9712 — what `auth
+logout` calls) is documented only as revoking "the current OAuth token" identified by the
+`Authorization: Bearer` header, and returns `204 No Content`. **The spec is silent on the refresh
+token issued alongside it** — it says nothing about whether a paired refresh token is also
+invalidated, so this is not something the OpenAPI document could answer and had to be established
+by probe (`TODO.md` E20).
+
+**Settled 2026-09-19, against the live tenant: yes, revocation covers the refresh token.** Method:
+
+1. Logged in, obtaining an access token (2 days) and a refresh token (90 days). The token file was
+   copied first, preserving the refresh token independent of what `logout` would do to the live
+   file.
+2. Ran `csa-zendesk auth logout`, which called the revoke endpoint and cleared the local file. It
+   reported *"logged out: the token was revoked server-side and the local file cleared."*
+3. Restored the preserved pre-logout refresh token into a separate token file, backdated its
+   `expires_at` to force a refresh, and attempted `auth whoami` against it.
+4. Zendesk **refused the refresh.** The paired refresh token was dead.
+
+**Why this matters for the token-lifetime decision.** This is what makes the maximal token
+lifetimes (`README.md`, TODO.md E15) defensible. The argument against a 90-day refresh token is "a
+stolen token file means 90 days of access," and that argument only fails because revocation is
+real and complete. Had revocation covered only the access token, `auth logout` would have deleted
+the local file while leaving a live 90-day credential on Zendesk's side — worse than having no
+command at all, because its success message would have been misleading. The lifetimes are safe
+*because* revocation is complete, not merely alongside it.
+
 ---
 
 ## 8. Re-checking this document
