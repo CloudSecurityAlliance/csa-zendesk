@@ -28,7 +28,16 @@ from collections.abc import Sequence
 import httpx
 
 from ._callback import PASTE_REDIRECT, CallbackError, Listener, paste_fallback
-from ._flow import AuthExchangeError, NotAuthorised, ScopeError, access_token, exchange_code
+from ._flow import (
+    AuthExchangeError,
+    NotAuthorised,
+    RevokeError,
+    ScopeError,
+    TokenAlreadyInvalid,
+    access_token,
+    exchange_code,
+    revoke,
+)
 from ._pkce import authorize_url, challenge_for, new_verifier
 from ._store import TokenFileError, Tokens, clear, read, token_path, write
 from .whoami import NotAuthenticated, whoami
@@ -38,13 +47,17 @@ __all__ = [
     "CallbackError",
     "NotAuthenticated",
     "NotAuthorised",
+    "RevokeError",
     "ScopeError",
+    "TokenAlreadyInvalid",
     "TokenFileError",
     "Tokens",
     "access_token",
     "clear",
     "login",
+    "logout",
     "read",
+    "revoke",
     "token_path",
     "whoami",
 ]
@@ -144,3 +157,41 @@ def login(
     )
     write(tokens)
     return tokens
+
+
+def logout(*, transport: httpx.BaseTransport | None = None) -> str:
+    """Revoke the stored token server-side, then clear the local file - in
+    that order, never reversed. If revocation fails and the file were cleared
+    first, the credential would be live with nothing left on this machine
+    that could still revoke it.
+
+    Returns one of three outcome strings, for `cli.py` to report on; never
+    raises for "no token file" - logging out when already logged out is not
+    an error, symmetric with how `login` is the thing to run when logged out:
+
+    - `"no-token"` - nothing was on disk to log out of.
+    - `"already-invalid"` - the server-side revoke was refused because the
+      token was already invalid or expired (`TokenAlreadyInvalid`); the local
+      file is cleared anyway, since a dead credential leaves nothing to
+      protect.
+    - `"revoked"` - the server-side revoke succeeded; the local file is
+      cleared.
+
+    Any other failure (`RevokeError`, or `exc.ApiError` for a transport
+    failure) propagates instead of returning, and the local file is
+    deliberately left untouched - see `_flow.revoke`'s docstring for why.
+    """
+    tokens = read()
+    if tokens is None:
+        return "no-token"
+    subdomain = _required_env(
+        "CSA_ZENDESK_SUBDOMAIN",
+        hint="Set it to the Zendesk subdomain this server talks to (the 'example' in example.zendesk.com).",
+    )
+    try:
+        revoke(subdomain=subdomain, tokens=tokens, transport=transport)
+    except TokenAlreadyInvalid:
+        clear()
+        return "already-invalid"
+    clear()
+    return "revoked"

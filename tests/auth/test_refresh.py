@@ -128,6 +128,22 @@ def test_a_refresh_response_without_a_new_refresh_token_keeps_the_old_one(monkey
     assert _store.read().refresh_token == "OLD-RT"  # kept, never overwritten with ""
 
 
+def test_refresh_requests_the_maximum_documented_lifetimes(monkeypatch, tmp_path):
+    # Resending the maxima on every refresh matters because rotation mints a
+    # brand-new refresh token each time - without re-requesting 90 days here,
+    # the window would fall back to Zendesk's 30-day default on the very
+    # first refresh instead of sliding forward.
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
+    _store.write(_store.Tokens("OLD-AT", "OLD-RT", 1_060.0, "tickets:read"))
+    monkeypatch.setattr(_flow.time, "time", lambda: 1_000.0)
+    calls: list[dict] = []
+    assert _flow.access_token(transport=_ok(calls)) == "NEW-AT"
+    assert calls[0]["expires_in"] == str(_flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS)
+    assert calls[0]["refresh_token_expires_in"] == str(_flow.MAX_REFRESH_TOKEN_LIFETIME_SECONDS)
+
+
 def test_refresh_never_sends_a_scope_parameter(monkeypatch, tmp_path):
     # The default (unset CSA_ZENDESK_SCOPES) sends no `scope` at all - this
     # confirms that is not incidental to the env var being unset, but

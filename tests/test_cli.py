@@ -35,14 +35,33 @@ def _tokens(*, expires_at: float = 0.0, scope: str = "read") -> auth.Tokens:
         (0, "0 seconds"),
         (1, "1 second"),
         (59, "59 seconds"),
+        # just over the 60-second boundary: the next unit down (seconds) is
+        # non-zero, so it is carried rather than truncated away.
         (60, "1 minute"),
+        (61, "1 minute 1 second"),
+        (119, "1 minute 59 seconds"),
         (120, "2 minutes"),
-        (3599, "59 minutes"),
+        (125, "2 minutes 5 seconds"),
+        # just under the 60-minute boundary: previously truncated to "59
+        # minutes", which is the exact bug this fix closes.
+        (3599, "59 minutes 59 seconds"),
         (3600, "1 hour"),
+        # just over 1 hour: minutes is the next unit down, and it IS zero here
+        # even though seconds is not - only one unit below the primary is ever
+        # shown, so the leftover second is dropped, not carried past minutes.
+        (3601, "1 hour"),
+        (3660, "1 hour 1 minute"),
         (7200, "2 hours"),
-        (86399, "23 hours"),
+        # just under the 24-hour boundary: previously truncated to "23 hours".
+        (86399, "23 hours 59 minutes"),
         (86400, "1 day"),
+        (90000, "1 day 1 hour"),
         (172800, "2 days"),
+        # the case that exposed the bug: a freshly-issued 2-day access token
+        # (172,800s max) measured a few seconds later reads as "1 day" under
+        # the old truncating implementation, as if half its life were already
+        # gone.
+        (172753, "1 day 23 hours"),
     ],
 )
 def test_human_duration_every_scale(seconds, want):
@@ -50,7 +69,7 @@ def test_human_duration_every_scale(seconds, want):
 
 
 def test_human_expiry_in_the_future():
-    assert cli._human_expiry(1_400.0, now=0.0) == "expires in 23 minutes"
+    assert cli._human_expiry(1_400.0, now=0.0) == "expires in 23 minutes 20 seconds"
 
 
 def test_human_expiry_in_the_past():
@@ -276,3 +295,93 @@ def test_status_failure_is_a_message_not_a_traceback(monkeypatch, capsys, tmp_pa
     assert rc == 1
     assert out == ""
     assert "0644" in err
+
+
+# ---------------------------------------------------------------------------
+# auth logout
+# ---------------------------------------------------------------------------
+
+
+def test_logout_with_no_token_file_exits_zero(monkeypatch, capsys):
+    monkeypatch.setattr(auth, "logout", lambda **_: "no-token")
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "already logged out" in err
+
+
+def test_logout_of_an_already_invalid_token_still_exits_zero(monkeypatch, capsys):
+    monkeypatch.setattr(auth, "logout", lambda **_: "already-invalid")
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "already invalid" in err
+
+
+def test_a_successful_logout_exits_zero_and_says_revoked(monkeypatch, capsys):
+    monkeypatch.setattr(auth, "logout", lambda **_: "revoked")
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "revoked" in err
+
+
+def test_a_revoke_error_exits_nonzero_names_the_admin_center_fallback_and_never_a_token(monkeypatch, capsys):
+    def fake_logout(**_):
+        raise auth.RevokeError("Zendesk refused to revoke the token (HTTP 503).")
+
+    monkeypatch.setattr(auth, "logout", fake_logout)
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 1
+    assert out == ""
+    assert "503" in err
+    assert "may still be live" in err
+    assert "Admin Center" in err
+    assert "AT-SECRET" not in err and "RT-SECRET" not in err
+
+
+def test_a_transport_failure_during_logout_also_names_the_admin_center_fallback(monkeypatch, capsys):
+    from csa_zendesk import exceptions as exc
+
+    def fake_logout(**_):
+        raise exc.ApiError("could not reach the Zendesk OAuth revoke endpoint (ConnectError)")
+
+    monkeypatch.setattr(auth, "logout", fake_logout)
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 1
+    assert out == ""
+    assert "Admin Center" in err
+
+
+def test_logout_with_no_subdomain_configured_is_a_message_not_a_traceback(monkeypatch, capsys):
+    # NotAuthorised (missing CSA_ZENDESK_SUBDOMAIN) is not a revoke failure -
+    # it must fall through to main()'s generic ZendeskError handler, not the
+    # logout-specific "may still be live" message, which would be misleading
+    # here: no revoke attempt was ever made.
+    def fake_logout(**_):
+        raise auth.NotAuthorised("CSA_ZENDESK_SUBDOMAIN is not set.")
+
+    monkeypatch.setattr(auth, "logout", fake_logout)
+
+    rc = cli.main(["auth", "logout"])
+    out, err = capsys.readouterr()
+
+    assert rc == 1
+    assert out == ""
+    assert "CSA_ZENDESK_SUBDOMAIN is not set." in err
+    assert "Admin Center" not in err

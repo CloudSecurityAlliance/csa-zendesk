@@ -53,6 +53,62 @@ def test_the_exchange_posts_the_verifier_and_no_secret():
     assert "client_secret" not in seen["body"]
 
 
+def test_the_exchange_requests_the_maximum_documented_lifetimes():
+    # specs/zendesk-support-oas.yaml `CreateTokenForGrantType` (line ~22798):
+    # expires_in <= 172,800s (2 days), refresh_token_expires_in <= 7,776,000s
+    # (90 days). Both maxima must be requested, not just eligible to be.
+    seen = {}
+
+    def handler(request):
+        seen["body"] = dict(httpx.QueryParams(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "AT",
+                "refresh_token": "RT",
+                "expires_in": 1800,
+                "scope": "tickets:read",
+            },
+        )
+
+    _flow.exchange_code(
+        subdomain="example",
+        client_id="cid",
+        code="C",
+        verifier="V",
+        redirect_uri="http://127.0.0.1:1/cb",
+        requested_scopes=["tickets:read"],
+        transport=_transport(handler),
+    )
+    assert seen["body"]["expires_in"] == str(_flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS)
+    assert seen["body"]["refresh_token_expires_in"] == str(_flow.MAX_REFRESH_TOKEN_LIFETIME_SECONDS)
+
+
+def test_the_maximum_lifetimes_satisfy_the_spec_invariant():
+    # The spec requires expires_in <= refresh_token_expires_in. A later edit
+    # that inverts the two constants must fail here, not as a 400 at runtime.
+    assert _flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS <= _flow.MAX_REFRESH_TOKEN_LIFETIME_SECONDS
+
+
+def test_the_maximum_lifetimes_are_the_literal_values_zendesk_documents():
+    # specs/zendesk-support-oas.yaml `CreateTokenForGrantType` (~line 22798):
+    #   expires_in: >= 300s (5 minutes), <= 172,800s (2 days)
+    #   refresh_token_expires_in: >= 604,800s (7 days), <= 7,776,000s (90 days)
+    #
+    # Bounds are written as literals here, not derived from the constants
+    # under test - asserting a constant against itself would only prove the
+    # code equals itself. This pins both constants to the numbers Zendesk's
+    # own document states, so a future edit that "adjusts" them together to a
+    # still-ordered, still-wrong pair (the failure mode the ordering test
+    # above cannot see) fails here instead of drifting silently, since these
+    # values are transcribed from a vendor document rather than chosen by us.
+    assert _flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS == 172_800
+    assert 300 <= _flow.MAX_ACCESS_TOKEN_LIFETIME_SECONDS <= 172_800
+
+    assert _flow.MAX_REFRESH_TOKEN_LIFETIME_SECONDS == 7_776_000
+    assert 604_800 <= _flow.MAX_REFRESH_TOKEN_LIFETIME_SECONDS <= 7_776_000
+
+
 def test_a_granted_scope_narrower_than_requested_is_a_loud_error():
     # API-SURFACE §7: Zendesk issues a token for an unrecognised scope name and
     # then 403s every request made with it, so a typo produces a credential that
