@@ -67,6 +67,8 @@ class Backend(Protocol):
 
     def search_tickets(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope: ...
 
+    def list_comments(self, *, ticket_id: int) -> Envelope: ...
+
 
 class ApiBackend:
     """The real thing."""
@@ -93,6 +95,22 @@ class ApiBackend:
         # cursor paging works.
         _refuse_past_search_ceiling(page=page, per_page=per_page)
         return self._http.get("/api/v2/search", params={"query": query, "page": page, "per_page": per_page})
+
+    def list_comments(self, *, ticket_id: int) -> Envelope:
+        # analysis/operation-inventory.csv row: ticketing,Ticket Comments,GET,
+        # /api/v2/tickets/{ticket_id}/comments,ListTicketComments,List Comments,
+        # cursor,,yes - no .json suffix, consistent with get_ticket; only the
+        # unrelated Countries family carries one anywhere in the inventory, so
+        # neither presence nor absence generalises from it.
+        #
+        # No paging parameter: specs/zendesk-support-oas.yaml (operationId
+        # ListTicketComments) caps this endpoint at 100 records per page and
+        # sorts ascending by creation date by default. A ticket with more than
+        # 100 comments would have its later comments silently missing from
+        # this envelope - this method does not add a paging parameter the
+        # brief did not ask for, so a caller reading a long ticket must not
+        # assume the result is complete.
+        return self._http.get(f"/api/v2/tickets/{ticket_id}/comments")
 
 
 class FakeBackend:
@@ -127,3 +145,12 @@ class FakeBackend:
         # fake that let this through would pass tests the real API rejects.
         _refuse_past_search_ceiling(page=page, per_page=per_page)
         return {"results": [], "count": 0}
+
+    def list_comments(self, *, ticket_id: int) -> Envelope:
+        # Canned, like search_tickets: this fake does not maintain a per-ticket
+        # comment store. It does share get_ticket's existence check against
+        # self.tickets, so a ticket_id nothing has ever heard of still raises
+        # NotFound rather than a silent, misleadingly-empty conversation.
+        if ticket_id not in self.tickets:
+            raise exc.NotFound(f"no such record (ticket {ticket_id})")
+        return {"comments": []}

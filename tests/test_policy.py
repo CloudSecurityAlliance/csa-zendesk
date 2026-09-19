@@ -36,6 +36,20 @@ def test_the_default_profile_can_search_tickets():
     assert wrapped().search_tickets(query="type:ticket") == {"results": [], "count": 0}
 
 
+def test_the_default_profile_can_list_comments():
+    assert wrapped().list_comments(ticket_id=1) == {"comments": []}
+
+
+def test_a_policy_without_ticket_read_refuses_list_comments_before_reaching_the_backend():
+    class ExplodingComments(FakeBackend):
+        def list_comments(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingComments(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.read"):
+        pb.list_comments(ticket_id=1)
+
+
 def test_a_policy_without_ticket_read_refuses_search_before_reaching_the_backend():
     class ExplodingSearch(FakeBackend):
         def search_tickets(self, **kwargs):  # pragma: no cover - must never run

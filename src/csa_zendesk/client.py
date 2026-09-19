@@ -57,3 +57,19 @@ class ZendeskClient:
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.search_tickets(query=query, page=page, per_page=per_page))
+
+    def list_comments(self, *, ticket_id: int) -> Envelope:
+        """A ticket's comments, as the raw upstream envelope: `{"comments": [...]}`.
+
+        Each comment's `public` flag is passed through exactly as Zendesk sent
+        it (API-SURFACE.md §5.4f: it has no fixed default and inherits from the
+        ticket's first comment) - never flattened, since a reader needs to know
+        which prior messages actually reached the customer.
+
+        Takes no paging parameter. The endpoint caps at 100 comments per page
+        (specs/zendesk-support-oas.yaml, operationId ListTicketComments); a
+        ticket with more than that will have its later comments missing from
+        this envelope.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.list_comments(ticket_id=ticket_id))

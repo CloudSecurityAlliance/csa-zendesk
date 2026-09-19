@@ -219,6 +219,7 @@ Gate = str | None | Callable[[dict[str, Any]], frozenset[str]]
 _GATES: dict[str, Gate] = {
     "get_ticket": TICKET_READ,
     "search_tickets": TICKET_READ,
+    "list_comments": TICKET_READ,
 }
 
 

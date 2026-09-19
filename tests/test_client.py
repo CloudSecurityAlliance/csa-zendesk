@@ -50,3 +50,14 @@ def test_a_search_ceiling_refusal_reaches_the_caller_through_the_client():
     c = ZendeskClient(FakeBackend())
     with pytest.raises(exc.SearchLimitExceeded, match="1000"):
         c.search_tickets(query="x", page=101, per_page=10)
+
+
+def test_the_client_passes_comment_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4}}))
+    assert c.list_comments(ticket_id=4) == {"comments": []}
+
+
+def test_a_list_comments_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.list_comments(ticket_id=999)

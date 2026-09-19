@@ -44,6 +44,9 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
         def search_tickets(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
+        def list_comments(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
     assert isinstance(NameOnlyImpostor(), Backend)
 
 
@@ -272,3 +275,61 @@ def test_fake_backend_also_refuses_past_the_search_ceiling():
     # call the real API rejects outright with HTTP 422.
     with pytest.raises(exc.ZendeskError, match="1000"):
         FakeBackend().search_tickets(query="x", page=101, per_page=10)
+
+
+# --- list_comments: a ticket without its comments is just a subject line -----
+
+
+def test_list_comments_returns_the_raw_envelope():
+    body = {
+        "comments": [
+            {"id": 1, "public": True, "body": "hello", "author_id": 7},
+            {"id": 2, "public": False, "body": "internal", "author_id": 8},
+        ]
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).list_comments(ticket_id=42) == body
+
+
+def test_list_comments_preserves_the_public_flag_per_comment():
+    # API-SURFACE §5.4f: comment.public has no fixed default - it inherits from
+    # the ticket's first comment. Flattening it would hide whether a message
+    # reached the customer.
+    body = {"comments": [{"id": 1, "public": True}, {"id": 2, "public": False}]}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    got = ApiBackend(_client(handler)).list_comments(ticket_id=42)
+    assert [c["public"] for c in got["comments"]] == [True, False]
+
+
+def test_list_comments_uses_the_documented_path():
+    # Path from analysis/operation-inventory.csv row: ticketing,Ticket Comments,
+    # GET,/api/v2/tickets/{ticket_id}/comments,ListTicketComments,List Comments,
+    # cursor,,yes - confirmed against specs/zendesk-support-oas.yaml (operationId
+    # ListTicketComments). No .json suffix, matching get_ticket.
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"comments": []})
+
+    b = ApiBackend(_client(handler))
+    b.list_comments(ticket_id=42)
+    assert seen["path"] == "/api/v2/tickets/42/comments"
+
+
+def test_fake_backend_returns_a_canned_comments_envelope():
+    assert FakeBackend(tickets={7: {"id": 7}}).list_comments(ticket_id=7) == {"comments": []}
+
+
+def test_fake_backend_raises_not_found_for_an_unknown_ticket_id():
+    # Mirrors get_ticket: ticket_id is this call's actual subject (unlike
+    # search's free-text query), so an id nothing has ever heard of should not
+    # silently read as "a ticket with zero comments".
+    with pytest.raises(exc.NotFound):
+        FakeBackend().list_comments(ticket_id=999)
