@@ -599,13 +599,31 @@ shared, widely-distributed string into a client credential.
 time"* (line 30868), so **being handed a secret says nothing about the client's type**. The type is
 the separate `kind` field — `"public"` or `"confidential"` (line 30850).
 
-Unresolved, and it decides whether `DECISIONS-ADR/ADR-009.md`'s "public client, no secret" survives
-contact: the spec's **authorization-code example omits `client_secret` and sends `code_verifier`**
-(line 22805), while its **refresh-token example sends `client_secret`** (line 22827). If refresh
-genuinely requires the secret, this client is confidential in practice and ADR-009 needs a dated
-correction. Probe it at first refresh rather than assuming either way — and until then, retain the
-secret at `0600` rather than discarding it, since it is displayed exactly once and recovering it
-means rotating the client.
+This was unresolved on paper because the spec's own examples disagree: the **authorization-code
+example omits `client_secret` and sends `code_verifier`** (line 22805), while its **refresh-token
+example sends `client_secret`** (line 22827). Taken at face value that would mean refresh
+requires the secret and this client is confidential in practice, contradicting
+`DECISIONS-ADR/ADR-009.md`'s "public client, no secret" — so it had to be settled against the
+live tenant rather than trusted to either example.
+
+**Settled 2026-09-19, against the live tenant.** A `refresh_token` grant carrying `grant_type`,
+`refresh_token` and `client_id` — no `client_secret` — was accepted and returned a new token
+pair. The refresh-token example's inclusion of `client_secret` is misleading for a public client;
+the authorization-code example's omission is the one that holds. The client is genuinely public
+and ADR-009's decision stands (see its 2026-09-19 amendment). Two more behaviours came out of the
+same probe and belong here because they shape how a public client's credential should be handled:
+
+- **Refresh tokens rotate.** Every refresh returns a *new* `refresh_token`; the old one is
+  consumed. Verified by fingerprinting the token file before and after a refresh — both
+  `access_token` and `refresh_token` changed, `scope` was preserved.
+- **There is no reuse detection.** Replaying an already-consumed refresh token is refused with
+  the standard refusal, but **the successor token continues to work** — the chain is not
+  revoked. Verified by deliberately replaying a consumed token and then successfully refreshing
+  with its successor. See `TODO.md` E11 for what this means for the missing lock file.
+
+The secret is still retained at `0600` as a matter of course (it is displayed exactly once and
+recovering it means rotating the client), but nothing in the live client's behaviour depends on
+it — refresh works identically with it absent.
 
 ---
 
