@@ -437,7 +437,7 @@ git add -A && git commit -m "feat: ticket text reaches a model as data, not as i
 
 **Interfaces:**
 - Consumes: `connect()`, `ZendeskClient.{get_ticket,search_tickets,list_comments}`, `_untrusted.wrap_*`.
-- Produces: `build_server() -> Server`, `main() -> int`; console entry point `csa-zendesk-mcp`.
+- Produces: `READ_TOOLS` (the three data tools below) and `TOOLS`, set here to `READ_TOOLS` — Task 6 extends `TOOLS` to `READ_TOOLS + AUTH_TOOLS` without touching this task's assertions, which is why they are named separately from the start rather than merged and split apart later. Also produces `build_server() -> Server`, `main() -> int`; console entry point `csa-zendesk-mcp`.
 
 **Add the dependency as an extra, not a hard requirement.** The library must remain importable without the MCP SDK — `pyproject.toml` currently declares `dependencies = ["httpx>=0.27"]` and that should stay true for library consumers. Add `[project.optional-dependencies] server = ["mcp>=1.0"]` and a `csa-zendesk-mcp` console script. `server.py` imports `mcp` at module scope; `tests/test_public_api.py`'s import-time stdout guard imports **every** module, so if the extra is not installed in the test environment that guard will fail. Install the extra in the dev environment and say so in the README.
 
@@ -455,13 +455,19 @@ import pytest
 from csa_zendesk import server as srv
 
 
-def test_the_tools_are_exactly_the_three_read_tools():
-    names = {t.name for t in srv.TOOLS}
+def test_the_read_tools_are_exactly_the_three_read_tools():
+    # Asserts on READ_TOOLS, not TOOLS — TOOLS grows in Task 6 to include the
+    # auth-lifecycle tools, and this property must stay true regardless.
+    names = {t.name for t in srv.READ_TOOLS}
     assert names == {"search_tickets", "get_ticket", "list_comments"}
+    assert srv.TOOLS == srv.READ_TOOLS
 
 
-def test_every_tool_is_annotated_read_only_and_non_destructive():
-    for t in srv.TOOLS:
+def test_every_read_tool_is_annotated_read_only_and_non_destructive():
+    # Scoped to READ_TOOLS for the same reason: Task 6 adds `authenticate`
+    # (not read-only) and `logout` (destructive), which would falsify this if
+    # it quantified over TOOLS.
+    for t in srv.READ_TOOLS:
         assert t.annotations.readOnlyHint is True, t.name
         assert t.annotations.destructiveHint is False, t.name
 
@@ -514,7 +520,7 @@ Then `./.venv/bin/pip install -e '.[dev,server]'`.
 
 - [ ] **Step 4: Implement `server.py`**
 
-Expose a module-level `TOOLS` list of tool definitions with JSON schemas, and a `call_tool_sync(name, args)` that dispatches to the client and wraps the result — keeping the dispatch synchronous and separately testable is what makes the tests above possible without an event loop. `_client()` is a thin indirection returning `connect(...)` so tests can substitute it. `main()` runs the stdio server and returns an exit code.
+Expose a module-level `READ_TOOLS` list of the three data-tool definitions with JSON schemas, and set `TOOLS = READ_TOOLS` (a plain list, so `TOOLS = READ_TOOLS + AUTH_TOOLS` in Task 6 is a normal concatenation, not a re-derivation). Add `call_tool_sync(name, args)` that dispatches to the client and wraps the result — keeping the dispatch synchronous and separately testable is what makes the tests above possible without an event loop. `_client()` is a thin indirection returning `connect(...)` so tests can substitute it. `main()` runs the stdio server and returns an exit code.
 
 - [ ] **Step 5: Run the tests until they pass; update the module count in `tests/test_public_api.py`**
 
@@ -536,8 +542,8 @@ git add -A && git commit -m "feat(server): three read tools over MCP stdio"
 - Modify: `src/csa_zendesk/server.py`, `tests/test_server.py`
 
 **Interfaces:**
-- Consumes: `auth.login`, `auth.logout`, `auth.read`, `auth.token_path`.
-- Produces: three further tools — `authenticate`, `auth_status`, `logout` — and the server's `instructions` string.
+- Consumes: `auth.login`, `auth.logout`, `auth.read`, `auth.token_path`, `READ_TOOLS` and `TOOLS` (Task 5).
+- Produces: `AUTH_TOOLS` — `authenticate`, `auth_status`, `logout` — and reassigns `TOOLS = READ_TOOLS + AUTH_TOOLS`. Also produces the server's `instructions` string (`INSTRUCTIONS`).
 
 **Why (TODO E21).** Without this, a user of the server in Claude Code who is logged out, or whose 90-day refresh token has lapsed, gets `NotAuthorised` telling them to run `csa-zendesk auth login` — which means leaving the client, finding the right directory and venv, setting two environment variables, and coming back, while every tool call fails.
 
@@ -560,12 +566,16 @@ git add -A && git commit -m "feat(server): three read tools over MCP stdio"
 
 ```python
 # append to tests/test_server.py
-def test_authenticate_auth_status_and_logout_are_registered():
-    assert {"authenticate", "auth_status", "logout"} <= {t.name for t in srv.TOOLS}
+def test_the_auth_tools_are_exactly_authenticate_auth_status_and_logout():
+    assert {t.name for t in srv.AUTH_TOOLS} == {"authenticate", "auth_status", "logout"}
+
+
+def test_tools_is_read_tools_plus_auth_tools():
+    assert srv.TOOLS == srv.READ_TOOLS + srv.AUTH_TOOLS
 
 
 def test_logout_is_annotated_as_a_destructive_idempotent_open_world_write():
-    (t,) = [t for t in srv.TOOLS if t.name == "logout"]
+    (t,) = [t for t in srv.AUTH_TOOLS if t.name == "logout"]
     assert t.annotations.readOnlyHint is False, t.name
     assert t.annotations.destructiveHint is True, t.name
     assert t.annotations.idempotentHint is True, t.name
@@ -637,9 +647,9 @@ def test_the_server_instructions_tell_the_model_not_to_retry_or_hunt_for_files()
 
 - [ ] **Step 2: Run them and watch them fail**
 
-- [ ] **Step 3: Implement the three tools and the `INSTRUCTIONS` constant**
+- [ ] **Step 3: Implement the three tools, `AUTH_TOOLS`, `TOOLS`, and the `INSTRUCTIONS` constant**
 
-`authenticate` calls `auth.login(...)` and returns the resolved identity and granted scope — never a token. `auth_status` reports the token path, a human-readable expiry and the granted scope, and says to call `authenticate` when there is no token. `logout` calls `auth.logout()` inside a `try`/`except` that catches `_flow.RevokeError` and `exc.ApiError`, maps the three return strings and the exception case to four distinct human-readable outcomes as specified above, and never includes a token value in any of them. Annotate `authenticate` `readOnlyHint: false` (it writes a credential file) and `destructiveHint: false`; annotate `logout` `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: true` (see ADR-017 for why destructive-but-cheaply-recoverable still gets `destructiveHint: true` — the hint is honest about the action, ADR-017 is the argument for why that honesty doesn't justify hiding the tool).
+`authenticate` calls `auth.login(...)` and returns the resolved identity and granted scope — never a token. `auth_status` reports the token path, a human-readable expiry and the granted scope, and says to call `authenticate` when there is no token. `logout` calls `auth.logout()` inside a `try`/`except` that catches `_flow.RevokeError` and `exc.ApiError`, maps the three return strings and the exception case to four distinct human-readable outcomes as specified above, and never includes a token value in any of them. Annotate `authenticate` `readOnlyHint: false` (it writes a credential file) and `destructiveHint: false`; annotate `logout` `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: true` (see ADR-017 for why destructive-but-cheaply-recoverable still gets `destructiveHint: true` — the hint is honest about the action, ADR-017 is the argument for why that honesty doesn't justify hiding the tool). Collect the three into `AUTH_TOOLS`, then set `TOOLS = READ_TOOLS + AUTH_TOOLS` — reassigning the module-level name Task 5 defined, not shadowing it, so `srv.TOOLS` means the same thing to every later task.
 
 - [ ] **Step 4: Run the tests until they pass, then the full suite**
 
@@ -658,7 +668,7 @@ git add -A && git commit -m "feat(server): authenticate from inside the session,
 - Test: `tests/test_server.py`
 
 **Interfaces:**
-- Consumes: everything above.
+- Consumes: everything above, in particular `TOOLS` and `AUTH_TOOLS` (Tasks 5–6) — this task's tests iterate `TOOLS` because "every tool the model can see" is what they check, and use `AUTH_TOOLS` wherever they need to name the auth-lifecycle subset rather than listing tool names by hand.
 - Produces: no new API. This task proves the block is at rung E1 and documents how to install it.
 
 **What rung E1 means** (whole-project design §5, enablement track): *"Triage the live queue; propose everything, change nothing"* — read capabilities, `READ=*`, and **no** write allowlist. The server must be incapable of a write, and that must be asserted rather than assumed.
@@ -674,12 +684,15 @@ def test_the_server_requests_only_read_capabilities():
 
 
 def test_no_registered_tool_maps_to_a_write_operation():
-    # authenticate/auth_status/logout are auth-lifecycle tools, not Support API
-    # operations, and sit outside policy._GATES by design (ADR-017) — reachable
-    # at every rung, not just the ones that hold a write capability.
+    # AUTH_TOOLS (authenticate/auth_status/logout) are auth-lifecycle tools, not
+    # Support API operations, and sit outside policy._GATES by design (ADR-017)
+    # — reachable at every rung, not just the ones that hold a write capability.
+    # Skipping via AUTH_TOOLS rather than a literal name set means a fourth
+    # auth tool is covered automatically instead of silently falling through.
     from csa_zendesk import policy
+    auth_names = {t.name for t in srv.AUTH_TOOLS}
     for t in srv.TOOLS:
-        if t.name in {"authenticate", "auth_status", "logout"}:
+        if t.name in auth_names:
             continue
         assert policy._GATES[t.name] == policy.TICKET_READ, t.name
 
@@ -729,10 +742,12 @@ git add -A && git commit -m "feat(server): rung E1 - read the queue, change noth
 
 ## Self-Review
 
-**Spec coverage.** The whole-project design's §1 three controls: the capability profile is `E1_CAPABILITIES` (Task 7), the toolset is `TOOLS` (Task 5), the allowlist is `READ=*` with no write allowlist (Task 7). §5's E1 rung — *"triage the live queue; propose everything, change nothing"* — is asserted by `test_no_registered_tool_maps_to_a_write_operation`, which now also documents that `authenticate`/`auth_status`/`logout` sit outside the capability gate by design rather than by omission. TODO E12/E13 close in Task 1, E21 in Task 6, A4 in Task 4. Task 6's tool set — `authenticate`, `auth_status`, and `logout` — follows [ADR-017](../../../DECISIONS-ADR/ADR-017.md); an earlier draft of this plan omitted `logout` and that reasoning is superseded, not merely dropped. **Deliberately not covered:** B1–B5 (the full surface), the hatch, rate limiting, and the E11 lock-file mitigation — each is named in "what this block is not" or left open in Task 7 Step 5.
+**Spec coverage.** The whole-project design's §1 three controls: the capability profile is `E1_CAPABILITIES` (Task 7), the toolset is `TOOLS` (`READ_TOOLS` at Task 5, extended to `READ_TOOLS + AUTH_TOOLS` at Task 6), the allowlist is `READ=*` with no write allowlist (Task 7). §5's E1 rung — *"triage the live queue; propose everything, change nothing"* — is asserted by `test_no_registered_tool_maps_to_a_write_operation`, which now also documents that `authenticate`/`auth_status`/`logout` sit outside the capability gate by design rather than by omission. TODO E12/E13 close in Task 1, E21 in Task 6, A4 in Task 4. Task 6's tool set — `authenticate`, `auth_status`, and `logout` — follows [ADR-017](../../../DECISIONS-ADR/ADR-017.md); an earlier draft of this plan omitted `logout` and that reasoning is superseded, not merely dropped. **Deliberately not covered:** B1–B5 (the full surface), the hatch, rate limiting, and the E11 lock-file mitigation — each is named in "what this block is not" or left open in Task 7 Step 5.
 
 **Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Two steps deliberately instruct the implementer to *derive* a value rather than giving it — the search and comments paths, which must come from `analysis/operation-inventory.csv` — because `get_ticket`'s own comment records that guessing the `.json` suffix is a real trap here. That is a specific instruction with a named source, not a placeholder.
 
 **Type consistency.** `Envelope = dict[str, Any]` throughout. `search_tickets(*, query, page, per_page)` and `list_comments(*, ticket_id)` are identical in Tasks 2, 3, 5 and 7. `_untrusted.MARKER_OPEN`/`MARKER_CLOSE` are used consistently in Tasks 4, 5 and 7. `connect(*, profile, capabilities, transport)` in Task 1 is called with `capabilities=` in Task 7. `call_tool_sync(name, args)` is introduced in Task 5 and reused in Tasks 6 and 7.
+
+**The tool collection is deliberately split three ways, not one name reused loosely.** An earlier draft of this plan had Task 5 assert `TOOLS == {the three read tools}` and left Task 6 to register two (later three) more tools into that same `TOOLS`, which makes Task 5's own assertion false the moment Task 6 lands — exactly the failure mode this plan otherwise tries to prevent, where a later task edits an earlier task's test to make its own work pass. The corrected shape: Task 5 defines `READ_TOOLS` (the three data tools) and sets `TOOLS = READ_TOOLS`, and its tests assert on `READ_TOOLS`, which stays true for the life of the plan. Task 6 defines `AUTH_TOOLS` (`authenticate`, `auth_status`, `logout`) and reassigns `TOOLS = READ_TOOLS + AUTH_TOOLS`, asserting on `AUTH_TOOLS` and on the combined `TOOLS` where that is genuinely what it means to check. Task 7's tests keep iterating `TOOLS`, because "every tool the model can see" is what they check, and its auth-tool skip-set is expressed as `{t.name for t in srv.AUTH_TOOLS}` rather than a hand-written literal, so a fourth auth tool is covered automatically. No task edits an assertion introduced by an earlier task.
 
 **One risk worth stating.** Task 5 adds `mcp` as a module-scope import, and `tests/test_public_api.py`'s stdout guard imports every module in the package. If the `server` extra is not installed, that guard fails with an import error rather than a stdout violation — a confusing failure for anyone who installs only `[dev]`. Task 5 Step 3 installs both extras; if the guard proves brittle, the fix is to make the extra a hard dependency rather than to weaken the guard.
