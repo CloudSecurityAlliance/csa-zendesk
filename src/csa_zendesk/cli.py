@@ -76,8 +76,7 @@ def _cmd_login(args: argparse.Namespace) -> int:
         identity = auth.whoami()
     except auth.NotAuthenticated as e:
         print(  # noqa: T201 - stderr, not stdout
-            f"token written (granted scope: {tokens.scope}), but the identity check "
-            f"just after login failed: {e}",
+            f"token written (granted scope: {tokens.scope}), but the identity check just after login failed: {e}",
             file=sys.stderr,
         )
         return 1
