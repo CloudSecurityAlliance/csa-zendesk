@@ -82,16 +82,17 @@ def test_subdomain_defaults_to_the_environment_variable(monkeypatch, tmp_path):
     assert seen["host"] == "example.zendesk.com"
 
 
-def test_an_explicit_subdomain_overrides_the_environment_variable(monkeypatch, tmp_path):
-    _authorised(monkeypatch, tmp_path)
-    seen = {}
+def test_whoami_takes_no_subdomain_parameter():
+    # Security fix (final review): `whoami` used to accept a `subdomain`
+    # keyword and interpolate it straight into the request URL, attaching a
+    # live bearer token to whatever host the caller named -
+    # `subdomain="evil.com/"` builds host `evil.com`; `"x.attacker.net"`
+    # builds `x.attacker.net.zendesk.com`. A credential is only ever valid for
+    # the tenant it was issued against, so there is no legitimate use for
+    # pointing it anywhere else - the parameter is gone, not merely validated.
+    import inspect
 
-    def handler(request):
-        seen["host"] = request.url.host
-        return httpx.Response(200, json={"user": {"id": 1, "name": "Agent"}})
-
-    auth.whoami(subdomain="acme", transport=httpx.MockTransport(handler))
-    assert seen["host"] == "acme.zendesk.com"
+    assert "subdomain" not in inspect.signature(auth.whoami).parameters
 
 
 def test_a_response_with_no_user_object_at_all_is_treated_as_unauthenticated(monkeypatch, tmp_path):
@@ -103,4 +104,76 @@ def test_a_response_with_no_user_object_at_all_is_treated_as_unauthenticated(mon
         return httpx.Response(200, json={})
 
     with pytest.raises(auth.NotAuthenticated):
+        auth.whoami(transport=httpx.MockTransport(handler))
+
+
+def test_a_401_is_not_authenticated_not_a_bare_credentials_rejected(monkeypatch, tmp_path):
+    _authorised(monkeypatch, tmp_path)
+
+    def handler(request):
+        return httpx.Response(401, json={"error": "invalid_token"})
+
+    with pytest.raises(auth.NotAuthenticated, match="auth login"):
+        auth.whoami(transport=httpx.MockTransport(handler))
+
+
+def test_a_403_is_not_authenticated_too(monkeypatch, tmp_path):
+    _authorised(monkeypatch, tmp_path)
+
+    def handler(request):
+        return httpx.Response(403, json={"error": "forbidden"})
+
+    with pytest.raises(auth.NotAuthenticated):
+        auth.whoami(transport=httpx.MockTransport(handler))
+
+
+def test_a_429_does_not_tell_the_operator_to_re_authenticate(monkeypatch, tmp_path):
+    # A rate-limit window must not read like a credential problem - worst
+    # case, `_cmd_login` calls whoami right after a login that worked, and a
+    # 429 here would report that successful login as a failure.
+    _authorised(monkeypatch, tmp_path)
+
+    def handler(request):
+        return httpx.Response(429, json={"error": "too many requests"})
+
+    from csa_zendesk import exceptions as exc
+
+    with pytest.raises(exc.ApiError, match="rate-limiting") as ei:
+        auth.whoami(transport=httpx.MockTransport(handler))
+    assert not isinstance(ei.value, auth.NotAuthenticated)
+
+
+def test_a_503_with_a_non_json_body_stays_inside_the_hierarchy(monkeypatch, tmp_path):
+    _authorised(monkeypatch, tmp_path)
+
+    def handler(request):
+        return httpx.Response(503, content=b"upstream error")
+
+    from csa_zendesk import exceptions as exc
+
+    with pytest.raises(exc.ApiError):
+        auth.whoami(transport=httpx.MockTransport(handler))
+
+
+def test_a_200_with_a_non_json_body_is_a_typed_error_not_a_bare_json_decode_error(monkeypatch, tmp_path):
+    _authorised(monkeypatch, tmp_path)
+
+    def handler(request):
+        return httpx.Response(200, content=b"not json")
+
+    from csa_zendesk import exceptions as exc
+
+    with pytest.raises(exc.ApiError):
+        auth.whoami(transport=httpx.MockTransport(handler))
+
+
+def test_a_transport_failure_is_translated_not_a_raw_httpx_exception(monkeypatch, tmp_path):
+    _authorised(monkeypatch, tmp_path)
+
+    def handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    from csa_zendesk import exceptions as exc
+
+    with pytest.raises(exc.ApiError, match="ConnectError"):
         auth.whoami(transport=httpx.MockTransport(handler))
