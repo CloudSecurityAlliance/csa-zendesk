@@ -62,18 +62,46 @@ def _post(subdomain: str, body: dict[str, str], transport: httpx.BaseTransport |
 
     On failure, the raised exception carries the HTTP status and nothing else -
     never any part of the response body. `body` (the request we just sent)
-    holds the authorization code and the PKCE verifier; Zendesk publishes no
-    stable schema for an OAuth error body, and an `error_description` is free
-    text a server can assemble from the request it just received - exactly the
-    shape a credential leaks back through. Four credentials pass through this
-    module (authorization code, verifier, access token, refresh token) and
-    none of them may ever reach an exception message.
+    holds the authorization code and the PKCE verifier, or the refresh token;
+    Zendesk publishes no stable schema for an OAuth error body, and an
+    `error_description` is free text a server can assemble from the request it
+    just received - exactly the shape a credential leaks back through. Four
+    credentials pass through this module (authorization code, verifier, access
+    token, refresh token) and none of them may ever reach an exception message.
+
+    That standard applies one level below the message too: `body` is `del`eted
+    from this frame before either raise below, and before the normal return -
+    an error tracker that captures frame locals (Sentry does by default) would
+    otherwise see this frame's `body` and upload a live refresh token or
+    authorization code to a third party on the very first failed call. Doing
+    this here, in the one function that ever builds this dict, is cheaper and
+    more reliable than trying to scrub every caller that happens to hold a
+    reference to the same object.
+
+    A transport failure (`httpx.HTTPError` - offline, DNS, a proxy, a read
+    timeout) is translated to `exc.ApiError` naming the OAuth token endpoint,
+    never left as a raw httpx exception: a network outage during `auth login`
+    or a refresh is not a bug, and letting it escape untyped is exactly the
+    hole `cli.py`'s docstring says must not exist. Naming the token endpoint
+    specifically also matters when this call happens deep inside `HttpClient`'s
+    request hook during a forced refresh (ADR-009) - without a type of its own,
+    `_send`'s own translation would catch the raw httpx error instead and blame
+    whatever ticket endpoint the caller was actually trying to reach.
     """
-    with httpx.Client(transport=transport, timeout=30.0) as client:
-        response = client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", data=body)
+    try:
+        with httpx.Client(transport=transport, timeout=30.0) as client:
+            response = client.post(f"https://{subdomain}.zendesk.com/oauth/tokens", data=body)
+    except httpx.HTTPError as e:
+        kind = type(e).__name__
+        del body
+        raise exc.ApiError(f"could not reach the Zendesk OAuth token endpoint ({kind})") from None
     if response.status_code >= 400:
-        raise AuthExchangeError(f"Zendesk refused the grant (HTTP {response.status_code}).")
-    return dict(response.json())
+        status = response.status_code
+        del body, response
+        raise AuthExchangeError(f"Zendesk refused the grant (HTTP {status}).")
+    payload = dict(response.json())
+    del body, response
+    return payload
 
 
 def _to_tokens(payload: dict[str, object], baseline: Sequence[str]) -> Tokens:
@@ -106,12 +134,22 @@ def _to_tokens(payload: dict[str, object], baseline: Sequence[str]) -> Tokens:
             f"{missing}. Either way this token will 403 on every call that needs "
             f"{missing}, far from this cause, unless it's reconciled now."
         )
-    return Tokens(
-        access_token=str(payload["access_token"]),
-        refresh_token=str(payload["refresh_token"]),
-        expires_at=time.time() + float(str(payload["expires_in"])),
-        scope=granted_str,
-    )
+    try:
+        return Tokens(
+            access_token=str(payload["access_token"]),
+            refresh_token=str(payload["refresh_token"]),
+            expires_at=time.time() + float(str(payload["expires_in"])),
+            scope=granted_str,
+        )
+    except (KeyError, ValueError, TypeError) as e:
+        # HTTP 200 with a field missing or malformed is still a bug on
+        # Zendesk's side of this exchange, not ours - and it must stay inside
+        # the ZendeskError hierarchy, per cli.py's "every failure is typed"
+        # invariant, rather than escape as a bare KeyError/ValueError.
+        raise AuthExchangeError(
+            f"Zendesk answered HTTP 200 with a token response missing or malformed "
+            f"({type(e).__name__}): expected access_token, refresh_token and expires_in."
+        ) from e
 
 
 def exchange_code(
@@ -162,7 +200,6 @@ def refresh(
     subdomain: str,
     client_id: str,
     tokens: Tokens,
-    requested_scopes: Sequence[str],
     transport: httpx.BaseTransport | None = None,
 ) -> Tokens:
     """Exchange a refresh token for a new access token, and persist the result.
@@ -173,11 +210,27 @@ def refresh(
     one is required, adding it back is an architecture decision, not a patch
     here.
 
-    `requested_scopes` is sent as `scope` only when non-empty. Omitting it
-    entirely (rather than sending an empty string) asks Zendesk to keep
-    whatever scopes were already granted, per normal OAuth refresh semantics -
-    sending `scope=` outright could instead be read as a request for zero
-    scopes.
+    **Sends no `scope` at all, ever.** RFC 6749 §6 is explicit that a refresh
+    request MUST NOT ask for scope beyond what the original grant carried, and
+    the only scope this module can vouch for as "what the original grant
+    carried" is `tokens.scope` - the string Zendesk itself returned at
+    issuance, produced by whatever the operator actually consented to in the
+    browser. Earlier revisions took a `requested_scopes` parameter here, fed
+    from `access_token()` reading `CSA_ZENDESK_SCOPES` - a mutable environment
+    variable with no relationship to that consent step. That was wrong in both
+    directions at once: widen the env var after login and a refresh would ask
+    for (and, since the check below only looks for *missing* scopes, accept
+    and persist) more than the browser ever granted; narrow it - for a reason
+    that has nothing to do with this credential - and Zendesk would grant
+    exactly that narrower request, which the check would then compare against
+    the wider `tokens.scope` baseline and refuse as a "registered ceiling
+    narrowed" that never actually happened. Omitting `scope` entirely (never
+    sending `scope=`, which could itself be read as a request for zero scopes)
+    asks Zendesk to keep whatever this credential already carries, per normal
+    OAuth refresh semantics - the one request shape that cannot widen or
+    narrow anything on its own. `CSA_ZENDESK_SCOPES` is `login()`'s knob, for
+    the one browser consent screen a human actually sees; it has no business
+    on a refresh request a human never sees at all.
 
     A refresh response may omit `refresh_token` (Zendesk is not required to
     rotate it every time); `_to_tokens` requires the key to be present, so a
@@ -186,21 +239,17 @@ def refresh(
     would force a full re-login for no reason.
 
     `_to_tokens`'s scope check runs against `tokens.scope` - what this
-    credential already carried - not against `requested_scopes`. Those are
-    different claims: `requested_scopes` is empty by default (see above), and
-    an empty baseline can never fail a subset check against anything, which
-    would make the check permanently vacuous on the default path - exactly the
-    defect this field exists to close. A registered-scope ceiling narrowed
-    since issuance must still be caught on refresh even when nothing in
-    particular was requested this time.
+    credential already carried - which is what makes it a check at all: with
+    nothing ever requested on a refresh, comparing against an empty baseline
+    could never fail a subset check against anything. A registered-scope
+    ceiling narrowed since issuance must still be caught on refresh even
+    though this request never asks for anything in particular.
     """
     body: dict[str, str] = {
         "grant_type": "refresh_token",
         "refresh_token": tokens.refresh_token,
         "client_id": client_id,
     }
-    if requested_scopes:
-        body["scope"] = " ".join(requested_scopes)
     payload = _post(subdomain, body, transport)
     payload.setdefault("refresh_token", tokens.refresh_token)
     fresh = _to_tokens(payload, tokens.scope.split())
@@ -233,13 +282,13 @@ def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
         raise NotAuthorised("no token file. Run `csa-zendesk auth login` first.")
     if tokens.expires_at - time.time() > REFRESH_MARGIN_SECONDS:
         return tokens.access_token
-    scopes = tuple(sorted(set(os.environ.get("CSA_ZENDESK_SCOPES", "").split())))
+    # No CSA_ZENDESK_SCOPES here, deliberately: that variable is login()'s, for
+    # the one browser consent screen a human sees. See refresh()'s docstring.
     try:
         fresh = refresh(
             subdomain=subdomain,
             client_id=client_id,
             tokens=tokens,
-            requested_scopes=scopes,
             transport=transport,
         )
     except AuthExchangeError as e:

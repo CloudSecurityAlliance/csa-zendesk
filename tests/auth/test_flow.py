@@ -13,6 +13,7 @@ either. A naive `f"...{response.text}"` implementation would pass the first
 import httpx
 import pytest
 
+from csa_zendesk import exceptions as exc
 from csa_zendesk.auth import _flow
 
 
@@ -169,3 +170,42 @@ def test_the_failure_message_never_echoes_the_response_body():
         )
     assert "AT-WOULD-LEAK-HERE" not in str(ei.value)
     assert "400" in str(ei.value)
+
+
+def test_a_transport_failure_is_translated_not_a_raw_httpx_exception():
+    # A network outage (offline, DNS, a proxy, a read timeout) during `auth
+    # login` is not a bug, and letting it escape as a raw httpx exception is
+    # exactly the hole cli.py's docstring says must not exist.
+    def handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    with pytest.raises(exc.ApiError, match="ConnectError") as ei:
+        _flow.exchange_code(
+            subdomain="example",
+            client_id="cid",
+            code="SECRET-CODE",
+            verifier="SECRET-VERIFIER",
+            redirect_uri="http://127.0.0.1:1/cb",
+            requested_scopes=["tickets:read"],
+            transport=_transport(handler),
+        )
+    assert "SECRET-CODE" not in str(ei.value)
+    assert "SECRET-VERIFIER" not in str(ei.value)
+
+
+def test_a_200_response_missing_a_required_field_is_a_typed_error_not_a_bare_keyerror():
+    # HTTP 200 with `expires_in` (or any other required field) missing or
+    # malformed must still stay inside the ZendeskError hierarchy.
+    def handler(request):
+        return httpx.Response(200, json={"access_token": "AT", "refresh_token": "RT", "scope": "tickets:read"})
+
+    with pytest.raises(_flow.AuthExchangeError, match="malformed"):
+        _flow.exchange_code(
+            subdomain="example",
+            client_id="cid",
+            code="C",
+            verifier="V",
+            redirect_uri="http://127.0.0.1:1/cb",
+            requested_scopes=["tickets:read"],
+            transport=_transport(handler),
+        )

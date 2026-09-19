@@ -14,14 +14,27 @@ because the brief predates them:
     is usually a refresh token that outlived its 30-day default lifetime;
   - a refresh that comes back with FEWER scopes than the credential already
     carried must be refused and never persisted (post-review fix - see the
-    module docstring in `_flow.py` and `Tokens.scope` for why `requested_scopes`
-    alone, which is empty by default, can never be a usable baseline for this
-    check).
+    module docstring in `_flow.py` and `Tokens.scope` for why the baseline
+    must be what this credential already carried, never what is being
+    requested this time);
+  - `CSA_ZENDESK_SCOPES` must never reach a refresh request at all (final
+    review fix): it is `login()`'s knob for the one browser consent screen a
+    human sees, and reading it here put an operator's mutable environment
+    variable on the wire on every refresh, in both directions at once - widen
+    it after login and a refresh would ask for, and (since the check only
+    looks for *missing* scopes) accept and persist, more than the browser
+    ever granted; narrow it for an unrelated reason and Zendesk would grant
+    exactly that narrower request, which the check would then misreport as
+    the registered scope ceiling narrowing since issuance - true accusation,
+    wrong cause. `refresh()` no longer takes a `requested_scopes` parameter at
+    all: it sends no `scope` on the wire, ever, letting Zendesk keep whatever
+    this credential already carries.
 """
 
 import httpx
 import pytest
 
+from csa_zendesk import exceptions as exc
 from csa_zendesk.auth import _flow, _store
 
 
@@ -115,20 +128,80 @@ def test_a_refresh_response_without_a_new_refresh_token_keeps_the_old_one(monkey
     assert _store.read().refresh_token == "OLD-RT"  # kept, never overwritten with ""
 
 
-def test_csa_zendesk_scopes_is_sent_and_checked_when_set(monkeypatch, tmp_path):
-    # The default (unset CSA_ZENDESK_SCOPES) sends no `scope` at all, exercised
-    # by the tests above. This exercises the other branch: an operator who set
-    # it gets that scope requested on the wire and validated against what came
-    # back, same as `exchange_code`.
+def test_refresh_never_sends_a_scope_parameter(monkeypatch, tmp_path):
+    # The default (unset CSA_ZENDESK_SCOPES) sends no `scope` at all - this
+    # confirms that is not incidental to the env var being unset, but
+    # unconditional: refresh() takes no requested_scopes parameter any more.
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
     monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
     monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
-    monkeypatch.setenv("CSA_ZENDESK_SCOPES", "tickets:read")
+    monkeypatch.delenv("CSA_ZENDESK_SCOPES", raising=False)
     _store.write(_store.Tokens("OLD-AT", "OLD-RT", 1_060.0, "tickets:read"))
     monkeypatch.setattr(_flow.time, "time", lambda: 1_000.0)
     calls: list[dict] = []
     assert _flow.access_token(transport=_ok(calls)) == "NEW-AT"
-    assert calls[0]["scope"] == "tickets:read"
+    assert "scope" not in calls[0]
+
+
+def test_a_widened_csa_zendesk_scopes_env_var_does_not_widen_a_refresh(monkeypatch, tmp_path):
+    # Regression (final review, Task 5 was insufficient): access_token() used
+    # to read CSA_ZENDESK_SCOPES and pass it to refresh() as requested_scopes,
+    # which put it on the wire. An operator logs in with the default scope
+    # "read", then later widens the env var - e.g. to enable a new tool that
+    # needs "tickets:write" - with no new consent step. Because the scope
+    # check only looks for scopes MISSING from the grant, a superset granted
+    # on refresh would pass and be persisted: the credential gains write
+    # authority no browser consent ever produced. RFC 6749 §6 forbids a
+    # refresh from requesting scope beyond the original grant; not sending
+    # scope at all is what makes that impossible rather than merely unlikely.
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
+    monkeypatch.setenv("CSA_ZENDESK_SCOPES", "read tickets:write")  # wider than the stored grant
+    _store.write(_store.Tokens("OLD-AT", "OLD-RT", 1_060.0, "read"))
+    monkeypatch.setattr(_flow.time, "time", lambda: 1_000.0)
+
+    def handler(request):
+        params = dict(httpx.QueryParams(request.content.decode()))
+        assert "scope" not in params  # the wider env var must never reach the wire
+        return httpx.Response(
+            200,
+            json={"access_token": "NEW-AT", "refresh_token": "NEW-RT", "expires_in": 1800, "scope": "read"},
+        )
+
+    assert _flow.access_token(transport=httpx.MockTransport(handler)) == "NEW-AT"
+    assert _store.read().scope == "read"  # never widened to include tickets:write
+
+
+def test_a_narrowed_csa_zendesk_scopes_env_var_does_not_cause_a_false_scope_error(monkeypatch, tmp_path):
+    # Regression, the opposite direction: an operator sets CSA_ZENDESK_SCOPES
+    # to something narrower than the stored grant, for a reason that has
+    # nothing to do with this credential (e.g. preparing a future login). The
+    # old code would send that narrower value as the refresh's requested
+    # scope; if Zendesk granted exactly what was requested, the check would
+    # compare it against the wider stored baseline and raise ScopeError,
+    # blaming "the client's registered scope ceiling narrowed" - which would
+    # be false, since the operator's own env var caused it, not Zendesk. With
+    # no scope ever sent, this env var cannot affect what refresh asks for.
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "t.json"))
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "example")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "cid")
+    monkeypatch.setenv("CSA_ZENDESK_SCOPES", "tickets:read")  # narrower, and irrelevant to this grant
+    _store.write(_store.Tokens("OLD-AT", "OLD-RT", 1_060.0, "read"))
+    monkeypatch.setattr(_flow.time, "time", lambda: 1_000.0)
+
+    def handler(request):
+        params = dict(httpx.QueryParams(request.content.decode()))
+        assert "scope" not in params
+        # Zendesk echoes back the full existing grant, since nothing narrower
+        # was ever requested on the wire.
+        return httpx.Response(
+            200,
+            json={"access_token": "NEW-AT", "refresh_token": "NEW-RT", "expires_in": 1800, "scope": "read"},
+        )
+
+    assert _flow.access_token(transport=httpx.MockTransport(handler)) == "NEW-AT"
+    assert _store.read().scope == "read"
 
 
 def test_a_refused_refresh_names_both_causes_not_a_bare_401(monkeypatch, tmp_path):
@@ -206,3 +279,18 @@ def test_a_refresh_granting_a_superset_in_a_different_order_does_not_raise(monke
 
     assert _flow.access_token(transport=httpx.MockTransport(handler)) == "NEW-AT"
     assert _store.read().scope == "read hc:read tickets:write"
+
+
+def test_a_transport_failure_during_refresh_is_translated_not_a_raw_httpx_exception():
+    # A network failure inside refresh() must stay typed (exc.ApiError, naming
+    # the token endpoint), not surface as a raw httpx exception, and not be
+    # miscategorised as NotAuthorised ("run auth login again") - a transient
+    # outage is not the same problem as a dead refresh token.
+    tokens = _store.Tokens("OLD-AT", "OLD-RT", 1_060.0, "read")
+
+    def handler(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    with pytest.raises(exc.ApiError, match="ConnectError") as ei:
+        _flow.refresh(subdomain="example", client_id="cid", tokens=tokens, transport=httpx.MockTransport(handler))
+    assert "OLD-RT" not in str(ei.value)
