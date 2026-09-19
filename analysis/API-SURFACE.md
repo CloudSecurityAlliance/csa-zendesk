@@ -277,6 +277,20 @@ retrievable. **A tool that reports `count` as if the caller could page to it is
 lying.** `search/export` is the cursor-paginated, uncapped alternative and is
 the right primitive for anything bulk.
 
+**Open question: does `per_page` carry its own ceiling, independent of the
+product?** Both probes above held `per_page` fixed at 10 and varied only
+`page`, so the recorded behaviour bounds the *product* `page * per_page` at
+1000 and says nothing about `per_page` on its own. Many sibling operations in
+`specs/zendesk-support-oas.yaml` carry *"Returns a maximum of 100 records per
+page"*; `ListSearchResults` does not carry that note, so we have neither a
+probe nor a documented number for search specifically. Spec-derived-and-absent
+is not the same as ruled out — do not assume 100 (or any other number) applies
+here without testing it. The probe that would settle this permanently: one
+request with `page=1` and `per_page` above 100 (e.g. 150), recording the HTTP
+status and body. Until that probe is run, a `per_page` far above 100 with
+`page=1` (product well under 1000) passes our own ceiling check and may still
+fail at the vendor with the opaque error this task exists to prevent.
+
 ### 5.3 Help Center supports cursor pagination the spec never declares
 
 The Help Center spec declares pagination on **0 of 96** GET operations. Live:

@@ -26,6 +26,11 @@ Envelope = dict[str, Any]
 #: 1010) returns HTTP 422 "Requested response size was greater than Search
 #: Response Limits". A named constant, not a bare 1000 in an expression, so the
 #: ceiling's provenance stays attached to it wherever it is checked.
+#:
+#: This bounds the PRODUCT page*per_page only - both probes above held per_page
+#: fixed at 10, so they say nothing about whether per_page carries its own
+#: ceiling independent of the product. See API-SURFACE.md §5.2's "Open question"
+#: for what is and is not measured, and the one probe that would settle it.
 SEARCH_RESULT_CEILING = 1000
 
 
