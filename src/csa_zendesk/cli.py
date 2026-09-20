@@ -23,12 +23,17 @@ just authorised, not a value someone captures; the credential itself never
 reaches either stream. See Task 9's fix report for the reasoning in full.
 
 On a successful login, `_cmd_login` also prints the ready-to-paste `claude mcp
-add` command that registers `csa-zendesk-mcp` (`_print_mcp_install_command`) -
-the README's stanza with every placeholder filled in from the environment
-`login` just used. That stays on **stderr** too: it is narration telling the
-operator what to do next, of a piece with "Logged in as ..." above it, not a
-value a script would parse - see the fix report this module's docstring
-already points to for that same distinction applied to `whoami`/`status`.
+add` command that registers the server under the name `csa-zendesk`
+(`_print_mcp_install_command`) - the README's stanza with every placeholder
+filled in from the environment `login` just used. The registration name is
+`csa-zendesk`, not `csa-zendesk-mcp`: it is what prefixes every tool a model
+sees (`mcp__csa-zendesk__get_ticket`), and it lives in a different namespace
+from the console script, which stays `csa-zendesk-mcp` because it must share
+`PATH` with this CLI's own `csa-zendesk`. That stays on **stderr** too: it is
+narration telling the operator what to do next, of a piece with "Logged in
+as ..." above it, not a value a script would parse - see the fix report this
+module's docstring already points to for that same distinction applied to
+`whoami`/`status`.
 
 Every failure - the five Task 7 distinguishes (not configured, browser never
 returned, state mismatch, scope refused, grant refused) and the two this
@@ -95,9 +100,19 @@ def _human_expiry(expires_at: float, *, now: float | None = None) -> str:
 
 def _print_mcp_install_command() -> None:
     """After a successful login, print the exact `claude mcp add` command that
-    registers `csa-zendesk-mcp` - the README's stanza with every placeholder
-    already filled in. The README can only show placeholders; this command
-    knows the real values, because `login` just used them.
+    registers the server as `csa-zendesk` - the README's stanza with every
+    placeholder already filled in. The README can only show placeholders;
+    this command knows the real values, because `login` just used them.
+
+    `csa-zendesk` is the *registration name* (the argument to `claude mcp
+    add`, and the key a `claude_desktop_config.json` stanza would use) - not
+    the executable. It is a separate namespace from the console script: it
+    only has to be unique among the user's other MCP servers (this fleet's
+    other servers are `csa-google-workspace`, `csa-skilljar`, `customer360`,
+    `firecrawl` - none carries an `-mcp` suffix), and it is what prefixes
+    every tool name the model sees (`mcp__csa-zendesk__get_ticket`, not the
+    doubled-up `mcp__csa-zendesk-mcp__get_ticket`). The executable this name
+    points at is still `csa-zendesk-mcp`, unchanged below.
 
     The entry point is derived, never guessed: `Path(sys.executable).parent /
     "csa-zendesk-mcp"` sits beside whatever interpreter is running THIS
@@ -132,9 +147,15 @@ def _print_mcp_install_command() -> None:
         "narrow it to a comma-separated list of ticket ids to scope this install "
         "instead.\n"
         "\n"
+        "-s user registers the server for every session, not just the current "
+        "project directory - without it (the default, 'local' scope), running this "
+        "from inside a git worktree binds the server to the worktree's parent "
+        "repository instead of the path you're actually in, so it silently would "
+        "not appear in this session.\n"
+        "\n"
         "Register the MCP server with Claude Code:\n"
         "\n"
-        "claude mcp add csa-zendesk-mcp \\\n"
+        "claude mcp add csa-zendesk -s user \\\n"
         f"  -e CSA_ZENDESK_SUBDOMAIN={subdomain} \\\n"
         f"  -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER={client_id} \\\n"
         "  -e CSA_ZD_ALLOWLIST_READ='*' \\\n"

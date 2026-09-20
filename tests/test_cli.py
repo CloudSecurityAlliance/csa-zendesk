@@ -211,7 +211,10 @@ def test_login_prints_the_filled_in_mcp_install_command_on_success(monkeypatch, 
 
     assert rc == 0
     assert out == ""
-    assert "claude mcp add csa-zendesk-mcp" in err
+    assert "claude mcp add csa-zendesk -s user" in err
+    # the registration name is a different namespace from the executable -
+    # the doubled-up form must not reappear now that it's fixed.
+    assert "claude mcp add csa-zendesk-mcp" not in err
     assert "-e CSA_ZENDESK_SUBDOMAIN=acme" in err
     assert "-e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=csa-zendesk" in err
     assert "-e CSA_ZD_ALLOWLIST_READ='*'" in err
@@ -221,6 +224,8 @@ def test_login_prints_the_filled_in_mcp_install_command_on_success(monkeypatch, 
     # unset never means unrestricted - the reason for the allowlist line above
     # must be stated somewhere alongside the command, not just asserted here.
     assert "nothing is permitted" in err
+    # -s user is not self-explanatory - the command must say what it does.
+    assert "every session" in err
 
 
 def test_login_explains_why_the_allowlist_flag_is_required(monkeypatch, capsys, tmp_path):

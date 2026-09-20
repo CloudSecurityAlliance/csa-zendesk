@@ -240,10 +240,17 @@ set it explicitly: `*` for the normal triage posture (see the whole-of-queue not
 `_scope.py`'s module docstring), or a comma-separated list of ticket ids to scope this install
 narrowly from day one.
 
-Then register the server with Claude Code:
+Then register the server with Claude Code. The registration name is **`csa-zendesk`** — a
+different namespace from the executable, matching the rest of this fleet (`csa-google-workspace`,
+`csa-skilljar`, `customer360`, `firecrawl` — none carries an `-mcp` suffix) — and it is what
+prefixes every tool the model sees, so `get_ticket` shows up as `mcp__csa-zendesk__get_ticket`.
+`-s user` registers it for every session rather than binding it to one project directory —
+without it (the default, `local` scope), running this from inside a git worktree resolves to the
+worktree's *parent* repository, so the server registers against a path you didn't type and never
+shows up in the session you're working in:
 
 ```bash
-claude mcp add csa-zendesk-mcp \
+claude mcp add csa-zendesk -s user \
   -e CSA_ZENDESK_SUBDOMAIN=<subdomain> \
   -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id> \
   -e CSA_ZD_ALLOWLIST_READ='*' \
@@ -253,12 +260,13 @@ claude mcp add csa-zendesk-mcp \
 Use an **absolute path** to the installed `csa-zendesk-mcp` executable, not the bare command
 name — from a source checkout it lives in that checkout's own venv, and a bare name resolves
 through `PATH`, which may find a different install or none at all. The equivalent
-`claude_desktop_config.json` stanza:
+`claude_desktop_config.json` stanza (the JSON key is the registration name, `csa-zendesk`, not
+the executable):
 
 ```json
 {
   "mcpServers": {
-    "csa-zendesk-mcp": {
+    "csa-zendesk": {
       "command": "/abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp",
       "env": {
         "CSA_ZENDESK_SUBDOMAIN": "<subdomain>",
