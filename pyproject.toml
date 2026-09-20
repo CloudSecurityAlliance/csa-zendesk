@@ -14,7 +14,11 @@ dynamic = ["version"]
 authors = [{ name = "Cloud Security Alliance" }]
 keywords = ["zendesk", "mcp", "model-context-protocol", "support", "help-center"]
 classifiers = [
-  "Development Status :: 1 - Planning",
+  # 2, not 1: "Planning" stopped being true once Block 0 landed working code. Not
+  # higher than Pre-Alpha: the read tools have never fetched a real ticket from live
+  # Zendesk (TODO.md F1-F5) and the tool surface is a small fraction of the design's
+  # target - see the 0.1.0 CHANGELOG entry and README's status banner.
+  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -66,6 +70,15 @@ version = { attr = "csa_zendesk.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# PEP 561: an installed package's type annotations are invisible to a type
+# checker (mypy sees Any, not the real signatures) unless this marker ships
+# inside it. This library is mypy --strict throughout; without this, that
+# discipline reaches nobody who installs it - the wheel would type-check
+# clean here and as untyped everywhere else. Verify it lands in the built
+# wheel rather than assuming: `python -m build --wheel` then `unzip -l`.
+[tool.setuptools.package-data]
+csa_zendesk = ["py.typed"]
 
 [tool.ruff]
 line-length = 120

@@ -152,7 +152,7 @@ from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from . import _untrusted, auth
+from . import __version__, _untrusted, auth
 from . import exceptions as exc
 from ._connect import connect
 from .client import ZendeskClient
@@ -714,7 +714,7 @@ def build_server() -> Server[None]:
     """
     return Server(
         "csa-zendesk",
-        version="0.0.1",
+        version=__version__,
         instructions=INSTRUCTIONS,
         on_list_tools=_on_list_tools,
         on_call_tool=_on_call_tool,
