@@ -8,7 +8,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with: { python-version: "3.12" }
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,server]"
       - run: ruff check src tests scripts
       # Formatting is gated on the shipped package and its tests only. scripts/ is
       # excluded deliberately: check_public_safe.py is the publication gate, its
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with: { python-version: "${{ matrix.python-version }}" }
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,server]"
       # 100, not 90: a gate ten points below a measured 100% cannot fail. The
       # sanctioned hatch is `# pragma: no cover` on a specific line, documented there.
       - run: python -m pytest -q --cov=csa_zendesk --cov-report=term-missing --cov-fail-under=100
