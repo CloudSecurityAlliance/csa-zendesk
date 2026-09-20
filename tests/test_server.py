@@ -639,8 +639,14 @@ def test_no_registered_tool_maps_to_a_write_operation():
 
 
 def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
-    # The block's security property, asserted over every registered data tool
-    # rather than the three we happened to think of.
+    # The block's security property, asserted over every registered data
+    # tool rather than the three we happened to think of - and actually
+    # enforced as such: the assertion just below fails the build the moment
+    # `args` and `READ_TOOLS` diverge, rather than the loop silently skipping
+    # a data tool that has no matching `args` entry. Auth tools are excluded
+    # by name (`AUTH_TOOLS`), not by omission - the same discipline
+    # `test_no_registered_tool_maps_to_a_write_operation` uses - so the
+    # exclusion is stated rather than accidental.
     from csa_zendesk import _untrusted
 
     class _Client:
@@ -655,6 +661,9 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
 
     monkeypatch.setattr(srv, "_client", lambda: _Client())
     args = {"get_ticket": {"ticket_id": 1}, "search_tickets": {"query": "x"}, "list_comments": {"ticket_id": 1}}
+    assert {t.name for t in srv.READ_TOOLS} == set(args), "a read tool was added without a matching `args` entry"
+    auth_names = {t.name for t in srv.AUTH_TOOLS}
     for t in srv.TOOLS:
-        if t.name in args:
-            assert _untrusted.MARKER_OPEN in srv.call_tool_sync(t.name, args[t.name]), t.name
+        if t.name in auth_names:
+            continue
+        assert _untrusted.MARKER_OPEN in srv.call_tool_sync(t.name, args[t.name]), t.name

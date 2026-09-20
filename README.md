@@ -81,6 +81,10 @@ ZendeskClient        thin typed library surface (the public product)
 mcp/_tools/*.py      per-family register_*(app, get_client) producers
 ```
 
+`mcp/_tools/*.py` is the target layout for the full 54-tool surface, not what exists today:
+Block 0e's `csa-zendesk-mcp` (`src/csa_zendesk/server.py`) registers its six tools flat, with no
+`mcp/` package and no per-family producer modules yet.
+
 Enforcement lives in the wrapper around the seam, not in the tools, so a library embedder gets
 the same guarantee an MCP client does.
 
