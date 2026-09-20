@@ -519,6 +519,25 @@ def test_get_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(mon
     assert pb.get_ticket(ticket_id=44821) == {"ticket": {"id": 44821}}
 
 
+def test_list_comments_through_the_real_dispatch_is_refused_outside_the_read_allowlist(monkeypatch):
+    # Important 4 (final whole-branch review): `list_comments` previously had
+    # no `tools.TOOLS` entry at all, so this call sailed through regardless of
+    # `CSA_ZD_ALLOWLIST_READ` - the sibling of
+    # `test_get_ticket_through_the_real_dispatch_is_refused_outside_the_read_
+    # allowlist` above, now that `list_comments` carries the same
+    # `subject_var`.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.list_comments(ticket_id=99999)
+
+
+def test_list_comments_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.list_comments(ticket_id=44821) == {"comments": []}
+
+
 def test_dispatch_fails_closed_when_the_read_allowlist_is_entirely_unset(monkeypatch):
     # Fix round 1, finding 1: tests/conftest.py's autouse fixture defaults both
     # allowlists to "*" for every OTHER test in this suite, so the fail-closed-

@@ -125,6 +125,17 @@ def _create_ticket_check(kwargs: dict[str, Any]) -> None:
 TOOLS: dict[str, ToolSpec] = {
     "get_ticket": ToolSpec("ticket.read", subject_var="CSA_ZD_ALLOWLIST_READ"),
     "search_tickets": ToolSpec("ticket.read"),
+    # Important 4 (final whole-branch review): `list_comments` had a
+    # `policy._GATES` entry (so `PolicyBackend` gates it on `ticket.read`) but
+    # NO entry here at all, so `assert_subject_permitted`'s `spec =
+    # tools.TOOLS.get(tool)` returned `None` and the read allowlist was
+    # decorative for this one tool - an operator setting
+    # `CSA_ZD_ALLOWLIST_READ=44821,44822` found `get_ticket(99999)` refused
+    # and `list_comments(99999)` returning the whole conversation anyway.
+    # Scoped by the same allowlist as `get_ticket`, since both act on a ticket
+    # named by `ticket_id`. See `test_every_gated_backend_method_has_a_tool_spec`
+    # in `tests/test_tools.py` for the cross-check that now catches a repeat.
+    "list_comments": ToolSpec("ticket.read", subject_var="CSA_ZD_ALLOWLIST_READ"),
     "create_ticket": ToolSpec("ticket.write", check=_create_ticket_check),
     "update_ticket": ToolSpec(
         "ticket.write",
