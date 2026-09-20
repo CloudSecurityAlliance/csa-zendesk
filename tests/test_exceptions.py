@@ -43,7 +43,12 @@ def test_errors_declare_only_approved_parameters():
     # *args - no named parameter, nothing to leak - and inspect.signature() cannot read a
     # C slot wrapper anyway. Those are skipped; the guard stays live exactly where it can
     # bite, because carrying a field REQUIRES declaring an __init__.
-    approved = {"self", "message", "problems", "retry_after", "status"}
+    # `remedy` added deliberately (fix wave I7, final whole-branch review):
+    # `CredentialsRejected.remedy` is this library's OWN guidance text, never
+    # interpolated from a Zendesk response body or any other external input -
+    # see that class's docstring. Reviewed and approved here, which is the
+    # point of this guard.
+    approved = {"self", "message", "problems", "retry_after", "status", "remedy"}
     checked = 0
     for name in exc.__all__:
         cls = getattr(exc, name)
@@ -54,7 +59,7 @@ def test_errors_declare_only_approved_parameters():
         for p in inspect.signature(own).parameters:
             assert p in approved, f"{name}.{p} is not an approved error parameter"
     # If this ever reaches zero the guard has gone vacuous while still passing.
-    assert checked == 4, f"expected 4 inspectable errors, found {checked}"
+    assert checked == 5, f"expected 5 inspectable errors, found {checked}"
 
 
 def test_rate_limited_carries_message_and_retry_after():

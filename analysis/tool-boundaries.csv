@@ -1,6 +1,7 @@
 tool,method,path,constraint,effect,reversibility,reach,capability
 get_ticket,GET,/api/v2/tickets/{ticket_id},none,read,n/a,internal,ticket.read
-search_tickets,GET,/api/v2/search,none,read,n/a,internal,ticket.read
+search_tickets,GET,/api/v2/search,type:ticket composed onto every query,read,n/a,internal,ticket.read
+list_comments,GET,/api/v2/tickets/{ticket_id}/comments,none,read,n/a,internal,ticket.read
 create_ticket,POST,/api/v2/tickets,no public comment; body must not contain status or custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids,write,reversible,internal,ticket.write
 update_ticket,PUT,/api/v2/tickets/{ticket_id},body must not contain comment or status; nor custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids,write,reversible,internal,ticket.write
 assign_ticket,PUT,/api/v2/tickets/{ticket_id},body may contain only assignee_id or group_id,write,reversible,internal,ticket.write

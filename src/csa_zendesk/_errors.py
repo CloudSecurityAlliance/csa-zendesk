@@ -110,13 +110,26 @@ def parse_error(status: int, body: object, *, headers: Mapping[str, str] | None 
 
     if status == 401:
         # ADR-015: authentication is OAuth only, and ADR-009 gives it a real
-        # re-auth flow (`csa-zendesk auth login`) - so naming it here is
-        # naming a remedy that actually exists, not advertising one that does
-        # not.
+        # re-auth flow - so naming a remedy here is naming one that actually
+        # exists, not advertising one that does not. `message` (above) is
+        # Zendesk's own text, straight out of the response body - kept OUT of
+        # `remedy` (fix wave I7) so `server.py`'s `_on_call_tool` can wrap just
+        # the vendor-derived half of this exception's text and leave the
+        # remedy sentence - entirely this library's own prose - unwrapped and
+        # readable as authoritative, instead of the whole thing (message and
+        # remedy alike) reaching the model inside the same untrusted-content
+        # markers it has been told to discount. Names the `authenticate` tool
+        # as the in-session remedy (INSTRUCTIONS tells the model to call it,
+        # not to run a CLI it cannot reach), with the CLI as the offline
+        # alternative.
         return exc.CredentialsRejected(
-            f"Zendesk rejected the credential ({message}). The access token is invalid, expired or "
-            f"revoked - run `csa-zendesk auth login`. Note this is not the same as a 403: a 403 means "
-            f"the token is good and the account lacks the permission."
+            f"Zendesk rejected the credential ({message}).",
+            remedy=(
+                "The access token is invalid, expired or revoked. Call the `authenticate` tool to "
+                "log in again (or, outside a session, run `csa-zendesk auth login`). Note this is "
+                "not the same as a 403: a 403 means the token is good and the account lacks the "
+                "permission."
+            ),
         )
     if status == 403:
         return exc.PlanBoundary(

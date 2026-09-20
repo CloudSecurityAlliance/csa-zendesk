@@ -11,19 +11,24 @@ Every count below comes from running `scripts/check_boundaries.py`, not from typ
 
 ```
 $ python3 scripts/check_boundaries.py
-OK - 11 tools over 6 operations
+OK - 12 tools over 7 operations
 ```
 
-**Eleven tools, six operations** — one `GET`, one `POST /tickets`, one `POST .../merge`, one `PUT
-/triggers/{id}`, and **one `PUT /tickets/{id}` backing six of the eleven tools**: `update_ticket`,
+**Twelve tools, seven operations** — one `GET /tickets/{id}`, one `GET /search`, one
+`GET /tickets/{id}/comments`, one `POST /tickets`, one `POST .../merge`, one `PUT
+/triggers/{id}`, and **one `PUT /tickets/{id}` backing six of the twelve tools**: `update_ticket`,
 `assign_ticket`, `add_internal_note`, `reply_publicly`, `solve_ticket`, `close_ticket`.
+`list_comments` (Important 4, final whole-branch review's fix wave) is the one addition since
+this table's original slice: it had a `policy._GATES` entry from the start, but no row here and
+no `tools.TOOLS` entry either, so the read allowlist that governs `get_ticket` never reached it.
 
 ## The table
 
 | tool | method | path | constraint | effect | reversibility | reach | capability |
 |---|---|---|---|---|---|---|---|
 | `get_ticket` | GET | `/api/v2/tickets/{ticket_id}` | none | read | n/a | internal | `ticket.read` |
-| `search_tickets` | GET | `/api/v2/search` | none | read | n/a | internal | `ticket.read` |
+| `search_tickets` | GET | `/api/v2/search` | `type:ticket` composed onto every query | read | n/a | internal | `ticket.read` |
+| `list_comments` | GET | `/api/v2/tickets/{ticket_id}/comments` | none | read | n/a | internal | `ticket.read` |
 | `create_ticket` | POST | `/api/v2/tickets` | no public comment; body must not contain status / custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids | write | reversible | internal | `ticket.write` |
 | `update_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | body must not contain comment or status; nor custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids | write | reversible | internal | `ticket.write` |
 | `assign_ticket` | PUT | `/api/v2/tickets/{ticket_id}` | body may contain only assignee_id or group_id | write | reversible | internal | `ticket.write` |

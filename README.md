@@ -10,15 +10,24 @@ project_source: github:CloudSecurityAlliance-Internal/CINO-Projects/projects/Clo
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
-> **Status: Block 0 complete — foundations only, one operation end to end.** `src/` now holds
-> the typed error hierarchy, the error parser, the pagination guard, the HTTP client, the
-> `Backend` seam with an offline `FakeBackend`, the fail-closed capability policy, and a thin
-> `ZendeskClient`. One operation — `get_ticket` — reaches through every layer, proven by
-> `tests/test_vertical.py`.
+> **Status: Block 0 (foundations), Block 0b (OAuth) and Block 0e (a read-only MCP server) are
+> complete.** `src/` holds the typed error hierarchy, the error parser, the pagination guard, the
+> HTTP client with OAuth end to end (`connect()`), the `Backend` seam with an offline
+> `FakeBackend`, the fail-closed capability policy, and a thin `ZendeskClient`. Three operations —
+> `get_ticket`, `search_tickets`, `list_comments` — reach through every layer.
 >
-> **There is no MCP server and no tools yet, and OAuth is not implemented** (Block 0b). Of the
-> 54 tools in the design, **one** backend method exists. Do not describe any tool below as
-> working: the table is the plan, not the state.
+> **What exists: `csa-zendesk-mcp`, a stdio MCP server at rung E1** — see
+> [Using the MCP server](#using-the-mcp-server) below. It connects with exactly one capability,
+> `TICKET_READ`, and registers those same three operations as read-only tools, plus three
+> auth-lifecycle tools (`authenticate`, `auth_status`, `logout`) that sit outside the capability
+> model by design (ADR-017) so a user never has to leave the session to sign in or out.
+>
+> **What does not exist: everything past rung E1.** No write tool is registered and no capability
+> beyond `TICKET_READ` is granted — the server cannot write even by mistake, this is a control the
+> tests assert, not an oversight to note. Of the 54 tools in the whole-project design, three data
+> tools are built; the rest of the write/reply/admin surface (rungs beyond E1, the B1–B5 track) is
+> still to come. Do not describe any tool beyond those six as working: the Scope table below is
+> the coverage target this project is building toward, not the built surface.
 
 ## Scope
 
@@ -71,6 +80,10 @@ ZendeskClient        thin typed library surface (the public product)
     ^ consumed by
 mcp/_tools/*.py      per-family register_*(app, get_client) producers
 ```
+
+`mcp/_tools/*.py` is the target layout for the full 54-tool surface, not what exists today:
+Block 0e's `csa-zendesk-mcp` (`src/csa_zendesk/server.py`) registers its six tools flat, with no
+`mcp/` package and no per-family producer modules yet.
 
 Enforcement lives in the wrapper around the seam, not in the tools, so a library embedder gets
 the same guarantee an MCP client does.
@@ -201,6 +214,107 @@ export CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id>
 csa-zendesk auth login               # once, per operator - opens a browser
 python3 scripts/inventory.py         # 882 operations
 python3 scripts/probe_families.py    # 43/49 families reachable (as last measured, under the API-token path)
+```
+
+## Using the MCP server
+
+**This rung is read-only.** `csa-zendesk-mcp` (the console script `src/csa_zendesk/server.py`
+registers) exposes exactly three data tools — `get_ticket`, `search_tickets`, `list_comments` —
+and connects with `TICKET_READ` and no other capability (`server.E1_CAPABILITIES`). It is
+incapable of a write even if one were registered by mistake: `policy.py`'s gate refuses any
+capability this set does not grant, independent of what the tool table lists. This is rung E1 of
+the design's enablement track — *triage the live queue; propose everything, change nothing.*
+
+**The `server` extra is not installed by default** — the library itself has no dependency on the
+MCP SDK, so a consumer who only wants the typed `ZendeskClient` never pulls it in:
+
+```bash
+pip install -e '.[server]'
+```
+
+**`CSA_ZD_ALLOWLIST_READ` is not optional.** Unset never means unrestricted (`_scope.py`) — it
+means nothing is permitted, so `get_ticket` and `list_comments` refuse every ticket with a
+`PolicyError` until this is set, even though `search_tickets` (which carries no `subject_var`)
+works fine in the meantime. That asymmetry makes the failure harder to diagnose, not easier, so
+set it explicitly: `*` for the normal triage posture (see the whole-of-queue note in
+`_scope.py`'s module docstring), or a comma-separated list of ticket ids to scope this install
+narrowly from day one.
+
+Then register the server with Claude Code. The registration name is **`csa-zendesk`** — a
+different namespace from the executable, matching the rest of this fleet (`csa-google-workspace`,
+`csa-skilljar`, `customer360`, `firecrawl` — none carries an `-mcp` suffix) — and it is what
+prefixes every tool the model sees, so `get_ticket` shows up as `mcp__csa-zendesk__get_ticket`.
+`-s user` registers it for every session rather than binding it to one project directory —
+without it (the default, `local` scope), running this from inside a git worktree resolves to the
+worktree's *parent* repository, so the server registers against a path you didn't type and never
+shows up in the session you're working in:
+
+```bash
+claude mcp add csa-zendesk -s user \
+  -e CSA_ZENDESK_SUBDOMAIN=<subdomain> \
+  -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id> \
+  -e CSA_ZD_ALLOWLIST_READ='*' \
+  -- /abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp
+```
+
+Use an **absolute path** to the installed `csa-zendesk-mcp` executable, not the bare command
+name — from a source checkout it lives in that checkout's own venv, and a bare name resolves
+through `PATH`, which may find a different install or none at all. The equivalent
+`claude_desktop_config.json` stanza (the JSON key is the registration name, `csa-zendesk`, not
+the executable):
+
+```json
+{
+  "mcpServers": {
+    "csa-zendesk": {
+      "command": "/abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp",
+      "env": {
+        "CSA_ZENDESK_SUBDOMAIN": "<subdomain>",
+        "CSA_ZENDESK_MCP_SERVER_IDENTIFIER": "<client-id>",
+        "CSA_ZD_ALLOWLIST_READ": "*"
+      }
+    }
+  }
+}
+```
+
+`CSA_ZENDESK_SCOPES` (see the [OAuth client](#oauth-client) table above) is read at `authenticate`
+time — `_cmd_authenticate`, defaulting to `read` — and is optional here for that reason: it only
+matters if this install needs a browser consent scope other than the default, which read-only
+triage does not.
+
+**There is no separate login step to run first.** `authenticate`, `auth_status` and `logout` are
+themselves tools, reachable from inside the session at every rung — including this read-only
+one — so a user who is logged out, or whose credential has lapsed, never has to leave Claude
+Code to fix it: the server's own instructions tell the model to call `authenticate` the moment
+another tool reports it is not authorized. `logout` sits alongside them rather than being left to
+the CLI, per [ADR-017](DECISIONS-ADR/ADR-017.md) — a surface that can acquire a credential must
+also expose a way to relinquish it, reachable at least as easily as the tool that acquires it.
+
+**Verify the install worked** before relying on it: ask the model to call `auth_status` (confirms
+a token is on disk, with its expiry and granted scope, no network call), then `get_ticket` on a
+ticket id you know exists. A `PolicyError` naming `CSA_ZD_ALLOWLIST_READ` at that second step means
+the allowlist above is still unset or too narrow — set it and retry the same call before assuming
+anything else is wrong.
+
+## Development
+
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install -e '.[dev,server]'
+```
+
+`server` is an optional extra (`[project.optional-dependencies]`), not a hard dependency — the
+library stays importable without the MCP SDK. Install it anyway in a dev environment: it backs
+`src/csa_zendesk/server.py` (the `csa-zendesk-mcp` console script), and
+`tests/test_public_api.py`'s import-time stdout guard imports every module in the package,
+`server.py` included, so the test suite fails to collect without it.
+
+```bash
+./.venv/bin/pytest --cov=csa_zendesk --cov-fail-under=100 -q
+./.venv/bin/ruff check src tests && ./.venv/bin/ruff format --check src tests
+./.venv/bin/mypy --strict src
+python3 scripts/check_public_safe.py
 ```
 
 ## License

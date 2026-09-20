@@ -27,15 +27,35 @@ classifiers = [
 dependencies = ["httpx>=0.27"]
 
 # A door into OAuth, not a product: `auth login` / `auth whoami` / `auth status`
-# only. See `src/csa_zendesk/cli.py`.
+# only. See `src/csa_zendesk/cli.py`. `csa-zendesk-mcp` is the separate stdio
+# MCP server entry point (`src/csa_zendesk/server.py`).
 [project.scripts]
 csa-zendesk = "csa_zendesk.cli:main"
+csa-zendesk-mcp = "csa_zendesk.server:main"
 
 [project.optional-dependencies]
 # mcp is NOT optional in the sibling project csa-skilljar - it was demoted to a
 # required dependency there because an optional extra meant users installed the
 # package and found no server. Revisit when the server module exists.
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "pyyaml>=6"]
+# server.py imports `mcp` at module scope, so the library stays importable
+# without it (`dependencies` above has no MCP SDK) while the server extra pulls
+# it in. tests/test_public_api.py's import-time stdout guard imports every
+# module in the package, including server.py - so the dev environment needs
+# this extra installed too, not just a deployed server.
+#
+# Floor is 2.2, not 1.0: verified live that mcp 1.x and 2.x are a real
+# incompatibility here, not conservative pinning. server.py's Server is built
+# via 2.x's callback constructor (Server(name, on_list_tools=..., on_call_tool=...)),
+# not 1.x's @server.list_tools()/@server.call_tool() decorators, and 2.x's
+# Tool/ToolAnnotations/CallToolResult are pydantic models whose real attributes
+# are snake_case (read_only_hint, destructive_hint, is_error) - 1.x's camelCase
+# (readOnlyHint, isError) only survives as a construction alias, so code written
+# against 2.x imports fine under 1.x and then fails on attribute access, with a
+# traceback that points at our code, not at the dependency solve. Ceiling below
+# 3 for the same reason a floor exists at all: this is a claim about what we
+# actually work with, not a wildcard.
+server = ["mcp>=2.2,<3"]
 
 [project.urls]
 Homepage = "https://github.com/CloudSecurityAlliance/csa-zendesk"

@@ -32,6 +32,34 @@ def test_the_default_profile_can_read_a_ticket():
     assert wrapped().get_ticket(ticket_id=1) == {"ticket": {"id": 1}}
 
 
+def test_the_default_profile_can_search_tickets():
+    assert wrapped().search_tickets(query="type:ticket") == {"results": [], "count": 0}
+
+
+def test_the_default_profile_can_list_comments():
+    assert wrapped().list_comments(ticket_id=1) == {"comments": []}
+
+
+def test_a_policy_without_ticket_read_refuses_list_comments_before_reaching_the_backend():
+    class ExplodingComments(FakeBackend):
+        def list_comments(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingComments(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.read"):
+        pb.list_comments(ticket_id=1)
+
+
+def test_a_policy_without_ticket_read_refuses_search_before_reaching_the_backend():
+    class ExplodingSearch(FakeBackend):
+        def search_tickets(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingSearch(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.read"):
+        pb.search_tickets(query="x")
+
+
 def test_a_profile_without_the_capability_is_refused_with_a_remedy():
     pb = pol.PolicyBackend(FakeBackend({1: {"id": 1}}), pol.Policy(frozenset()))
     with pytest.raises(exc.PolicyError) as ei:
@@ -489,6 +517,25 @@ def test_get_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(mon
     monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
     pb = wrapped(tickets={44821: {"id": 44821}})
     assert pb.get_ticket(ticket_id=44821) == {"ticket": {"id": 44821}}
+
+
+def test_list_comments_through_the_real_dispatch_is_refused_outside_the_read_allowlist(monkeypatch):
+    # Important 4 (final whole-branch review): `list_comments` previously had
+    # no `tools.TOOLS` entry at all, so this call sailed through regardless of
+    # `CSA_ZD_ALLOWLIST_READ` - the sibling of
+    # `test_get_ticket_through_the_real_dispatch_is_refused_outside_the_read_
+    # allowlist` above, now that `list_comments` carries the same
+    # `subject_var`.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.list_comments(ticket_id=99999)
+
+
+def test_list_comments_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_READ", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.list_comments(ticket_id=44821) == {"comments": []}
 
 
 def test_dispatch_fails_closed_when_the_read_allowlist_is_entirely_unset(monkeypatch):

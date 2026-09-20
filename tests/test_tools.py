@@ -14,6 +14,31 @@ def test_every_tool_in_the_table_exists_in_code():
     assert named == set(tools.TOOLS), named ^ set(tools.TOOLS)
 
 
+def test_every_gated_backend_method_has_a_tool_spec():
+    # Important 4 (final whole-branch review): `list_comments` had a
+    # `policy._GATES` entry (so `PolicyBackend` gates the call on
+    # `ticket.read`) but no `tools.TOOLS` entry at all, so
+    # `policy.assert_subject_permitted`'s `spec = tools.TOOLS.get(tool)`
+    # returned `None` and the read allowlist was silently decorative for that
+    # one tool - nothing cross-checked `policy._GATES` against `tools.TOOLS`
+    # to catch it. The direction that matters is `_GATES` -> `TOOLS`, not the
+    # reverse: `tools.TOOLS` legitimately carries write-tool entries
+    # (`create_ticket`, `update_ticket`, ...) with no `Backend` method or
+    # `_GATES` entry behind them yet, since this table also serves later
+    # blocks' surface - but every name `_GATES` actually gates must have a
+    # `ToolSpec`, or a scope control written for one tool is quietly
+    # unreachable for a sibling sharing its capability and its Backend
+    # method. No exemptions exist today; if one is ever needed, name it here
+    # explicitly rather than letting this assertion go silently stale.
+    from csa_zendesk import policy
+
+    ungoverned_by_tools = set(policy._GATES) - set(tools.TOOLS)
+    assert not ungoverned_by_tools, (
+        f"Backend method(s) gated by policy._GATES but with no tools.TOOLS entry - any "
+        f"subject_var scoping written for a sibling tool never reaches these: {ungoverned_by_tools}"
+    )
+
+
 def test_the_csv_and_tools_table_agree_on_which_tools_reach():
     # Fix wave item 1: `test_every_tool_in_the_table_exists_in_code` above
     # compares tool NAMES only - it would stay green if the table said

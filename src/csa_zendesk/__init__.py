@@ -12,7 +12,8 @@ name this package exports and not one `__all__` lists. This file has no
 annotations of its own that need it deferred.
 """
 
-from . import exceptions
+from . import auth, exceptions
+from ._connect import connect
 from ._http import HttpClient
 from .backend import ApiBackend, Backend, Envelope, FakeBackend
 from .client import ZendeskClient
@@ -32,5 +33,7 @@ __all__ = [
     "PolicyBackend",
     "ZendeskClient",
     "__version__",
+    "auth",
+    "connect",
     "exceptions",
 ]

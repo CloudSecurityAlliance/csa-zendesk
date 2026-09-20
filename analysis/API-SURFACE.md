@@ -277,6 +277,20 @@ retrievable. **A tool that reports `count` as if the caller could page to it is
 lying.** `search/export` is the cursor-paginated, uncapped alternative and is
 the right primitive for anything bulk.
 
+**Open question: does `per_page` carry its own ceiling, independent of the
+product?** Both probes above held `per_page` fixed at 10 and varied only
+`page`, so the recorded behaviour bounds the *product* `page * per_page` at
+1000 and says nothing about `per_page` on its own. Many sibling operations in
+`specs/zendesk-support-oas.yaml` carry *"Returns a maximum of 100 records per
+page"*; `ListSearchResults` does not carry that note, so we have neither a
+probe nor a documented number for search specifically. Spec-derived-and-absent
+is not the same as ruled out — do not assume 100 (or any other number) applies
+here without testing it. The probe that would settle this permanently: one
+request with `page=1` and `per_page` above 100 (e.g. 150), recording the HTTP
+status and body. Until that probe is run, a `per_page` far above 100 with
+`page=1` (product well under 1000) passes our own ceiling check and may still
+fail at the vendor with the opaque error this task exists to prevent.
+
 ### 5.3 Help Center supports cursor pagination the spec never declares
 
 The Help Center spec declares pagination on **0 of 96** GET operations. Live:
@@ -411,6 +425,38 @@ failure is irreversible, since the email has already gone.
 confirmed by writing a comment with the flag omitted: on the available test ticket that would
 have emailed four uninvolved people, and the design conclusion is the same whichever way the
 mechanism resolves.*
+
+### 5.4g `ListTicketComments` defaults to oldest-first, and silently drops the newest past 100
+
+`GET /api/v2/tickets/{ticket_id}/comments` (operationId `ListTicketComments`) caps at **100
+records per page**, and sorts **ascending by creation date by default** — under offset paging
+that is `sort_order` defaulting to `asc`; cursor paging's own `sort` parameter defaults the same
+way.
+
+A ticket with more than 100 comments therefore returns the **oldest** 100 and silently omits the
+rest — which are the *newest* ones. That is the dangerous direction, not the harmless one:
+
+- **Triage reads recency.** The point of listing a ticket's comments is to see what was most
+  recently said; the omitted comments are exactly the ones carrying the signal a reader needs.
+- **Nothing in the envelope's shape announces the gap.** `{"comments": [...]}` looks identical
+  whether it holds the whole conversation or the first 100 messages of a much longer one — there
+  is no count field a casual reader would think to check, unlike `search`'s `count` (§5.2), which
+  at least states the true total even while capping delivery.
+- **The failure compounds with age.** The longer a ticket runs, the more of its recent history is
+  invisible to a caller that does not paginate — the opposite of graceful degradation.
+
+**Invariant: a caller reading this endpoint's envelope must not assume it is complete.** Either
+page through it (cursor paging is Zendesk's own recommendation for it) or make the truncation
+visible to whatever reads the result — the fix belongs at the delivery layer that shapes this
+envelope for a consumer, not in the raw pass-through here (ADR-002).
+
+*Spec-derived, not probe-verified*: `specs/zendesk-support-oas.yaml`, operationId
+`ListTicketComments` (~line 16092) — "Returns a maximum of 100 records per page" (line 16108),
+"By default, comments are sorted by creation date in ascending order" (line 16112), and the
+offset-paging `sort_order` parameter table recording "Defaults to `asc`" (line 16124). This has
+not been measured against a live tenant with more than 100 comments on one ticket; unlike §5.4f,
+nothing here depends on a fact the docs could get wrong, only on the documented cap and sort
+order both holding as written.
 
 ### 5.5 Errors arrive in three incompatible envelopes
 

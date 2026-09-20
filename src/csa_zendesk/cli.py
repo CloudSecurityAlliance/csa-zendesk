@@ -22,6 +22,19 @@ does this, even on success, because its output is a person confirming who they
 just authorised, not a value someone captures; the credential itself never
 reaches either stream. See Task 9's fix report for the reasoning in full.
 
+On a successful login, `_cmd_login` also prints the ready-to-paste `claude mcp
+add` command that registers the server under the name `csa-zendesk`
+(`_print_mcp_install_command`) - the README's stanza with every placeholder
+filled in from the environment `login` just used. The registration name is
+`csa-zendesk`, not `csa-zendesk-mcp`: it is what prefixes every tool a model
+sees (`mcp__csa-zendesk__get_ticket`), and it lives in a different namespace
+from the console script, which stays `csa-zendesk-mcp` because it must share
+`PATH` with this CLI's own `csa-zendesk`. That stays on **stderr** too: it is
+narration telling the operator what to do next, of a piece with "Logged in
+as ..." above it, not a value a script would parse - see the fix report this
+module's docstring already points to for that same distinction applied to
+`whoami`/`status`.
+
 Every failure - the five Task 7 distinguishes (not configured, browser never
 returned, state mismatch, scope refused, grant refused) and the two this
 module adds (no token file, corrupt/wrongly-permissioned token file) - is a
@@ -38,6 +51,7 @@ import os
 import sys
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from . import auth
 from . import exceptions as exc
@@ -84,6 +98,72 @@ def _human_expiry(expires_at: float, *, now: float | None = None) -> str:
     return f"expires in {_human_duration(remaining)}"
 
 
+def _print_mcp_install_command() -> None:
+    """After a successful login, print the exact `claude mcp add` command that
+    registers the server as `csa-zendesk` - the README's stanza with every
+    placeholder already filled in. The README can only show placeholders;
+    this command knows the real values, because `login` just used them.
+
+    `csa-zendesk` is the *registration name* (the argument to `claude mcp
+    add`, and the key a `claude_desktop_config.json` stanza would use) - not
+    the executable. It is a separate namespace from the console script: it
+    only has to be unique among the user's other MCP servers (this fleet's
+    other servers are `csa-google-workspace`, `csa-skilljar`, `customer360`,
+    `firecrawl` - none carries an `-mcp` suffix), and it is what prefixes
+    every tool name the model sees (`mcp__csa-zendesk__get_ticket`, not the
+    doubled-up `mcp__csa-zendesk-mcp__get_ticket`). The executable this name
+    points at is still `csa-zendesk-mcp`, unchanged below.
+
+    The entry point is derived, never guessed: `Path(sys.executable).parent /
+    "csa-zendesk-mcp"` sits beside whatever interpreter is running THIS
+    process, which is correct for a venv, a `pipx` install and a system
+    install alike. It is also checked before being named - `csa-zendesk-mcp`
+    only exists when the `server` extra is installed (the library does not
+    depend on `mcp`), and a confidently-wrong path is worse than no path: the
+    failure would otherwise surface later as Claude Code failing to start a
+    server, not as a missing install step.
+
+    Both values that go in the command are non-secret - `CSA_ZENDESK_SUBDOMAIN`
+    is the tenant name already visible in the Zendesk URL, and
+    `CSA_ZENDESK_MCP_SERVER_IDENTIFIER` is a public OAuth client id. Neither
+    the access nor the refresh token is ever read here, let alone printed.
+    """
+    entry_point = Path(sys.executable).parent / "csa-zendesk-mcp"
+    if not entry_point.exists():
+        print(  # noqa: T201 - stderr, not stdout
+            "\nThe 'server' extra is not installed, so csa-zendesk-mcp is not sitting "
+            f"beside this interpreter ({entry_point}). Install it, then re-run "
+            "`csa-zendesk auth login` to get the ready-to-paste registration command:\n"
+            "    pip install -e '.[server]'",
+            file=sys.stderr,
+        )
+        return
+    subdomain = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
+    client_id = os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "")
+    print(  # noqa: T201 - stderr, not stdout
+        "\nCSA_ZD_ALLOWLIST_READ is not optional below - unset never means "
+        "unrestricted, it means nothing is permitted, so a server registered "
+        "without it would refuse every get_ticket. '*' allows the whole queue; "
+        "narrow it to a comma-separated list of ticket ids to scope this install "
+        "instead.\n"
+        "\n"
+        "-s user registers the server for every session, not just the current "
+        "project directory - without it (the default, 'local' scope), running this "
+        "from inside a git worktree binds the server to the worktree's parent "
+        "repository instead of the path you're actually in, so it silently would "
+        "not appear in this session.\n"
+        "\n"
+        "Register the MCP server with Claude Code:\n"
+        "\n"
+        "claude mcp add csa-zendesk -s user \\\n"
+        f"  -e CSA_ZENDESK_SUBDOMAIN={subdomain} \\\n"
+        f"  -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER={client_id} \\\n"
+        "  -e CSA_ZD_ALLOWLIST_READ='*' \\\n"
+        f"  -- {entry_point}",
+        file=sys.stderr,
+    )
+
+
 def _cmd_login(args: argparse.Namespace) -> int:
     """Run the flow, then confirm identity - "logged in" should mean Zendesk
     recognises the credential, not merely that a token was written to disk."""
@@ -99,6 +179,7 @@ def _cmd_login(args: argparse.Namespace) -> int:
         return 1
     name = identity.get("name") or identity.get("email") or "(unnamed account)"
     print(f"Logged in as {name}. Granted scope: {tokens.scope}", file=sys.stderr)  # noqa: T201 - stderr, not stdout
+    _print_mcp_install_command()
     return 0
 
 
