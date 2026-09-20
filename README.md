@@ -10,15 +10,24 @@ project_source: github:CloudSecurityAlliance-Internal/CINO-Projects/projects/Clo
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
-> **Status: Block 0 complete — foundations only, one operation end to end.** `src/` now holds
-> the typed error hierarchy, the error parser, the pagination guard, the HTTP client, the
-> `Backend` seam with an offline `FakeBackend`, the fail-closed capability policy, and a thin
-> `ZendeskClient`. One operation — `get_ticket` — reaches through every layer, proven by
-> `tests/test_vertical.py`.
+> **Status: Block 0 (foundations), Block 0b (OAuth) and Block 0e (a read-only MCP server) are
+> complete.** `src/` holds the typed error hierarchy, the error parser, the pagination guard, the
+> HTTP client with OAuth end to end (`connect()`), the `Backend` seam with an offline
+> `FakeBackend`, the fail-closed capability policy, and a thin `ZendeskClient`. Three operations —
+> `get_ticket`, `search_tickets`, `list_comments` — reach through every layer.
 >
-> **There is no MCP server and no tools yet, and OAuth is not implemented** (Block 0b). Of the
-> 54 tools in the design, **one** backend method exists. Do not describe any tool below as
-> working: the table is the plan, not the state.
+> **What exists: `csa-zendesk-mcp`, a stdio MCP server at rung E1** — see
+> [Using the MCP server](#using-the-mcp-server) below. It connects with exactly one capability,
+> `TICKET_READ`, and registers those same three operations as read-only tools, plus three
+> auth-lifecycle tools (`authenticate`, `auth_status`, `logout`) that sit outside the capability
+> model by design (ADR-017) so a user never has to leave the session to sign in or out.
+>
+> **What does not exist: everything past rung E1.** No write tool is registered and no capability
+> beyond `TICKET_READ` is granted — the server cannot write even by mistake, this is a control the
+> tests assert, not an oversight to note. Of the 54 tools in the whole-project design, three data
+> tools are built; the rest of the write/reply/admin surface (rungs beyond E1, the B1–B5 track) is
+> still to come. Do not describe any tool beyond those six as working: the Scope table below is
+> the coverage target this project is building toward, not the built surface.
 
 ## Scope
 
