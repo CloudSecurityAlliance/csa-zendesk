@@ -263,9 +263,13 @@ def test_wrap_search_wraps_a_ticket_result():
 
 
 def test_wrap_search_wraps_a_user_result_from_an_unconstrained_query():
-    # search_tickets passes `query` through verbatim with no `type:ticket`
-    # constraint, so a query like `type:user` returns user objects instead -
-    # each end-user-authorable field on them must be wrapped too.
+    # `backend.ApiBackend.search_tickets` now composes `type:ticket` onto every
+    # query (Important 5, final whole-branch review), so this tool itself
+    # should never see a user/organization result again - but `wrap_search` is
+    # defence in depth, not the constraint, and stays generic: a caller of the
+    # library that reaches `search_tickets` on an unconstrained backend, or a
+    # future change upstream of this function, must still have every
+    # end-user-authorable field wrapped rather than reaching a model raw.
     env = {
         "results": [
             {

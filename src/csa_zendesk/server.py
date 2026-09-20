@@ -219,7 +219,11 @@ _SEARCH_SCHEMA: dict[str, Any] = {
     "properties": {
         "query": {
             "type": "string",
-            "description": "A Zendesk search query, e.g. `type:ticket status:open`.",
+            "description": (
+                "A Zendesk search query, e.g. `status:open`. `type:ticket` is always appended by "
+                "this tool - no need to write it, and writing a different `type:` yourself only "
+                "narrows the result set to nothing rather than reaching another record type."
+            ),
         },
         "page": {
             "type": "integer",
@@ -247,7 +251,12 @@ READ_TOOLS: list[mcp_types.Tool] = [
     ),
     mcp_types.Tool(
         name="search_tickets",
-        description="Search Zendesk tickets (and, for an unconstrained query, other record types).",
+        description=(
+            "Search Zendesk tickets. The query is always constrained to type:ticket - even a "
+            "query that names a different type (e.g. type:user) matches nothing, rather than "
+            "returning that other record type - since this tool grants no authority over people "
+            "or organization records."
+        ),
         input_schema=_SEARCH_SCHEMA,
         annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False),
     ),

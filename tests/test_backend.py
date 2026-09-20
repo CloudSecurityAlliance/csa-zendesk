@@ -197,6 +197,42 @@ def test_fake_and_api_backend_are_mutually_consistent_on_envelope_shape():
 # --- search_tickets: offset paging only, refused past the 1000-result ceiling -
 
 
+def test_search_composes_type_ticket_onto_the_query():
+    # Important 5 (final whole-branch review): unconstrained, this endpoint
+    # answers type:user/type:organization too - PEOPLE_READ territory this
+    # tool's E1_CAPABILITIES never grants. The fix COMPOSES the constraint
+    # rather than inspecting the caller's query for an existing `type:` -
+    # this asserts what actually reaches the wire, not just that the fix
+    # "exists" as a docstring claim.
+    seen = {}
+
+    def handler(request):
+        seen["query"] = request.url.params["query"]
+        return httpx.Response(200, json={"results": [], "count": 0})
+
+    ApiBackend(_client(handler)).search_tickets(query="status:open")
+    assert "type:ticket" in seen["query"]
+    assert "status:open" in seen["query"]
+
+
+def test_search_composing_type_ticket_cannot_be_widened_by_a_callers_own_type():
+    # The property that matters, not just the mechanism: a caller who tries to
+    # widen the result set to users by supplying their own `type:` cannot -
+    # Zendesk's search grammar ANDs repeated occurrences of a single-valued
+    # field, so the composed query can only ever narrow, never broaden, what
+    # this tool returns. This does not send a live request against Zendesk
+    # (CLAUDE.md); it pins the request THIS client builds.
+    seen = {}
+
+    def handler(request):
+        seen["query"] = request.url.params["query"]
+        return httpx.Response(200, json={"results": [], "count": 0})
+
+    ApiBackend(_client(handler)).search_tickets(query="type:user")
+    assert seen["query"].count("type:") == 2
+    assert "type:ticket" in seen["query"]
+
+
 def test_search_sends_offset_paging_and_the_query():
     seen = {}
 

@@ -226,8 +226,17 @@ def wrap_comments(envelope: Envelope) -> Envelope:
 def wrap_search(envelope: Envelope) -> Envelope:
     """Wrap every requester-authored string anywhere in a `{"results": [...]}` envelope.
 
-    A search result is not always a ticket - an unconstrained query can return
-    a user or an organization instead - so this walks generically rather than
-    assuming ticket fields, the same way `wrap_ticket` and `wrap_comments` do.
+    `backend.ApiBackend.search_tickets` now composes `type:ticket` onto every
+    query (Important 5, final whole-branch review), so this tool's own results
+    should never carry a user or organization object again - but this function
+    stays generic rather than assuming ticket-only fields, the same way
+    `wrap_ticket` and `wrap_comments` do: it is a defence-in-depth layer, not
+    the constraint itself, and a caller of the library (or a future tool) that
+    reaches `search_tickets` on an unconstrained backend, or a Zendesk change
+    to what `type:ticket` matches, must not silently reach a model unwrapped.
+    `test_wrap_search_wraps_a_user_result_from_an_unconstrained_query` in
+    `tests/test_untrusted.py` keeps proving this generic behaviour holds, even
+    though the constraint above means the tool itself should never exercise it
+    in practice.
     """
     return _walk_dict(envelope, path="zendesk-search")

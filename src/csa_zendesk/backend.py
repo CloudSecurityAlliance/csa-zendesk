@@ -94,7 +94,24 @@ class ApiBackend:
         # endpoint answers cursor keys with HTTP 400, unlike search/export where
         # cursor paging works.
         _refuse_past_search_ceiling(page=page, per_page=per_page)
-        return self._http.get("/api/v2/search", params={"query": query, "page": page, "per_page": per_page})
+        # Important 5 (final whole-branch review): unconstrained, this endpoint
+        # answers `type:user`/`type:organization` too - the end-user directory,
+        # names/emails/notes included - while this tool backs `ticket.read`
+        # alone; `E1_CAPABILITIES` deliberately excludes `PEOPLE_READ`. ADR-016's
+        # own rule is that a tool is (operation x the constraint that fixes its
+        # impact), and a `search_tickets` that can return users is not
+        # bucket-pure. `constrained_query` COMPOSES `type:ticket` onto whatever
+        # the caller sent rather than inspecting it for an existing `type:` and
+        # rewriting - inspection is a string match a caller can out-guess (a
+        # different case, extra whitespace, ...), the same class of bypass
+        # `_untrusted.py` rejects string-matching for. Composition instead relies
+        # on Zendesk's own search grammar: repeating a single-valued field ANDs
+        # the occurrences together, and no ticket record can simultaneously be a
+        # `user`, so a caller who also writes `type:user` gets a query that can
+        # never match anything - narrowed to nothing, never widened to users. A
+        # caller cannot make this tool's bucket bigger by asking twice.
+        constrained_query = f"{query} type:ticket"
+        return self._http.get("/api/v2/search", params={"query": constrained_query, "page": page, "per_page": per_page})
 
     def list_comments(self, *, ticket_id: int) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Ticket Comments,GET,
