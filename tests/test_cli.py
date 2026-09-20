@@ -15,6 +15,8 @@ what `tests/auth/*` already covers for the functions this module calls.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from csa_zendesk import auth, cli
@@ -188,6 +190,84 @@ def test_login_failure_is_a_message_not_a_traceback(monkeypatch, capsys):
     assert rc == 1
     assert out == ""
     assert "CSA_ZENDESK_SUBDOMAIN is not set." in err
+
+
+# ---------------------------------------------------------------------------
+# auth login - the ready-to-paste `claude mcp add` command
+# ---------------------------------------------------------------------------
+
+
+def test_login_prints_the_filled_in_mcp_install_command_on_success(monkeypatch, capsys, tmp_path):
+    entry_point = tmp_path / "csa-zendesk-mcp"
+    entry_point.touch()
+    monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "acme")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "csa-zendesk")
+    monkeypatch.setattr(auth, "login", lambda **_: _tokens())
+    monkeypatch.setattr(auth, "whoami", lambda: {"name": "Agent"})
+
+    rc = cli.main(["auth", "login"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "claude mcp add csa-zendesk-mcp" in err
+    assert "-e CSA_ZENDESK_SUBDOMAIN=acme" in err
+    assert "-e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=csa-zendesk" in err
+    assert "-e CSA_ZD_ALLOWLIST_READ='*'" in err
+    assert f"-- {entry_point}" in err
+    assert str(entry_point) == str(tmp_path / "csa-zendesk-mcp")
+    assert Path(entry_point).is_absolute()
+    # unset never means unrestricted - the reason for the allowlist line above
+    # must be stated somewhere alongside the command, not just asserted here.
+    assert "nothing is permitted" in err
+
+
+def test_login_explains_why_the_allowlist_flag_is_required(monkeypatch, capsys, tmp_path):
+    (tmp_path / "csa-zendesk-mcp").touch()
+    monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "acme")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "csa-zendesk")
+    monkeypatch.setattr(auth, "login", lambda **_: _tokens())
+    monkeypatch.setattr(auth, "whoami", lambda: {"name": "Agent"})
+
+    cli.main(["auth", "login"])
+    _, err = capsys.readouterr()
+
+    assert "CSA_ZD_ALLOWLIST_READ" in err
+    assert "unset" in err.lower()
+
+
+def test_login_omits_the_install_command_when_the_server_extra_is_not_installed(monkeypatch, capsys, tmp_path):
+    # No csa-zendesk-mcp file created at all: the interpreter directory is
+    # real, but the console script the `server` extra installs is not there.
+    monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setattr(auth, "login", lambda **_: _tokens())
+    monkeypatch.setattr(auth, "whoami", lambda: {"name": "Agent"})
+
+    rc = cli.main(["auth", "login"])
+    out, err = capsys.readouterr()
+
+    assert rc == 0
+    assert out == ""
+    assert "claude mcp add" not in err
+    assert "pip install -e '.[server]'" in err
+    assert "csa-zendesk auth login" in err
+
+
+def test_login_install_command_never_contains_a_token(monkeypatch, capsys, tmp_path):
+    (tmp_path / "csa-zendesk-mcp").touch()
+    monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "acme")
+    monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "csa-zendesk")
+    monkeypatch.setattr(auth, "login", lambda **_: _tokens())
+    monkeypatch.setattr(auth, "whoami", lambda: {"name": "Agent"})
+
+    cli.main(["auth", "login"])
+    _, err = capsys.readouterr()
+
+    assert "AT-SECRET" not in err
+    assert "RT-SECRET" not in err
 
 
 # ---------------------------------------------------------------------------
