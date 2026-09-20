@@ -579,7 +579,17 @@ def test_authenticate_reports_scope_when_identity_has_no_name_or_email(monkeypat
     assert "Email:" not in out
 
 
-def test_authenticate_reports_when_the_post_login_identity_check_fails(monkeypatch):
+def test_authenticate_raises_when_the_post_login_identity_check_fails(monkeypatch):
+    # Important 6 (final whole-branch review): this used to be a plain
+    # returned string, which `call_tool_sync` handed back normally and
+    # `_on_call_tool` then reported with `is_error=False` - a token that
+    # authenticates nothing, read as success. Now it RAISES
+    # `auth.NotAuthenticated`, the same way `_cmd_logout` raises on a failed
+    # revoke, so `call_tool_sync` itself no longer returns on this path. See
+    # `test_on_call_tool_reports_a_failed_post_login_identity_check_as_an_
+    # error_result`, below, for the end-to-end check of the `is_error` flag
+    # this enables - this test covers the message text `_cmd_authenticate`
+    # itself produces.
     from csa_zendesk.auth import _store
 
     monkeypatch.setattr(
@@ -594,9 +604,45 @@ def test_authenticate_reports_when_the_post_login_identity_check_fails(monkeypat
         raise srv.auth.NotAuthenticated("Zendesk rejected the credential")
 
     monkeypatch.setattr(srv.auth, "whoami", fake_whoami)
-    out = srv.call_tool_sync("authenticate", {})
-    assert "identity check" in out.lower()
-    assert "AT-X" not in out and "RT-X" not in out
+    with pytest.raises(srv.auth.NotAuthenticated) as excinfo:
+        srv.call_tool_sync("authenticate", {})
+    message = str(excinfo.value)
+    assert "identity check" in message.lower()
+    assert "AT-X" not in message and "RT-X" not in message
+
+
+def test_on_call_tool_reports_a_failed_post_login_identity_check_as_an_error_result(monkeypatch):
+    # The end-to-end check the finding actually demands: tested THROUGH
+    # `_on_call_tool`, not `call_tool_sync` directly, because `is_error` is a
+    # property of the `CallToolResult` only `_on_call_tool` builds - a test
+    # that only inspects the message text (the one above) never observes
+    # whether the protocol-level flag agrees with it.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+    from csa_zendesk.auth import _store
+
+    monkeypatch.setattr(
+        srv.auth,
+        "login",
+        lambda *, scopes, open_browser, paste: _store.Tokens(
+            access_token="AT-X", refresh_token="RT-X", expires_at=9e9, scope="read"
+        ),
+    )
+
+    def fake_whoami():
+        raise srv.auth.NotAuthenticated("Zendesk rejected the credential")
+
+    monkeypatch.setattr(srv.auth, "whoami", fake_whoami)
+    params = mcp_types.CallToolRequestParams(name="authenticate", arguments={})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    assert "identity check" in text.lower()
+    assert "AT-X" not in text and "RT-X" not in text
+    # auth.NotAuthenticated's message is this library's own diagnostic, never
+    # Zendesk response-body text - it stays unwrapped, per _NEVER_WRAP.
+    assert _untrusted.MARKER_OPEN not in text
 
 
 def test_auth_tools_never_call_the_policy_gated_client(monkeypatch):

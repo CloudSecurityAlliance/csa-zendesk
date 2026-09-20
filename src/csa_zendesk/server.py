@@ -395,9 +395,25 @@ def _cmd_authenticate() -> str:
     try:
         identity = auth.whoami()
     except auth.NotAuthenticated as e:
-        return (
+        # Important 6 (final whole-branch review): this USED TO catch and
+        # *return* the failure text, so `_on_call_tool` built an
+        # `is_error=False` result for a session that is not actually
+        # authenticated - a token that answers 200 with an Anonymous user
+        # object is exactly the case `whoami` exists to detect, and returning
+        # instead of raising threw that detection away at the protocol level,
+        # one function away from the identical inversion `_cmd_logout` was
+        # already rewritten to avoid (see that function's docstring). A host
+        # keying state off `is_error` would record this session as
+        # authenticated when it is not. Re-raising (keeping the "a token was
+        # written" guidance, chained with `from e`) lets `_on_call_tool`'s
+        # `_NEVER_WRAP` handling set `is_error=True` the same way every other
+        # auth failure in this server does; `auth.NotAuthenticated` is
+        # already in that tuple, and its message is this library's own
+        # diagnostic - a status code or "answered with an Anonymous user
+        # object", never Zendesk response-body text - so it stays unwrapped.
+        raise auth.NotAuthenticated(
             f"A token was written (granted scope: {tokens.scope}), but the identity check just after login failed: {e}"
-        )
+        ) from e
     lines = [f"Authenticated. Granted scope: {tokens.scope}."]
     name = identity.get("name")
     if isinstance(name, str) and name:
