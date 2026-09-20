@@ -96,9 +96,12 @@ PR → protected main → tag → CI build → attested OIDC publish
   disagree.
 
 **One-time setup a human does, once, before the first PyPI release:**
-1. **Ship a `py.typed` marker** (PEP 561) and confirm the built wheel actually contains it
-   — this does not exist in `src/csa_zendesk/` today, and a typed library whose types don't
-   reach consumers is a broken promise.
+1. ~~Ship a `py.typed` marker (PEP 561) and confirm the built wheel actually contains it~~
+   — **done as of 0.1.0**: `src/csa_zendesk/py.typed` exists, `pyproject.toml`'s
+   `[tool.setuptools.package-data]` ships it, and `python -m build --wheel` was run and
+   the resulting wheel's contents inspected (`unzip -l`) to confirm `csa_zendesk/py.typed`
+   actually lands inside it — not assumed. Without this, a fully `mypy --strict` library
+   would type-check as `Any` for every consumer.
 2. **On PyPI:** register the project name, then add a **Trusted Publisher** naming this
    exact repo (`CloudSecurityAlliance/csa-zendesk`), the workflow filename (e.g.
    `release.yml`), and — critically — the **environment** (`pypi`). A blank environment

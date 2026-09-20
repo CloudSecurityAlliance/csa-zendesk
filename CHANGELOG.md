@@ -100,6 +100,20 @@ release: any write capability, and the rest of the tool surface the whole-projec
 calls for (~30–50 tools across the B1–B5 classification/generation track, of which three
 data tools exist today).
 
+### Fixed
+- **`csa-zendesk-mcp` reported its own version as a hardcoded `"0.0.1"`**, independent of
+  `csa_zendesk.__version__` — every connecting client would have been told the previous
+  version, machine-readably, at the exact moment this release was announcing the opposite.
+  `server.py`'s `build_server()` now imports `__version__` instead of restating it, so the
+  two cannot diverge again; `test_build_server_reports_the_package_version_not_a_restated_literal`
+  (`tests/test_server.py`) asserts they agree.
+
+### Added
+- **`src/csa_zendesk/py.typed`** (PEP 561), packaged via `pyproject.toml`'s
+  `[tool.setuptools.package-data]`. This library is `mypy --strict` throughout; without
+  this marker a type checker treats an installed copy as untyped regardless. Verified
+  inside a built wheel (`python -m build --wheel` + `unzip -l`), not assumed.
+
 ### Infrastructure
 - CI: lint (`ruff check`/`ruff format --check`), `mypy --strict`, a 3.10–3.13 test matrix,
   a 100%-statement coverage floor, and `scripts/check_public_safe.py` (structural-only in

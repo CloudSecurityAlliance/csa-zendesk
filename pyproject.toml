@@ -71,6 +71,15 @@ version = { attr = "csa_zendesk.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# PEP 561: an installed package's type annotations are invisible to a type
+# checker (mypy sees Any, not the real signatures) unless this marker ships
+# inside it. This library is mypy --strict throughout; without this, that
+# discipline reaches nobody who installs it - the wheel would type-check
+# clean here and as untyped everywhere else. Verify it lands in the built
+# wheel rather than assuming: `python -m build --wheel` then `unzip -l`.
+[tool.setuptools.package-data]
+csa_zendesk = ["py.typed"]
+
 [tool.ruff]
 line-length = 120
 [tool.ruff.lint]

@@ -802,6 +802,18 @@ def test_build_server_carries_the_instructions():
     assert server.instructions == srv.INSTRUCTIONS
 
 
+def test_build_server_reports_the_package_version_not_a_restated_literal():
+    # server.py imports __version__ rather than hardcoding a string precisely so
+    # the two cannot diverge - a stale literal here is worse than a stale doc,
+    # because it is what every connecting client is told, machine-readable, and
+    # believed. Importing csa_zendesk here (not csa_zendesk.server's own import)
+    # is what makes this test fail if the two ever come from different places.
+    import csa_zendesk
+
+    server = srv.build_server()
+    assert server.version == csa_zendesk.__version__
+
+
 # --- Task 7: rung E1 - the capability profile, and the refusal it backs ----
 
 
