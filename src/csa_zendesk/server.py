@@ -108,6 +108,18 @@ is trustworthy (it is genuinely who this credential belongs to), but the
 *string value* of a name field is still requester-set text, and the same rule
 that governs a ticket's `subject` applies to it.
 
+`tokens.scope` (reported by both `_cmd_authenticate` and `_cmd_auth_status`,
+unwrapped) is, strictly, also a string read out of a response body - the OAuth
+token endpoint's `scope` field, not something this library invented. It stays
+unwrapped deliberately and is not a gap in the claim above: unlike a name or a
+ticket subject, it is drawn from a small, closed vocabulary of scope keywords
+this project itself requested in `login()`'s consent screen (`read`,
+`tickets:write`, ...), never free text a requester can set - the same
+treatment `_untrusted._is_machine_set` already gives an enum field like
+`status` or `role`. Low risk either way (it is not requester-authorable), but
+worth stating precisely rather than leaving "requester-influenced" to imply
+more than the code actually does.
+
 **Synchronous dispatch, deliberately.** `call_tool_sync` takes a tool name and
 already-parsed arguments and returns a plain string - no `asyncio`, no MCP
 types. That is what lets `tests/test_server.py` exercise dispatch, the
@@ -591,28 +603,42 @@ async def _on_list_tools(
 #:     `problems`/granted-scope text taken directly from a Zendesk response
 #:     body, at every production raise site (`backend.py`'s two bare
 #:     `NotFound`s are `FakeBackend`-only, never reached through `ApiBackend`).
-#:   - Genuinely MIXED, and this is the finding this comment exists to close:
-#:     `exc.ApiError` and `exc.CredentialsRejected` are each raised BOTH with
-#:     this library's own connectivity/shape prose (a dozen sites across
-#:     `_http.py`, `whoami.py`, `_flow.py` - "could not reach Zendesk", "not a
-#:     JSON object", an empty token from the provider) AND, via `_errors.
-#:     parse_error()`, with `message` interpolated straight out of a Zendesk
-#:     error body. `auth.CallbackError` is similarly mixed: most of its
-#:     messages are fixed prose, but two (`_callback.py`'s "the callback
+#:   - Genuinely MIXED: `exc.ApiError` is raised BOTH with this library's own
+#:     connectivity/shape prose (a dozen sites across `_http.py`, `whoami.py`,
+#:     `_flow.py` - "could not reach Zendesk", "not a JSON object") AND, via
+#:     `_errors.parse_error()`, with `message` interpolated straight out of a
+#:     Zendesk error body. `auth.CallbackError` is similarly mixed: most of
+#:     its messages are fixed prose, but two (`_callback.py`'s "the callback
 #:     arrived on an unexpected path" and "Zendesk refused the authorization")
 #:     splice in text taken verbatim from whatever request hit the local OAuth
 #:     loopback socket - untrusted, though not necessarily Zendesk's, since
 #:     nothing but the `state` parameter (checked separately) stops an
 #:     unrelated local process from sending that request instead.
-#:     A class-level check cannot tell a mixed type's instances apart, so
+#:     A class-level check cannot tell either mixed type's instances apart, so
 #:     they default to the safe side - wrapped - per `_untrusted.py`'s own
 #:     doctrine ("when in doubt, wrap"): over-wrapping an occasional
-#:     all-ours `ApiError`/`CredentialsRejected`/`CallbackError` message costs
-#:     a reader some trust in genuinely-ours text; under-wrapping a
-#:     vendor-derived one is the vulnerability `_untrusted` exists to close.
-#:     Splitting each mixed type by provenance at the raise site (an explicit
-#:     marker, not a class) is the correct fix and is deliberately deferred -
-#:     see Task 6's fix report.
+#:     all-ours `ApiError`/`CallbackError` message costs a reader some trust
+#:     in genuinely-ours text; under-wrapping a vendor-derived one is the
+#:     vulnerability `_untrusted` exists to close. Splitting each by
+#:     provenance at the raise site (an explicit marker, not a class) is the
+#:     correct fix and is deliberately deferred for these two - see TODO.md
+#:     E22.
+#:   - `exc.CredentialsRejected` WAS in this mixed category (and TODO.md E22
+#:     described it as such) until fix wave I7: it is genuinely mixed across
+#:     its two raise sites - `_http.py`'s empty-access-token check is all
+#:     ours, `_errors.parse_error()`'s 401 branch splices in Zendesk's own
+#:     `message` - but unlike `ApiError`/`CallbackError` it carries the ONE
+#:     remedy sentence an operator most needs to read as authoritative (call
+#:     `authenticate` to fix it), so defaulting the whole thing to wrapped
+#:     would bury that sentence under the same discount-this-content framing
+#:     the vendor text needs. Rather than adding it here (which would
+#:     under-wrap the vendor-derived instances) or leaving it wrapped
+#:     wholesale (which would bury the remedy), `CredentialsRejected` now
+#:     carries its remedy as a separate, never-interpolated attribute
+#:     (`exceptions.CredentialsRejected.remedy`) and gets its own branch in
+#:     `_on_call_tool`, below, instead of falling through to the generic
+#:     `except exc.ZendeskError` handling every other mixed or vendor-derived
+#:     type uses.
 _NEVER_WRAP: tuple[type[exc.ZendeskError], ...] = (
     exc.PolicyError,
     exc.InvalidPath,
@@ -632,8 +658,8 @@ async def _on_call_tool(
     context: Any,
     params: mcp_types.CallToolRequestParams,
 ) -> mcp_types.CallToolResult:
-    # Provenance rule for the three branches below: THEIR TEXT IS WRAPPED,
-    # OURS IS NOT. A bad tool name (ValueError) is always this library's own
+    # Provenance rule for the branches below: THEIR TEXT IS WRAPPED, OURS IS
+    # NOT. A bad tool name (ValueError) is always this library's own
     # diagnostic text - wrapping it would invite the model to discount our own
     # error, the same reason the truncation warning above sits outside the
     # markers. `_NEVER_WRAP` (see its own comment, just above) is the
@@ -641,12 +667,17 @@ async def _on_call_tool(
     # library's own prose, by audit rather than by class hierarchy - a bad
     # tool name's `ValueError` is not itself in that tuple only because it
     # is not a `ZendeskError` at all, so it needs its own branch to reach the
-    # same "never wrap" outcome. Every other `ZendeskError` - vendor-derived
-    # or genuinely mixed (see `_NEVER_WRAP`'s comment for why a mixed type
-    # still lands here) - is wrapped: `_untrusted`'s own rule applies with no
-    # exemption, "wrap everything, then name the exceptions... when in doubt,
-    # wrap." All three branches return `is_error=True`; only whether the
-    # content is wrapped differs.
+    # same "never wrap" outcome. `exc.CredentialsRejected` gets its own branch,
+    # between `_NEVER_WRAP` and the generic case, because it is genuinely
+    # mixed per-INSTANCE rather than per-class (see `_NEVER_WRAP`'s comment):
+    # its `remedy` attribute, when set, is this library's own prose and stays
+    # unwrapped even though `str(e)` - Zendesk's own text - is wrapped right
+    # alongside it. Every other `ZendeskError` - vendor-derived or genuinely
+    # mixed at the class level - is wrapped whole: `_untrusted`'s own rule
+    # applies with no exemption, "wrap everything, then name the
+    # exceptions... when in doubt, wrap." Every branch returns
+    # `is_error=True`; only whether (and how much of) the content is wrapped
+    # differs.
     try:
         text = call_tool_sync(params.name, params.arguments or {})
     except ValueError as e:
@@ -657,6 +688,13 @@ async def _on_call_tool(
     except _NEVER_WRAP as e:
         return mcp_types.CallToolResult(
             content=[mcp_types.TextContent(type="text", text=str(e))],
+            is_error=True,
+        )
+    except exc.CredentialsRejected as e:
+        wrapped = _untrusted.wrap(str(e), source=f"zendesk-error.{params.name}")
+        content = wrapped if e.remedy is None else f"{wrapped}\n\n{e.remedy}"
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text=content)],
             is_error=True,
         )
     except exc.ZendeskError as e:

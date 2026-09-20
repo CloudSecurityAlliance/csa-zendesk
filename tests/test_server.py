@@ -729,6 +729,62 @@ def test_a_mixed_type_instance_that_is_entirely_our_own_prose_still_wraps(monkey
     assert _untrusted.MARKER_OPEN in result.content[0].text
 
 
+def test_credentials_rejected_wraps_the_vendor_text_but_not_the_remedy(monkeypatch):
+    # Important 7 (final whole-branch review): `_errors.parse_error`'s 401
+    # branch splices Zendesk's own error text into `message` but keeps this
+    # library's remedy sentence separate on `CredentialsRejected.remedy` -
+    # this is the one message an operator most needs to read as authoritative,
+    # so it must not reach the model inside the same untrusted-content markers
+    # that tell it to discount vendor text.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    class _Client:
+        def get_ticket(self, *, ticket_id: int) -> dict[str, object]:
+            raise srv.exc.CredentialsRejected(
+                "Zendesk rejected the credential (Couldn't authenticate you).",
+                remedy="Call the `authenticate` tool to log in again.",
+            )
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(name="get_ticket", arguments={"ticket_id": 1})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    # The vendor-derived half is wrapped...
+    assert _untrusted.MARKER_OPEN in text
+    assert "Couldn't authenticate you" in text
+    # ...but the remedy sentence is not - it must be readable as ours, not
+    # discountable as untrusted content.
+    assert "Call the `authenticate` tool to log in again." in text
+    remedy_start = text.index("Call the `authenticate` tool")
+    assert _untrusted.MARKER_OPEN not in text[remedy_start:]
+    assert _untrusted.MARKER_CLOSE not in text[remedy_start:]
+
+
+def test_credentials_rejected_with_no_remedy_wraps_the_whole_message(monkeypatch):
+    # The other raise site (`_http.py`'s empty-access-token check) composes no
+    # vendor text at all and sets no `remedy` - `CredentialsRejected.remedy`
+    # defaults to `None`, and the whole (all-ours) message is wrapped, the
+    # same accepted over-wrapping trade-off `exc.ApiError` gets.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    class _Client:
+        def get_ticket(self, *, ticket_id: int) -> dict[str, object]:
+            raise srv.exc.CredentialsRejected("the token provider returned an empty access token. Re-authorise.")
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(name="get_ticket", arguments={"ticket_id": 1})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    assert text.startswith(_untrusted.MARKER_OPEN)
+    assert text.endswith(_untrusted.MARKER_CLOSE)
+
+
 def test_authenticate_description_says_it_can_take_a_while():
     (t,) = [t for t in srv.AUTH_TOOLS if t.name == "authenticate"]
     assert "5 minutes" in t.description or "300" in t.description or "minutes" in t.description.lower()

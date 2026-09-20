@@ -34,7 +34,23 @@ class ZendeskError(Exception):
 
 
 class CredentialsRejected(ZendeskError):
-    """The credential is absent, wrong, or expired. Not a scope problem."""
+    """The credential is absent, wrong, or expired. Not a scope problem.
+
+    `remedy`, keyword-only and `None` by default, is this library's OWN
+    guidance text - never interpolated from a Zendesk response body - kept out
+    of `message` (and so out of `str(self)`) so a delivery layer that wraps
+    vendor-derived text as untrusted (`server.py`'s `_on_call_tool`, via
+    `_untrusted.wrap`) can leave it unwrapped instead of splicing trusted and
+    untrusted prose into one opaque wrapped blob (fix wave I7). Only one raise
+    site sets it: `_errors.parse_error`'s 401 branch, whose `message`
+    interpolates Zendesk's own error text and is genuinely mixed. The other
+    raise site (`_http.py`'s empty-access-token check) composes no vendor text
+    at all, so it has nothing to separate and leaves this `None`.
+    """
+
+    def __init__(self, message: str, *, remedy: str | None = None) -> None:
+        self.remedy = remedy
+        super().__init__(message)
 
 
 class PlanBoundary(ZendeskError):
