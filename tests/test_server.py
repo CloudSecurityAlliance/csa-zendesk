@@ -35,27 +35,113 @@ def test_every_read_tool_is_annotated_read_only_and_non_destructive():
         assert t.annotations.destructive_hint is False, t.name
 
 
-def test_every_tool_response_is_wrapped_as_untrusted(monkeypatch):
+def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(monkeypatch):
+    # Smaller item, final whole-branch review: replaces
+    # `test_every_tool_response_is_wrapped_as_untrusted` (deleted - it only
+    # asserted MARKER_OPEN appears SOMEWHERE in the output, and so does this
+    # test, but a regression that wrapped `subject` while leaving every
+    # `comment.body` or `via.source.from.address` raw would still pass THAT
+    # assertion). This re-walks the actual JSON the server hands back and
+    # checks EVERY string in it, recursively: each one either sits under a key
+    # `_untrusted._is_machine_set` recognises (an id, a timestamp, an enum
+    # machine code sets and reads) or carries a genuine `MARKER_OPEN` - there
+    # is no third case. This is the highest-value test missing from this
+    # branch before this fix wave.
+    import json
+
     from csa_zendesk import _untrusted
 
     class _Client:
         def get_ticket(self, *, ticket_id):
-            return {"ticket": {"id": ticket_id, "subject": "s"}}
+            return {
+                "ticket": {
+                    "id": ticket_id,
+                    "status": "open",
+                    "subject": "help",
+                    "via": {
+                        "channel": "email",
+                        "source": {"from": {"name": "Attacker Name", "address": "a@example.com"}},
+                    },
+                }
+            }
 
         def search_tickets(self, *, query, page=1, per_page=25):
-            return {"results": [{"id": 1, "subject": "s"}], "count": 1}
+            return {"results": [{"id": 1, "result_type": "ticket", "subject": "help"}], "count": 1}
 
         def list_comments(self, *, ticket_id):
-            return {"comments": [{"id": 1, "body": "b", "public": True}]}
+            return {
+                "comments": [
+                    {
+                        "id": 1,
+                        "public": True,
+                        "body": "hi",
+                        "html_body": "<b>hi</b>",
+                        "via": {"channel": "web"},
+                    }
+                ]
+            }
 
     monkeypatch.setattr(srv, "_client", lambda: _Client())
+
+    def _assert_wrapped_or_machine_set(node: object, *, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child = f"{path}.{key}"
+                if isinstance(value, str):
+                    if _untrusted._is_machine_set(key):
+                        continue
+                    assert _untrusted.MARKER_OPEN in value, f"{child} is unwrapped: {value!r}"
+                else:
+                    _assert_wrapped_or_machine_set(value, path=child)
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                _assert_wrapped_or_machine_set(item, path=f"{path}[{index}]")
+
     for name, args in [
         ("get_ticket", {"ticket_id": 1}),
         ("search_tickets", {"query": "x"}),
         ("list_comments", {"ticket_id": 1}),
     ]:
         out = srv.call_tool_sync(name, args)
-        assert _untrusted.MARKER_OPEN in out, name
+        _assert_wrapped_or_machine_set(json.loads(out), path=name)
+
+
+def test_get_ticket_refuses_every_ticket_when_the_read_allowlist_is_unset(monkeypatch):
+    # Critical 2 (final whole-branch review): following the README's own
+    # `claude mcp add`/`claude_desktop_config.json` stanzas *before this fix
+    # wave* set only CSA_ZENDESK_SUBDOMAIN and CSA_ZENDESK_MCP_SERVER_IDENTIFIER
+    # - never CSA_ZD_ALLOWLIST_READ - and "unset" never means "unrestricted"
+    # (_scope.py): it means nothing is permitted. An operator following that
+    # README exactly got a PolicyError on every get_ticket call, phrased as a
+    # deliberate policy decision, which is a worse failure to diagnose than an
+    # obvious misconfiguration - and NOTHING in the suite caught it, because
+    # tests/conftest.py's autouse fixture sets both allowlists to "*" for
+    # every other test here.
+    #
+    # This test opts OUT of that fixture (monkeypatch.delenv, which - like
+    # every other monkeypatch call in a test - takes precedence over the
+    # fixture's setenv for the life of this test only) and drives a REAL
+    # PolicyBackend/FakeBackend stack through server.call_tool_sync, rather
+    # than the bare-dict fake client every other test in this file
+    # substitutes: the point is to prove the refusal is reachable from an MCP
+    # tool call with a default install's environment, not merely from
+    # policy.assert_subject_permitted() called directly (test_policy.py
+    # already proves that in isolation).
+    from csa_zendesk import exceptions as exc
+    from csa_zendesk import policy
+    from csa_zendesk.backend import FakeBackend
+    from csa_zendesk.client import ZendeskClient
+
+    monkeypatch.delenv("CSA_ZD_ALLOWLIST_READ", raising=False)
+    monkeypatch.delenv("CSA_ZD_ALLOWLIST_WRITE", raising=False)
+
+    real_client = ZendeskClient(
+        policy.PolicyBackend(FakeBackend(tickets={44821: {"id": 44821}}), policy.Policy(srv.E1_CAPABILITIES))
+    )
+    monkeypatch.setattr(srv, "_client", lambda: real_client)
+
+    with pytest.raises(exc.PolicyError, match="CSA_ZD_ALLOWLIST_READ"):
+        srv.call_tool_sync("get_ticket", {"ticket_id": 44821})
 
 
 def test_an_unknown_tool_name_is_an_error_not_a_crash():

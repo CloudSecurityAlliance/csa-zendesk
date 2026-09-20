@@ -232,12 +232,21 @@ MCP SDK, so a consumer who only wants the typed `ZendeskClient` never pulls it i
 pip install -e '.[server]'
 ```
 
+**`CSA_ZD_ALLOWLIST_READ` is not optional.** Unset never means unrestricted (`_scope.py`) — it
+means nothing is permitted, so `get_ticket` and `list_comments` refuse every ticket with a
+`PolicyError` until this is set, even though `search_tickets` (which carries no `subject_var`)
+works fine in the meantime. That asymmetry makes the failure harder to diagnose, not easier, so
+set it explicitly: `*` for the normal triage posture (see the whole-of-queue note in
+`_scope.py`'s module docstring), or a comma-separated list of ticket ids to scope this install
+narrowly from day one.
+
 Then register the server with Claude Code:
 
 ```bash
 claude mcp add csa-zendesk-mcp \
   -e CSA_ZENDESK_SUBDOMAIN=<subdomain> \
   -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id> \
+  -e CSA_ZD_ALLOWLIST_READ='*' \
   -- /abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp
 ```
 
@@ -253,12 +262,18 @@ through `PATH`, which may find a different install or none at all. The equivalen
       "command": "/abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp",
       "env": {
         "CSA_ZENDESK_SUBDOMAIN": "<subdomain>",
-        "CSA_ZENDESK_MCP_SERVER_IDENTIFIER": "<client-id>"
+        "CSA_ZENDESK_MCP_SERVER_IDENTIFIER": "<client-id>",
+        "CSA_ZD_ALLOWLIST_READ": "*"
       }
     }
   }
 }
 ```
+
+`CSA_ZENDESK_SCOPES` (see the [OAuth client](#oauth-client) table above) is read at `authenticate`
+time — `_cmd_authenticate`, defaulting to `read` — and is optional here for that reason: it only
+matters if this install needs a browser consent scope other than the default, which read-only
+triage does not.
 
 **There is no separate login step to run first.** `authenticate`, `auth_status` and `logout` are
 themselves tools, reachable from inside the session at every rung — including this read-only
@@ -267,6 +282,12 @@ Code to fix it: the server's own instructions tell the model to call `authentica
 another tool reports it is not authorized. `logout` sits alongside them rather than being left to
 the CLI, per [ADR-017](DECISIONS-ADR/ADR-017.md) — a surface that can acquire a credential must
 also expose a way to relinquish it, reachable at least as easily as the tool that acquires it.
+
+**Verify the install worked** before relying on it: ask the model to call `auth_status` (confirms
+a token is on disk, with its expiry and granted scope, no network call), then `get_ticket` on a
+ticket id you know exists. A `PolicyError` naming `CSA_ZD_ALLOWLIST_READ` at that second step means
+the allowlist above is still unset or too narrow — set it and retry the same call before assuming
+anything else is wrong.
 
 ## Development
 
