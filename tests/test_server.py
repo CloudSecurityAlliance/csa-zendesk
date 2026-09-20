@@ -320,13 +320,20 @@ def test_logout_reports_no_token(monkeypatch):
 def test_a_genuine_revoke_failure_is_reported_as_failure_not_as_logged_out(monkeypatch):
     # The dangerous direction: a failed revoke must never be reported as success.
     #
+    # `call_tool_sync("logout", ...)` RAISES on a failed revoke - it does not
+    # catch and return a string - precisely so the caller (`_on_call_tool`)
+    # can set `is_error=True` at the MCP protocol level, not just say "failed"
+    # in prose. See `test_on_call_tool_reports_a_failed_logout_as_an_error_
+    # result_not_a_success`, below, for the end-to-end check of that flag;
+    # this test covers the message text `call_tool_sync` itself produces.
+    #
     # Raises through `srv.auth.RevokeError`, not a fresh `from csa_zendesk.auth
     # import _flow` (the brief's own snippet does the latter): test_public_api.py's
     # import-time guard deletes and reimports every csa_zendesk module, including
     # `auth` and `auth._flow`, to observe a cold start. When this file's tests run
     # after that guard in the full suite, a fresh import fetches the NEW module
-    # object's `RevokeError`, while `_cmd_logout`'s own `except (auth.RevokeError,
-    # ...)` still closes over whichever module object was current when `server`
+    # object's `RevokeError`, while `_cmd_logout`'s own `except auth.RevokeError`
+    # still closes over whichever module object was current when `server`
     # was first imported - two distinct classes named `RevokeError` that `except`
     # correctly treats as unrelated, so the raised exception goes uncaught and the
     # test fails for a reason that has nothing to do with the behaviour under
@@ -336,9 +343,11 @@ def test_a_genuine_revoke_failure_is_reported_as_failure_not_as_logged_out(monke
         raise srv.auth.RevokeError("revoke request failed")
 
     monkeypatch.setattr(srv.auth, "logout", _raise)
-    out = srv.call_tool_sync("logout", {})
-    assert "logged out" not in out.lower()
-    assert "fail" in out.lower() or "may still be" in out.lower()
+    with pytest.raises(srv.auth.RevokeError) as excinfo:
+        srv.call_tool_sync("logout", {})
+    message = str(excinfo.value).lower()
+    assert "logged out" not in message
+    assert "fail" in message or "may still be" in message
 
 
 def test_a_transport_failure_during_logout_is_also_reported_as_failure(monkeypatch):
@@ -348,9 +357,55 @@ def test_a_transport_failure_during_logout_is_also_reported_as_failure(monkeypat
         raise srv.exc.ApiError("could not reach the Zendesk OAuth revoke endpoint (ConnectError)")
 
     monkeypatch.setattr(srv.auth, "logout", _raise)
-    out = srv.call_tool_sync("logout", {})
-    assert "logged out" not in out.lower()
-    assert "fail" in out.lower() or "may still be" in out.lower()
+    with pytest.raises(srv.exc.ApiError) as excinfo:
+        srv.call_tool_sync("logout", {})
+    message = str(excinfo.value).lower()
+    assert "logged out" not in message
+    assert "fail" in message or "may still be" in message
+
+
+def test_on_call_tool_reports_a_failed_logout_as_an_error_result_not_a_success(monkeypatch):
+    # Finding 1 (Task 6 review): a failed logout must set `is_error=True`,
+    # not just say "failed" in text - a host that keys retry/UI behaviour off
+    # the protocol flag would otherwise treat a live, un-revoked credential as
+    # a successful logout. `RevokeError` never carries Zendesk response-body
+    # text (`_NEVER_WRAP`, at `_on_call_tool`), so it comes back unwrapped.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    def _raise() -> str:
+        raise srv.auth.RevokeError("revoke request failed")
+
+    monkeypatch.setattr(srv.auth, "logout", _raise)
+    params = mcp_types.CallToolRequestParams(name="logout", arguments={})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    assert "logged out" not in text.lower()
+    assert _untrusted.MARKER_OPEN not in text
+
+
+def test_on_call_tool_reports_a_logout_transport_failure_as_a_wrapped_error(monkeypatch):
+    # `exc.ApiError` is a MIXED type (Finding 2) - some instances carry
+    # Zendesk response-body text, some (like this one) are this library's own
+    # connectivity diagnostic. A class-level check cannot tell them apart, so
+    # it defaults to the safe side and is wrapped here, even though this
+    # particular instance is "ours" - over-wrapping an all-ours message is
+    # noise, not the vulnerability `_untrusted` exists to close.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    def _raise() -> str:
+        raise srv.exc.ApiError("could not reach the Zendesk OAuth revoke endpoint (ConnectError)")
+
+    monkeypatch.setattr(srv.auth, "logout", _raise)
+    params = mcp_types.CallToolRequestParams(name="logout", arguments={})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    assert _untrusted.MARKER_OPEN in text
 
 
 def test_auth_status_never_returns_a_token(monkeypatch):
@@ -468,6 +523,82 @@ def test_auth_tools_never_call_the_policy_gated_client(monkeypatch):
     monkeypatch.setattr(srv.auth, "logout", lambda: "no-token")
     assert "authenticate" in srv.call_tool_sync("auth_status", {}).lower()
     assert "nothing to log out of" in srv.call_tool_sync("logout", {}).lower()
+
+
+def test_a_missing_subdomain_during_authenticate_is_reported_unwrapped(monkeypatch):
+    # Finding 2 (Task 6 review): `auth.NotAuthorised` (a `ZendeskError`
+    # subclass) carries this library's own configuration prose, never text
+    # from a Zendesk response body - wrapping it as untrusted would tell the
+    # model to distrust its own setup instructions. `NotAuthorised` is in
+    # `_NEVER_WRAP` for exactly this reason.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    def _raise(**_kwargs: object) -> None:
+        raise srv.auth.NotAuthorised(
+            "CSA_ZENDESK_SUBDOMAIN is not set. Set it to the Zendesk subdomain this server talks to."
+        )
+
+    monkeypatch.setattr(srv.auth, "login", _raise)
+    params = mcp_types.CallToolRequestParams(name="authenticate", arguments={})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    assert _untrusted.MARKER_OPEN not in text
+    assert "CSA_ZENDESK_SUBDOMAIN" in text
+
+
+def test_never_wrap_covers_every_exception_type_the_module_docstring_enumerates():
+    # A change to `_NEVER_WRAP` should be a deliberate edit to the enumerated
+    # comment above it, not an accidental drop - this pins the exact set.
+    #
+    # Every member is read off `srv.auth`/`srv.exc` - the exact module objects
+    # `server.py` itself closes over - rather than a fresh `from csa_zendesk...
+    # import ...`, for the same module-identity reason documented on
+    # `test_a_genuine_revoke_failure_is_reported_as_failure_not_as_logged_out`
+    # above: a fresh import after test_public_api.py's reload guard has run
+    # would fetch a different (if equal-looking) class object, and this set
+    # comparison would fail for a reason unrelated to `_NEVER_WRAP` itself.
+    assert set(srv._NEVER_WRAP) == {
+        srv.exc.PolicyError,
+        srv.exc.InvalidPath,
+        srv.exc.SearchLimitExceeded,
+        srv.exc.RateLimited,
+        srv.exc.ServiceUnavailable,
+        srv.auth.NotAuthorised,
+        srv.auth.TokenAlreadyInvalid,
+        srv.auth.TokenFileError,
+        srv.auth.AuthExchangeError,
+        srv.auth.NotAuthenticated,
+        srv.auth.RevokeError,
+    }
+
+
+def test_a_mixed_type_instance_that_is_entirely_our_own_prose_still_wraps(monkeypatch):
+    # Documents the accepted trade-off for a MIXED type (Finding 2): this
+    # `exc.ApiError` instance carries no Zendesk response-body text at all
+    # (it is `_http.py`'s own connectivity diagnostic, reached here through
+    # `get_ticket`), yet it is wrapped anyway because `exc.ApiError` cannot be
+    # told apart from a vendor-derived instance at the class level.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    class _Client:
+        def get_ticket(self, *, ticket_id: int) -> dict[str, object]:
+            raise srv.exc.ApiError("could not reach Zendesk (ConnectError) requesting GET /api/v2/tickets/1")
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(name="get_ticket", arguments={"ticket_id": 1})
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    assert _untrusted.MARKER_OPEN in result.content[0].text
+
+
+def test_authenticate_description_says_it_can_take_a_while():
+    (t,) = [t for t in srv.AUTH_TOOLS if t.name == "authenticate"]
+    assert "5 minutes" in t.description or "300" in t.description or "minutes" in t.description.lower()
 
 
 def test_the_server_instructions_tell_the_model_not_to_retry_or_hunt_for_files():

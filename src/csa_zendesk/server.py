@@ -71,9 +71,13 @@ already distinguishes three outcomes - `"revoked"`, `"already-invalid"`,
 collapsing them into one "done" message. The dangerous direction is a failed
 revoke (`auth.RevokeError` or `exc.ApiError`, both left to propagate by
 `auth.logout()` so the local file is never cleared out from under a
-credential that might still be live): `_cmd_logout` catches exactly those two
-and reports failure, never "logged out" - getting that backwards would tell a
-user their live credential is gone when it is not. `logout` is annotated
+credential that might still be live): `_cmd_logout` re-raises both, with the
+same guidance text a caller needs, rather than catching them into a returned
+string - a caught failure would read as failure in the text while
+`_on_call_tool` still reported `is_error=False`, the exact protocol-level
+inversion this design avoids. Getting this backwards, at either the text or
+the protocol level, would tell a user their live credential is gone when it
+is not. `logout` is annotated
 `read_only_hint=False, destructive_hint=True, idempotent_hint=True,
 open_world_hint=True` - honestly destructive (it revokes a real credential),
 but idempotent (calling it again after success just finds `"no-token"`) and
@@ -263,8 +267,10 @@ AUTH_TOOLS: list[mcp_types.Tool] = [
         description=(
             "Run the OAuth login flow and store the resulting credential. Opens a browser for "
             "the user to sign in, then reports the authenticated identity and granted scope - "
-            "never the token itself. Call this whenever another tool reports the server is not "
-            "authorized."
+            "never the token itself. This call blocks for up to 5 minutes waiting for the user "
+            "to complete sign-in in the browser - tell the user to check for a new browser tab "
+            "while you wait, rather than treating a long-running call as stuck. Call this "
+            "whenever another tool reports the server is not authorized."
         ),
         input_schema=_NO_ARGS_SCHEMA,
         annotations=mcp_types.ToolAnnotations(
@@ -387,25 +393,45 @@ def _cmd_auth_status() -> str:
 
 def _cmd_logout() -> str:
     """Revoke the stored credential, reporting each of `auth.logout()`'s
-    three outcomes distinctly, and reporting a failed revoke as a failure -
-    never as "logged out."
+    three outcomes distinctly, and treating a failed revoke as a genuine
+    failure - never as "logged out," at either level this response has.
 
     `auth.RevokeError` and `exc.ApiError` are the two ways `auth.logout()`
     lets a failed revoke propagate rather than returning - both mean the
     credential may still be live and the local file was deliberately left in
-    place, so a caller can retry or revoke it by hand. Reporting that as
-    success would be the dangerous direction: a user told they are logged out
-    while a live 90-day credential remains on Zendesk's side is worse off
-    than one told the logout failed.
+    place, so a caller can retry or revoke it by hand. **Re-raised, not
+    swallowed into a returned string**: an earlier version of this function
+    caught both and returned a plain "Logout failed: ..." string, which reads
+    as failure to a model but reports success at the MCP protocol level -
+    `call_tool_sync` returning normally means `_on_call_tool` builds an
+    `is_error=False` result regardless of what the text says. A host that
+    keys retry or UI behaviour off that flag, which is the mechanism MCP
+    provides for exactly this, would treat a failed logout as a successful
+    one - the dangerous direction: a user told they are logged out while a
+    live 90-day credential remains on Zendesk's side is worse off than one
+    told the logout failed. Re-raising (with the same guidance text folded
+    in, and chained with `from e` so the original diagnostic survives) lets
+    `_on_call_tool`'s existing exception handling set `is_error=True` the
+    same way every other tool failure in this server does; `RevokeError`'s
+    message is never wrapped (`_NEVER_WRAP`, at `_on_call_tool`) since it
+    never carries text from a Zendesk response body, while `exc.ApiError` -
+    a mixed type - defaults to wrapped, per that same comment.
     """
     try:
         outcome = auth.logout()
-    except (auth.RevokeError, exc.ApiError) as e:
-        return (
+    except auth.RevokeError as e:
+        raise auth.RevokeError(
             f"Logout failed: {e} The credential may still be live on Zendesk's side, and the "
             f"local token file was left in place on purpose. Try again, or revoke it by hand in "
             f"Zendesk Admin Center (Apps and integrations › APIs › OAuth clients)."
-        )
+        ) from e
+    except exc.ApiError as e:
+        raise exc.ApiError(
+            f"Logout failed: {e} The credential may still be live on Zendesk's side, and the "
+            f"local token file was left in place on purpose. Try again, or revoke it by hand in "
+            f"Zendesk Admin Center (Apps and integrations › APIs › OAuth clients).",
+            status=e.status,
+        ) from e
     if outcome == "no-token":
         return "Nothing to log out of: no token file was on disk."
     if outcome == "already-invalid":
@@ -427,8 +453,12 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
     The three `AUTH_TOOLS` names are dispatched first, before the unknown-name
     check below: they never call `_client()` (no policy-gated Zendesk client
     is involved in logging in, checking status, or logging out - see
-    `ADR-017`), and each returns a plain string already safe to hand back,
-    exactly like the read-tool branches below.
+    `ADR-017`). `authenticate` and `auth_status` always return a plain string
+    already safe to hand back, exactly like the read-tool branches below;
+    `logout` returns one on any of its three ordinary outcomes but RAISES
+    (`auth.RevokeError` or `exc.ApiError`) on a failed revoke, deliberately -
+    see `_cmd_logout`'s docstring for why a caught-and-returned failure string
+    would report success at the MCP protocol level.
 
     The unknown-name check runs BEFORE `_client()` is ever called: `_client()`
     calls `connect()`, which can itself raise (`CSA_ZENDESK_SUBDOMAIN` unset,
@@ -470,25 +500,120 @@ async def _on_list_tools(
     return mcp_types.ListToolsResult(tools=TOOLS)
 
 
+#: `exceptions.ZendeskError` subclasses whose message is, at EVERY raise site
+#: in this package, this library's own prose - never text taken from a Zendesk
+#: HTTP response body, and never text taken from any other external input.
+#: Enumerated by reading every `raise` of each type across the package, not
+#: assumed from the class hierarchy (a hierarchy that was never designed to
+#: encode provenance can't be trusted to sort by it - see Task 6's fix report
+#: for the full audit):
+#:
+#:   - `exc.PolicyError`: `policy.py`/`tools.py` build every message from the
+#:     capability name and profile this process itself holds - a policy
+#:     refusal names what WE will not grant, never anything Zendesk sent.
+#:   - `exc.InvalidPath`: `_http.py` raises this before a request is ever
+#:     built or sent, from a `path` this codebase itself constructed
+#:     (`f"/api/v2/tickets/{ticket_id}"` and the like) - there is no response
+#:     body in play yet.
+#:   - `exc.SearchLimitExceeded`: both raise sites (`backend.py`'s pre-flight
+#:     check, `_errors.py`'s 422 branch) use a fixed sentence naming the
+#:     documented 1000-result ceiling - neither interpolates anything Zendesk
+#:     sent back.
+#:   - `exc.RateLimited`, `exc.ServiceUnavailable`: `_errors.py` builds both
+#:     from a fixed string ("Zendesk rate limit reached" / "...likely
+#:     maintenance"); `retry_after` is an int off the `Retry-After` header,
+#:     never message text. `_http.py`'s `_budget_exhausted` only appends more
+#:     of this module's own prose to that same fixed string.
+#:   - `auth.NotAuthorised`: every site (`_connect.py`, `_flow.py`) reports a
+#:     missing environment variable or a missing token file - configuration
+#:     state on this machine, before any request is sent.
+#:   - `auth.TokenAlreadyInvalid`: one site, `_flow.revoke()` - reports the
+#:     revoke call got a 401, naming only the status code.
+#:   - `auth.TokenFileError`: `_store.py` reports this process's own token
+#:     file's mode/corruption/symlink state - never a response body.
+#:   - `auth.AuthExchangeError`: `_flow.py` reports either a bare status code
+#:     ("Zendesk refused the grant (HTTP {status})") or a structural
+#:     complaint about a 200 response missing an expected field, naming the
+#:     Python exception TYPE that was raised, never body content.
+#:   - `auth.NotAuthenticated`: `whoami.py` reports a status code or "answered
+#:     with an Anonymous user object" - never text out of the body.
+#:   - `auth.RevokeError`: `_flow.revoke()`'s one site reports a bare status
+#:     code, same shape as `AuthExchangeError` above.
+#:
+#: Every OTHER `exc.ZendeskError` subclass falls into one of two remaining
+#: cases, both of which `_on_call_tool`'s `except exc.ZendeskError` branch
+#: below wraps (the safe default):
+#:
+#:   - Unconditionally vendor-derived: `exc.PlanBoundary`, `exc.
+#:     EndpointNotAvailable`, `exc.NotFound`, `exc.ValidationError`, `exc.
+#:     PaginationError`, `auth.ScopeError` - each interpolates `message`/
+#:     `problems`/granted-scope text taken directly from a Zendesk response
+#:     body, at every production raise site (`backend.py`'s two bare
+#:     `NotFound`s are `FakeBackend`-only, never reached through `ApiBackend`).
+#:   - Genuinely MIXED, and this is the finding this comment exists to close:
+#:     `exc.ApiError` and `exc.CredentialsRejected` are each raised BOTH with
+#:     this library's own connectivity/shape prose (a dozen sites across
+#:     `_http.py`, `whoami.py`, `_flow.py` - "could not reach Zendesk", "not a
+#:     JSON object", an empty token from the provider) AND, via `_errors.
+#:     parse_error()`, with `message` interpolated straight out of a Zendesk
+#:     error body. `auth.CallbackError` is similarly mixed: most of its
+#:     messages are fixed prose, but two (`_callback.py`'s "the callback
+#:     arrived on an unexpected path" and "Zendesk refused the authorization")
+#:     splice in text taken verbatim from whatever request hit the local OAuth
+#:     loopback socket - untrusted, though not necessarily Zendesk's, since
+#:     nothing but the `state` parameter (checked separately) stops an
+#:     unrelated local process from sending that request instead.
+#:     A class-level check cannot tell a mixed type's instances apart, so
+#:     they default to the safe side - wrapped - per `_untrusted.py`'s own
+#:     doctrine ("when in doubt, wrap"): over-wrapping an occasional
+#:     all-ours `ApiError`/`CredentialsRejected`/`CallbackError` message costs
+#:     a reader some trust in genuinely-ours text; under-wrapping a
+#:     vendor-derived one is the vulnerability `_untrusted` exists to close.
+#:     Splitting each mixed type by provenance at the raise site (an explicit
+#:     marker, not a class) is the correct fix and is deliberately deferred -
+#:     see Task 6's fix report.
+_NEVER_WRAP: tuple[type[exc.ZendeskError], ...] = (
+    exc.PolicyError,
+    exc.InvalidPath,
+    exc.SearchLimitExceeded,
+    exc.RateLimited,
+    exc.ServiceUnavailable,
+    auth.NotAuthorised,
+    auth.TokenAlreadyInvalid,
+    auth.TokenFileError,
+    auth.AuthExchangeError,
+    auth.NotAuthenticated,
+    auth.RevokeError,
+)
+
+
 async def _on_call_tool(
     context: Any,
     params: mcp_types.CallToolRequestParams,
 ) -> mcp_types.CallToolResult:
-    # Provenance rule for the two branches below: THEIR TEXT IS WRAPPED, OURS
-    # IS NOT. A bad tool name or connect()'s own "no default policy" refusal
-    # (ValueError) is this library's own diagnostic text - wrapping it would
-    # invite the model to discount our own error, the same reason the
-    # truncation warning above sits outside the markers. An
-    # `exceptions.ZendeskError`'s message, by contrast, is built by
-    # `_errors.parse_error()` from Zendesk's OWN HTTP error body (title /
-    # message / description / detail) - the vendor's text, reaching the model
-    # exactly as a ticket's subject or comment body does, so `_untrusted`'s own
-    # rule applies with no exemption: "wrap everything, then name the
-    # exceptions... when in doubt, wrap." Both branches return `is_error=True`
-    # either way - only whether the content is wrapped differs.
+    # Provenance rule for the three branches below: THEIR TEXT IS WRAPPED,
+    # OURS IS NOT. A bad tool name (ValueError) is always this library's own
+    # diagnostic text - wrapping it would invite the model to discount our own
+    # error, the same reason the truncation warning above sits outside the
+    # markers. `_NEVER_WRAP` (see its own comment, just above) is the
+    # enumerated set of `ZendeskError` subclasses that are ALSO always this
+    # library's own prose, by audit rather than by class hierarchy - a bad
+    # tool name's `ValueError` is not itself in that tuple only because it
+    # is not a `ZendeskError` at all, so it needs its own branch to reach the
+    # same "never wrap" outcome. Every other `ZendeskError` - vendor-derived
+    # or genuinely mixed (see `_NEVER_WRAP`'s comment for why a mixed type
+    # still lands here) - is wrapped: `_untrusted`'s own rule applies with no
+    # exemption, "wrap everything, then name the exceptions... when in doubt,
+    # wrap." All three branches return `is_error=True`; only whether the
+    # content is wrapped differs.
     try:
         text = call_tool_sync(params.name, params.arguments or {})
     except ValueError as e:
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text=str(e))],
+            is_error=True,
+        )
+    except _NEVER_WRAP as e:
         return mcp_types.CallToolResult(
             content=[mcp_types.TextContent(type="text", text=str(e))],
             is_error=True,
