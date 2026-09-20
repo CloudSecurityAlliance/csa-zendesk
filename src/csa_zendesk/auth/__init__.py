@@ -15,6 +15,24 @@ address, nothing is listening there so the connection fails, and the operator
 copies the `code` parameter out of the browser's address bar. PKCE is what
 makes that safe - the code is useless without the verifier that never left
 this machine.
+
+**This module's own prompts go to stderr, never stdout - but `webbrowser.open()`
+is a caveat that guarantee does not fully cover.** `login()`'s non-paste path
+calls `webbrowser.open(url)` (smaller item, final whole-branch review): on a
+desktop with a graphical browser registered, that call launches a separate
+process and returns immediately, touching neither of this process's own
+stdio streams. But `webbrowser` falls back to a CONSOLE browser (`lynx`,
+`w3m`, ...) when no graphical one is registered or `$DISPLAY`/`$BROWSER`
+point at one, and a console browser is a child process that inherits this
+process's stdio by default - so it can read from and write to the SAME
+stdin/stdout a stdio MCP server's JSON-RPC session is carried on. This
+module's own "never prints to stdout" guarantee is about code in this
+package; it says nothing about a child process this package spawns via the
+standard library. Not reachable in the common desktop case this server
+targets, and no host running `csa-zendesk-mcp` today runs headless with only
+a console browser registered - but an embedder who does hits this, and the
+failure mode (a corrupted JSON-RPC stream, `server.py`'s module docstring)
+looks nothing like "picked the wrong browser."
 """
 
 from __future__ import annotations

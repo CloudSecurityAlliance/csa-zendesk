@@ -60,11 +60,23 @@ Unicode today, so this does not bite in this codebase, but a caller who adds
 normalisation downstream of `wrap()` inherits this boundary and needs to
 normalise BEFORE wrapping, not after.
 
-**Wrapping is not idempotent.** Calling `wrap()` (directly or via `wrap_*`) on
-text that is already wrapped neutralises the previous call's own markers -
-they are `<`/`>` sequences like any other - and encloses the mess in a new
-pair. Every value must be wrapped exactly once; Task 5 wraps a tool's
-response as the last step before it leaves this library, never earlier.
+**Wrapping is not idempotent, and a genuine double-wrap now refuses rather than
+silently mis-wrapping.** Calling `wrap()` (directly or via `wrap_*`) on text
+that already has the exact SHAPE of one of its own envelopes - starts with
+`MARKER_OPEN`, ends with `MARKER_CLOSE` - raises `ValueError` instead of
+neutralising the first pass's own markers and enclosing the mess in a new
+pair. That silent behaviour was the trap: non-idempotence that fails loudly is
+a design choice, non-idempotence that fails silently into forged,
+unauditable nested markers is not. The check is structural, not "does this
+text contain a marker-shaped substring anywhere" - a hostile TICKET body that
+embeds marker-shaped text mid-sentence (see `test_a_requester_cannot_escape_
+the_block_by_writing_the_closing_marker` in `tests/test_untrusted.py`) does
+not match that shape and is still neutralised and wrapped exactly as before;
+only text that already IS a well-formed envelope from a prior `wrap()` call
+is refused. Every value must be wrapped exactly once; Task 5 wraps a tool's
+response as the last step before it leaves this library, never earlier - no
+live path calls `wrap()` twice on the same value today, and this refusal
+keeps it that way instead of leaving a silent trap for the day one is.
 
 **`html_body` stops being HTML.** Neutralising `<`/`>` turns `<div>` into
 `‹div›` - the wrapped value is no longer parseable markup. That is
@@ -123,6 +135,18 @@ _ANGLE_BRACKETS = str.maketrans({"<": "‹", ">": "›"})
 #: name merely contains "id". Extend this set by naming a key explicitly,
 #: never by adding a pattern: a pattern acquires members the vendor adds
 #: without anyone deciding.
+#:
+#: **Known residue this denylist does not close (smaller item, final
+#: whole-branch review): `metadata.custom`.** It holds arbitrary CLIENT-set
+#: key/value pairs (API-SURFACE.md's comment metadata shape) - a caller of
+#: the API, not this module, chooses those key NAMES, and one named
+#: `status`/`type`/`url`/`role`/`public` (any member of this set) or ending
+#: `_at` passes its VALUE through `_walk_dict` unwrapped, because the
+#: machine-set test here is keyed on the field name alone with no way to tell
+#: "Zendesk's own `status` field" from "a client's `metadata.custom.status`
+#: string that merely reuses the name." No known live case has actually done
+#: this; recorded so the gap is documented rather than discovered by an
+#: attacker choosing that key on purpose.
 _MACHINE_SET_KEYS = frozenset({"id", "url", "type", "status", "priority", "public", "result_type", "role"})
 
 
@@ -138,7 +162,28 @@ def _neutralise(text: str) -> str:
     return text.translate(_ANGLE_BRACKETS)
 
 
-def wrap(text: str, *, source: str) -> str:
+#: Keys expected to carry markup - `_walk_dict` passes `note_on_change=False`
+#: for these (smaller item, final whole-branch review). `html_body` contains a
+#: literal `<` in EVERY comment that has one at all, so `_neutralise` changes
+#: it on essentially every call and the `(neutralised)` note fired on
+#: essentially every comment - noise exactly where a real injection attempt
+#: would arrive, since a genuine escape attempt reads identically to routine
+#: HTML in the note. Chose suppression by key over trying to distinguish
+#: "contained angle brackets" from "contained marker-shaped text": this
+#: module's whole design is CHARACTER-level neutralisation specifically
+#: because substring/pattern matching for marker-shaped text is a disguise an
+#: attacker can defeat (module docstring, "Why character-level neutralisation,
+#: not substring matching") - building a second, pattern-based detector just
+#: for the note would reintroduce that exact class of bypass. A narrow,
+#: explicit, single-purpose key allowlist is consistent with how
+#: `_MACHINE_SET_KEYS` already carves out exceptions by key name, not by
+#: guessing content shape. `plain_body` and `body` are NOT in this set: they
+#: are not expected to carry markup, so a `<`/`>` in either is still worth
+#: flagging.
+_MARKUP_KEYS = frozenset({"html_body"})
+
+
+def wrap(text: str, *, source: str, note_on_change: bool = True) -> str:
     """Delimit `text` as untrusted content originating at `source`.
 
     `source` names where the text came from (e.g. `zendesk-ticket-42.subject`)
@@ -153,11 +198,48 @@ def wrap(text: str, *, source: str) -> str:
     When neutralisation actually changes `text` or `source`, a `(neutralised)`
     note is appended to the header - so a reader can tell a genuine escape
     attempt from a body that happens to contain `‹`/`›` on its own,
-    which would otherwise be indistinguishable from one.
+    which would otherwise be indistinguishable from one. `note_on_change=False`
+    (set by `_walk_dict` for keys in `_MARKUP_KEYS`, e.g. `html_body`) suppresses
+    that note without suppressing neutralisation itself: a key EXPECTED to carry
+    markup changes on essentially every call, which makes the note fire on
+    essentially every comment and buries the signal exactly where an injection
+    attempt would arrive - see `_MARKUP_KEYS`'s own comment for why this is a
+    key-based allowlist rather than a second content-pattern detector.
+
+    **Refuses to double-wrap.** Raises `ValueError` when `text` already has
+    the exact shape of one of this function's own envelopes - starts with
+    `MARKER_OPEN`, and (after trailing whitespace) ends with `MARKER_CLOSE`.
+    This is a structural check on the well-formed envelope shape, not a bare
+    substring search: hostile TICKET text containing a marker-shaped
+    substring *embedded* in otherwise ordinary prose (the case
+    `test_a_requester_cannot_escape_the_block_by_writing_the_closing_marker`
+    and its siblings exercise) does not match this shape and is neutralised
+    exactly as before - refusing on ANY marker-shaped substring would refuse
+    to deliver ordinary hostile ticket content instead of framing it safely,
+    which is the opposite of this module's job. What this refuses is the
+    narrower, genuinely dangerous case: `wrap()` called a second time on its
+    OWN prior output, which would otherwise neutralise the first pass's real
+    markers into forged, ambiguous tamper-evidence and enclose the mess in a
+    new pair - a silent failure. No live double-wrap path exists in this
+    codebase today (every `wrap`/`wrap_*` call sits at the last step before a
+    tool response leaves this library); this refusal is the backstop for the
+    day an accidental one is introduced, so it fails loudly instead. Checked
+    on `text` only, never `source`: every caller in this codebase builds
+    `source` from machine ids and dotted field paths, so it never carries this
+    shape in production.
     """
+    if text.startswith(MARKER_OPEN) and text.rstrip().endswith(MARKER_CLOSE):
+        raise ValueError(
+            "wrap() was called on text that is already a wrapped envelope (it starts with "
+            "MARKER_OPEN and ends with MARKER_CLOSE) - wrapping is not idempotent, and a second "
+            "pass would neutralise the first pass's own markers into forged tamper-evidence "
+            "rather than frame anything new. Wrap each value exactly once, at the last point "
+            "before it leaves this library."
+        )
     safe_text = _neutralise(text)
     safe_source = _neutralise(source).replace("\n", " ").replace("\r", " ")
-    note = " (neutralised)" if safe_text != text or safe_source != source else ""
+    changed = safe_text != text or safe_source != source
+    note = " (neutralised)" if changed and note_on_change else ""
     return f"{MARKER_OPEN} source={safe_source}{note}\n{safe_text}\n{MARKER_CLOSE}"
 
 
@@ -202,7 +284,11 @@ def _walk_dict(node: dict[str, Any], *, path: str) -> dict[str, Any]:
         elif isinstance(value, list):
             result[key] = _walk_list(value, path=child_path)
         elif isinstance(value, str):
-            result[key] = value if _is_machine_set(key) else wrap(value, source=child_path)
+            result[key] = (
+                value
+                if _is_machine_set(key)
+                else wrap(value, source=child_path, note_on_change=key not in _MARKUP_KEYS)
+            )
         else:
             # int, float, bool, None - never wrapped; there is no key check
             # that would apply to a non-string value in the first place.
