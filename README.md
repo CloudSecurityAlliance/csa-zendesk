@@ -22,6 +22,11 @@ coverage**.
 > auth-lifecycle tools (`authenticate`, `auth_status`, `logout`) that sit outside the capability
 > model by design (ADR-017) so a user never has to leave the session to sign in or out.
 >
+> **What has not been verified: the read tools against a live ticket.** OAuth
+> (login/`whoami`/refresh/revoke) and the MCP handshake have each been proven against the real
+> Zendesk tenant and a real client, but no `get_ticket` call has ever fetched a real ticket —
+> see `TODO.md` F1–F5. "0.1.0" (see `CHANGELOG.md`) means mostly sort of works a bit, not more.
+>
 > **What does not exist: everything past rung E1.** No write tool is registered and no capability
 > beyond `TICKET_READ` is granted — the server cannot write even by mistake, this is a control the
 > tests assert, not an oversight to note. Of the 54 tools in the whole-project design, three data
