@@ -76,19 +76,34 @@ def connect(
             "server talks to (the 'example' in example.zendesk.com). There is no default."
         )
 
+    def _force_fresh_token() -> None:
+        """React to Zendesk's `invalid_token` 401 by forcing a real refresh.
+
+        Corrected in the final whole-branch review's fix wave: this used to be
+        `auth.clear`, which was wrong. `auth.clear` is `_store.clear`, and it
+        unlinks the WHOLE token file - access token AND refresh token, since
+        both live in it. After that, the retry's `token_provider()` call
+        (`auth.access_token`) finds no file at all and raises `NotAuthorised`,
+        so the retry could never succeed - and a valid 90-day refresh
+        credential was destroyed to find that out, as a side effect of a tool
+        annotated `read_only_hint=True, destructive_hint=False`. See TODO.md E12.
+
+        `auth.access_token(force=True, ...)` is the actual fix: it skips the
+        `REFRESH_MARGIN_SECONDS` freshness check (which would otherwise hand
+        back the SAME apparently-unexpired token that was just rejected) and
+        refreshes unconditionally using the stored refresh token. `refresh()`
+        persists the new pair via `_store.write()` before returning, so this
+        function discards `access_token`'s return value on purpose - the
+        point is the side effect on disk, not the value - and the retry's own
+        `token_provider()` call picks the fresh access token straight back up
+        from that file.
+        """
+        auth.access_token(force=True, transport=transport)
+
     http = HttpClient(
         subdomain=subdomain,
         token_provider=auth.access_token,
-        # TODO E12: on_invalid_token must FORCE a new token, and wiring it to
-        # auth.access_token would not do that. access_token() only refreshes
-        # proactively when the stored token is within its 120-second
-        # REFRESH_MARGIN_SECONDS of expiry, so a retry immediately after a 401
-        # would call access_token(), get back the SAME still-"unexpired"
-        # token, hit the SAME 401, and burn a request for nothing. auth.clear
-        # is the sanctioned wiring instead: it discards the rejected token
-        # outright, so the next access_token() call has nothing left to reuse
-        # and must obtain a genuinely fresh one.
-        on_invalid_token=auth.clear,
+        on_invalid_token=_force_fresh_token,
         transport=transport,
     )
     backend = ApiBackend(http)

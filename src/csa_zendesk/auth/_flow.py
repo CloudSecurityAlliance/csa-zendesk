@@ -301,11 +301,27 @@ def refresh(
     return fresh
 
 
-def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
+def access_token(*, force: bool = False, transport: httpx.BaseTransport | None = None) -> str:
     """A currently-valid access token. THE accessor every caller uses.
 
     Called on every request (`HttpClient`'s `token_provider`), so the healthy
     path is a file read and a float comparison - no network at all.
+
+    `force`, keyword-only and `False` by default: skip the `REFRESH_MARGIN_SECONDS`
+    freshness check and refresh unconditionally, using the stored refresh token,
+    regardless of how unexpired the access token still looks. This exists for
+    exactly one caller: `_connect.py`'s `on_invalid_token` handler, reacting to
+    Zendesk's own `invalid_token` 401 (ADR-009's reactive path). Without `force`,
+    that handler calling plain `access_token()` would re-read the SAME
+    apparently-unexpired token that was just rejected, hand it straight back
+    without refreshing, and the retry would hit the identical 401 again - burning
+    a request for nothing. `force=True` is also why `on_invalid_token` must NOT be
+    wired to `auth.clear`: clearing discards the refresh token along with the
+    access token (both live in the one token file), so the very next call this
+    function makes - forced or not - would find no file at all and raise
+    `NotAuthorised`, destroying a valid 90-day refresh credential to learn that
+    the retry cannot succeed. Fixed in the final whole-branch review's fix wave;
+    see `_connect.py`'s comment at the `on_invalid_token=` call site and TODO.md E12.
     """
     subdomain = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
     if not subdomain:
@@ -323,8 +339,11 @@ def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
         )
     tokens = _store.read()
     if tokens is None:
-        raise NotAuthorised("no token file. Run `csa-zendesk auth login` first.")
-    if tokens.expires_at - time.time() > REFRESH_MARGIN_SECONDS:
+        raise NotAuthorised(
+            "no token file. Call the `authenticate` tool to log in (or, outside a session, "
+            "run `csa-zendesk auth login`)."
+        )
+    if not force and tokens.expires_at - time.time() > REFRESH_MARGIN_SECONDS:
         return tokens.access_token
     # No CSA_ZENDESK_SCOPES here, deliberately: that variable is login()'s, for
     # the one browser consent screen a human sees. See refresh()'s docstring.
@@ -347,8 +366,8 @@ def access_token(*, transport: httpx.BaseTransport | None = None) -> str:
             "Zendesk refused to refresh this token. Either the refresh token has "
             "expired or was revoked (Zendesk's default lifetime is 30 days of "
             "inactivity), or Zendesk refused the refresh grant itself - the "
-            "response does not say which. Run `csa-zendesk auth login` again to "
-            "get a new token."
+            "response does not say which. Call the `authenticate` tool to log in "
+            "again (or, outside a session, run `csa-zendesk auth login`)."
         ) from e
     return fresh.access_token
 
