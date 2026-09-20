@@ -12,10 +12,15 @@ registration-time check neither of those two can perform.
 **Three tools, read-only, honestly annotated.** `get_ticket`, `search_tickets`
 and `list_comments` are the whole surface: `readOnlyHint=True`,
 `destructiveHint=False` on every one, because that is what they actually are.
-No write tool is registered - the `readonly` capability profile this module
-connects with would refuse one anyway (`policy.PROFILES["readonly"]` grants
-only `*.read`), but a tool a model can see and cannot use is a worse
-experience than one that is simply absent (task brief).
+No write tool is registered - `E1_CAPABILITIES` (below), the exact set this
+module connects with, would refuse one anyway (it grants only
+`TICKET_READ`), but a tool a model can see and cannot use is a worse
+experience than one that is simply absent (task brief). This is rung E1 of
+the whole-project design's enablement track - "triage the live queue;
+propose everything, change nothing" - and it is asserted, not assumed:
+`test_the_server_requests_only_read_capabilities` and
+`test_no_registered_tool_maps_to_a_write_operation` (Task 7) check both
+halves of that claim.
 
 **`READ_TOOLS` and `TOOLS` are named separately on purpose.** `TOOLS` is set to
 `READ_TOOLS` here, as a plain list - not re-derived - so that a later task
@@ -139,9 +144,11 @@ from . import _untrusted, auth
 from . import exceptions as exc
 from ._connect import connect
 from .client import ZendeskClient
+from .policy import TICKET_READ
 
 __all__ = [
     "AUTH_TOOLS",
+    "E1_CAPABILITIES",
     "INSTRUCTIONS",
     "READ_TOOLS",
     "TOOLS",
@@ -166,14 +173,20 @@ _TRUNCATION_WARNING = (
     "full thread.\n\n"
 )
 
-#: The `readonly` profile (`policy.PROFILES["readonly"]`) grants exactly
-#: `TICKET_READ` (plus `HC_READ`/`PEOPLE_READ`/`REPORTING_READ`/`ADMIN_READ`,
-#: none of which any tool below exercises) - the minimum authority that backs
-#: `get_ticket`/`search_tickets`/`list_comments`, matching the honest
-#: `readOnlyHint=True` annotation every tool below carries. This module never
-#: connects with a wider profile: a read-only tool surface backed by broader
-#: authority would be an accident waiting for the next tool this file gains.
-_PROFILE = "readonly"
+#: Rung E1 (whole-project design §5): "triage the live queue; propose
+#: everything, change nothing." `TICKET_READ` alone - not
+#: `policy.PROFILES["readonly"]`, which also grants `HC_READ`/`PEOPLE_READ`/
+#: `REPORTING_READ`/`ADMIN_READ` that none of `get_ticket`/`search_tickets`/
+#: `list_comments` exercises - is the minimum authority this file's tools
+#: actually need, matching their honest `readOnlyHint=True` annotation
+#: exactly rather than "at least as much." No capability here ends in
+#: anything but `.read`, and none names `write`/`reply`/`close`/`solve` -
+#: `test_the_server_requests_only_read_capabilities` pins both properties.
+#: A write tool registered here by mistake still could not be reached: the
+#: gate in `policy.py` refuses any capability this set does not grant,
+#: independent of what `TOOLS` happens to list. Built from `policy.TICKET_READ`
+#: rather than the literal `"ticket.read"` so the two can never drift apart.
+E1_CAPABILITIES: frozenset[str] = frozenset({TICKET_READ})
 
 
 def _client() -> ZendeskClient:
@@ -182,8 +195,11 @@ def _client() -> ZendeskClient:
     Every real call goes through `connect()`, which reads
     `CSA_ZENDESK_SUBDOMAIN` and the OAuth token store itself - nothing in this
     module holds a credential or constructs a `ZendeskClient` any other way.
+    Connects with `capabilities=E1_CAPABILITIES` rather than
+    `profile="readonly"`: a named profile is a convenience for a caller
+    composing several capabilities, and this server only ever needs the one.
     """
-    return connect(profile=_PROFILE)
+    return connect(capabilities=E1_CAPABILITIES)
 
 
 _TICKET_ID_SCHEMA: dict[str, Any] = {

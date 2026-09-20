@@ -72,21 +72,22 @@ def test_nothing_in_the_server_module_writes_to_stdout(capsys):
 # --- coverage for behaviour the brief's five tests above do not reach ------
 
 
-def test_client_connects_with_the_readonly_profile(monkeypatch):
+def test_client_connects_with_the_e1_capabilities(monkeypatch):
     # The one call every other test in this file replaces via
     # `monkeypatch.setattr(srv, "_client", ...)`, so it is exercised on its
-    # own here instead: `_client()` must ask `connect()` for the `readonly`
-    # profile specifically, matching every tool's honest
-    # `readOnlyHint=True` annotation.
+    # own here instead: `_client()` must ask `connect()` for `E1_CAPABILITIES`
+    # explicitly (Task 7), not a named profile - see `test_the_server_
+    # requests_only_read_capabilities`, below, for why the explicit set is
+    # narrower than `policy.PROFILES["readonly"]` was.
     seen = {}
 
     def fake_connect(*, profile=None, capabilities=None, transport=None):
-        seen["profile"] = profile
+        seen["profile"], seen["capabilities"] = profile, capabilities
         return "a-client"
 
     monkeypatch.setattr(srv, "connect", fake_connect)
     assert srv._client() == "a-client"
-    assert seen == {"profile": "readonly"}
+    assert seen == {"profile": None, "capabilities": srv.E1_CAPABILITIES}
 
 
 def test_search_tickets_honours_explicit_page_and_per_page(monkeypatch):
@@ -611,3 +612,49 @@ def test_the_server_instructions_tell_the_model_not_to_retry_or_hunt_for_files()
 def test_build_server_carries_the_instructions():
     server = srv.build_server()
     assert server.instructions == srv.INSTRUCTIONS
+
+
+# --- Task 7: rung E1 - the capability profile, and the refusal it backs ----
+
+
+def test_the_server_requests_only_read_capabilities():
+    caps = srv.E1_CAPABILITIES
+    assert all(c.endswith(".read") or c == "ticket.read" for c in caps), caps
+    assert not any("write" in c or "reply" in c or "close" in c or "solve" in c for c in caps)
+
+
+def test_no_registered_tool_maps_to_a_write_operation():
+    # AUTH_TOOLS (authenticate/auth_status/logout) are auth-lifecycle tools, not
+    # Support API operations, and sit outside policy._GATES by design (ADR-017)
+    # - reachable at every rung, not just the ones that hold a write capability.
+    # Skipping via AUTH_TOOLS rather than a literal name set means a fourth
+    # auth tool is covered automatically instead of silently falling through.
+    from csa_zendesk import policy
+
+    auth_names = {t.name for t in srv.AUTH_TOOLS}
+    for t in srv.TOOLS:
+        if t.name in auth_names:
+            continue
+        assert policy._GATES[t.name] == policy.TICKET_READ, t.name
+
+
+def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
+    # The block's security property, asserted over every registered data tool
+    # rather than the three we happened to think of.
+    from csa_zendesk import _untrusted
+
+    class _Client:
+        def get_ticket(self, *, ticket_id):
+            return {"ticket": {"id": 1, "subject": "s"}}
+
+        def search_tickets(self, *, query, page=1, per_page=25):
+            return {"results": [{"id": 1, "subject": "s"}], "count": 1}
+
+        def list_comments(self, *, ticket_id):
+            return {"comments": [{"id": 1, "body": "b", "public": True}]}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    args = {"get_ticket": {"ticket_id": 1}, "search_tickets": {"query": "x"}, "list_comments": {"ticket_id": 1}}
+    for t in srv.TOOLS:
+        if t.name in args:
+            assert _untrusted.MARKER_OPEN in srv.call_tool_sync(t.name, args[t.name]), t.name

@@ -203,6 +203,58 @@ python3 scripts/inventory.py         # 882 operations
 python3 scripts/probe_families.py    # 43/49 families reachable (as last measured, under the API-token path)
 ```
 
+## Using the MCP server
+
+**This rung is read-only.** `csa-zendesk-mcp` (the console script `src/csa_zendesk/server.py`
+registers) exposes exactly three data tools — `get_ticket`, `search_tickets`, `list_comments` —
+and connects with `TICKET_READ` and no other capability (`server.E1_CAPABILITIES`). It is
+incapable of a write even if one were registered by mistake: `policy.py`'s gate refuses any
+capability this set does not grant, independent of what the tool table lists. This is rung E1 of
+the design's enablement track — *triage the live queue; propose everything, change nothing.*
+
+**The `server` extra is not installed by default** — the library itself has no dependency on the
+MCP SDK, so a consumer who only wants the typed `ZendeskClient` never pulls it in:
+
+```bash
+pip install -e '.[server]'
+```
+
+Then register the server with Claude Code:
+
+```bash
+claude mcp add csa-zendesk-mcp \
+  -e CSA_ZENDESK_SUBDOMAIN=<subdomain> \
+  -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id> \
+  -- /abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp
+```
+
+Use an **absolute path** to the installed `csa-zendesk-mcp` executable, not the bare command
+name — from a source checkout it lives in that checkout's own venv, and a bare name resolves
+through `PATH`, which may find a different install or none at all. The equivalent
+`claude_desktop_config.json` stanza:
+
+```json
+{
+  "mcpServers": {
+    "csa-zendesk-mcp": {
+      "command": "/abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp",
+      "env": {
+        "CSA_ZENDESK_SUBDOMAIN": "<subdomain>",
+        "CSA_ZENDESK_MCP_SERVER_IDENTIFIER": "<client-id>"
+      }
+    }
+  }
+}
+```
+
+**There is no separate login step to run first.** `authenticate`, `auth_status` and `logout` are
+themselves tools, reachable from inside the session at every rung — including this read-only
+one — so a user who is logged out, or whose credential has lapsed, never has to leave Claude
+Code to fix it: the server's own instructions tell the model to call `authenticate` the moment
+another tool reports it is not authorized. `logout` sits alongside them rather than being left to
+the CLI, per [ADR-017](DECISIONS-ADR/ADR-017.md) — a surface that can acquire a credential must
+also expose a way to relinquish it, reachable at least as easily as the tool that acquires it.
+
 ## Development
 
 ```bash
