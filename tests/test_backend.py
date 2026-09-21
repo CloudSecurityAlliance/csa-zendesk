@@ -7,7 +7,7 @@ import pytest
 
 from csa_zendesk import exceptions as exc
 from csa_zendesk._http import HttpClient
-from csa_zendesk.backend import ApiBackend, Backend, EmptyWrite, FakeBackend
+from csa_zendesk.backend import ApiBackend, Backend, FakeBackend
 
 
 def _client(handler) -> HttpClient:
@@ -447,7 +447,7 @@ def test_api_backend_update_ticket_refuses_an_empty_fields_mapping_before_the_ca
         return httpx.Response(200, json={})
 
     b = ApiBackend(_client(handler))
-    with pytest.raises(EmptyWrite, match="fields"):
+    with pytest.raises(exc.EmptyWrite, match="fields"):
         b.update_ticket(ticket_id=7, fields={})
     assert called["n"] == 0
 
@@ -456,7 +456,7 @@ def test_fake_backend_update_ticket_refuses_an_empty_fields_mapping_too():
     # Shares _refuse_an_empty_update with ApiBackend, the same way search's
     # ceiling check is shared - a fake that let this through would pass a
     # call the real backend rejects outright.
-    with pytest.raises(EmptyWrite, match="fields"):
+    with pytest.raises(exc.EmptyWrite, match="fields"):
         FakeBackend(tickets={7: {"id": 7}}).update_ticket(ticket_id=7, fields={})
 
 
@@ -503,7 +503,7 @@ def test_api_backend_assign_ticket_refuses_an_empty_assignment_before_the_call()
         return httpx.Response(200, json={})
 
     b = ApiBackend(_client(handler))
-    with pytest.raises(EmptyWrite, match="assignee_id"):
+    with pytest.raises(exc.EmptyWrite, match="assignee_id"):
         b.assign_ticket(ticket_id=7)
     assert called["n"] == 0
 
@@ -512,7 +512,7 @@ def test_fake_backend_assign_ticket_refuses_an_empty_assignment_too():
     # Shares _refuse_an_empty_assignment with ApiBackend, the same way
     # search's ceiling check is shared - a fake that let this through would
     # pass a call the real backend rejects outright.
-    with pytest.raises(EmptyWrite, match="assignee_id"):
+    with pytest.raises(exc.EmptyWrite, match="assignee_id"):
         FakeBackend(tickets={7: {"id": 7}}).assign_ticket(ticket_id=7)
 
 

@@ -22,6 +22,7 @@ __all__ = [
     "PaginationError",
     "InvalidPath",
     "SearchLimitExceeded",
+    "EmptyWrite",
     "RateLimited",
     "ServiceUnavailable",
     "PolicyError",
@@ -111,6 +112,23 @@ class InvalidPath(ZendeskError):
 
 class SearchLimitExceeded(ZendeskError):
     """Search refuses past 1000 results, however large the reported `count`."""
+
+
+class EmptyWrite(ZendeskError):
+    """A write call refused before it reached the wire because, as given, it
+    would change nothing: `backend.assign_ticket` naming neither `assignee_id`
+    nor `group_id`, or `backend.update_ticket` with an empty `fields` mapping.
+
+    Raised by `backend.py`'s `_refuse_an_empty_assignment` and `_refuse_an_
+    empty_update` (one exception for both - the same defect in two sibling
+    methods, not two near-identical types), each building its message from a
+    fixed sentence naming what the call needed - never text out of a Zendesk
+    response, since nothing has been sent yet. An empty-body write is not
+    free just because it changes nothing: it spends this tenant's write-rate
+    budget and lands in Zendesk's own audit log as an update that changed
+    nothing, undermining the very legibility agent writes are meant to have
+    there.
+    """
 
 
 class RateLimited(ZendeskError):
