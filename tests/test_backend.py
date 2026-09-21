@@ -7,7 +7,7 @@ import pytest
 
 from csa_zendesk import exceptions as exc
 from csa_zendesk._http import HttpClient
-from csa_zendesk.backend import ApiBackend, Backend, FakeBackend, NothingToAssign
+from csa_zendesk.backend import ApiBackend, Backend, EmptyWrite, FakeBackend
 
 
 def _client(handler) -> HttpClient:
@@ -433,6 +433,33 @@ def test_fake_backend_update_ticket_raises_not_found_for_an_unknown_ticket_id():
         FakeBackend().update_ticket(ticket_id=999, fields={"priority": "high"})
 
 
+def test_api_backend_update_ticket_refuses_an_empty_fields_mapping_before_the_call():
+    # Same defect as assign_ticket's empty case, in the sibling method:
+    # tools.TOOLS["update_ticket"]'s _forbid(...) is a denylist and says
+    # nothing about `fields` being empty, and a caller holding a bare Backend
+    # never passes through tools.TOOLS at all (ADR-002's public seam). Same
+    # before-the-call shape as test_a_request_past_the_thousand_result_
+    # ceiling_is_refused_before_the_call.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(EmptyWrite, match="fields"):
+        b.update_ticket(ticket_id=7, fields={})
+    assert called["n"] == 0
+
+
+def test_fake_backend_update_ticket_refuses_an_empty_fields_mapping_too():
+    # Shares _refuse_an_empty_update with ApiBackend, the same way search's
+    # ceiling check is shared - a fake that let this through would pass a
+    # call the real backend rejects outright.
+    with pytest.raises(EmptyWrite, match="fields"):
+        FakeBackend(tickets={7: {"id": 7}}).update_ticket(ticket_id=7, fields={})
+
+
 # --- assign_ticket: same PUT, bucket-pure by allowlist rather than by denylist
 
 
@@ -476,7 +503,7 @@ def test_api_backend_assign_ticket_refuses_an_empty_assignment_before_the_call()
         return httpx.Response(200, json={})
 
     b = ApiBackend(_client(handler))
-    with pytest.raises(NothingToAssign, match="assignee_id"):
+    with pytest.raises(EmptyWrite, match="assignee_id"):
         b.assign_ticket(ticket_id=7)
     assert called["n"] == 0
 
@@ -485,7 +512,7 @@ def test_fake_backend_assign_ticket_refuses_an_empty_assignment_too():
     # Shares _refuse_an_empty_assignment with ApiBackend, the same way
     # search's ceiling check is shared - a fake that let this through would
     # pass a call the real backend rejects outright.
-    with pytest.raises(NothingToAssign, match="assignee_id"):
+    with pytest.raises(EmptyWrite, match="assignee_id"):
         FakeBackend(tickets={7: {"id": 7}}).assign_ticket(ticket_id=7)
 
 

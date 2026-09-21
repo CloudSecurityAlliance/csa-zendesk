@@ -53,20 +53,34 @@ def _refuse_past_search_ceiling(*, page: int, per_page: int) -> None:
         )
 
 
-class NothingToAssign(exc.ZendeskError):
-    """`assign_ticket` refused before any request was built or sent.
+class EmptyWrite(exc.ZendeskError):
+    """A write call refused before any request was built or sent, because as
+    given it would change nothing.
 
-    Neither `assignee_id` nor `group_id` was given. `tools.TOOLS["assign_ticket"]`'s
-    `_only("assignee_id", "group_id")` is an ALLOWLIST on what a call may contain -
-    it permits any subset of those two keys, including the empty one - so it was
-    never going to catch this even for a caller going through the tool layer. And
-    a caller holding a bare `Backend` (ADR-002's public seam) never passes through
-    `tools.TOOLS` at all (policy.py's own "one wrapper... so a library embedder
-    gets the same guarantee an MCP client does"). An empty-body PUT is not free
-    just because it changes nothing: it spends this tenant's write-rate budget
-    and lands in Zendesk's own audit log as a ticket update, which works against
-    keeping agent writes legible there. Refused here, at the one place both
-    `ApiBackend` and `FakeBackend` go through, rather than only at the tool seam.
+    One concept, not two: `assign_ticket` (neither `assignee_id` nor `group_id`)
+    and `update_ticket` (an empty `fields` mapping) are the same defect in
+    sibling methods, so both raise this rather than each getting its own
+    near-identically-named type - see `_refuse_an_empty_assignment` and
+    `_refuse_an_empty_update` below, which supply the call-specific message.
+
+    Neither call's `tools.TOOLS` constraint closes this on its own:
+    `assign_ticket`'s `_only("assignee_id", "group_id")` is an ALLOWLIST on
+    what a call may contain, and permits any subset of those two keys,
+    including the empty one; `update_ticket`'s `_forbid(...)` is a denylist,
+    which says nothing at all about `fields` being empty. And a caller
+    holding a bare `Backend` (ADR-002's public seam) never passes through
+    `tools.TOOLS` at all (policy.py's own "one wrapper... so a library
+    embedder gets the same guarantee an MCP client does"). An empty-body PUT
+    is not free just because it changes nothing: it spends this tenant's
+    write-rate budget and lands in Zendesk's own audit log as a ticket
+    update, which works against keeping agent writes legible there. Refused
+    here, at the one place both `ApiBackend` and `FakeBackend` go through for
+    each method, rather than only at the tool seam.
+
+    This is entirely this library's own prose at every raise site, never text
+    taken from a Zendesk response body - so it belongs on the never-wrap side
+    of `server.py`'s `_NEVER_WRAP`, the same way `SearchLimitExceeded` and
+    `InvalidPath` (backend.py's other two pre-wire refusals) already do.
     """
 
 
@@ -77,8 +91,22 @@ def _refuse_an_empty_assignment(*, assignee_id: int | None, group_id: int | None
     is above, so the two cannot drift apart.
     """
     if assignee_id is None and group_id is None:
-        raise NothingToAssign(
+        raise EmptyWrite(
             "assign_ticket needs assignee_id, group_id, or both - a call naming neither "
+            "would send an empty write to Zendesk: no effect, but it still spends this "
+            "tenant's write-rate budget and still lands in the ticket's audit log as an "
+            "update that changed nothing."
+        )
+
+
+def _refuse_an_empty_update(*, fields: dict[str, Any]) -> None:
+    """Refuse an `update_ticket` call whose `fields` mapping is empty, before it
+    reaches the wire. `assign_ticket`'s sibling check, for the same reason:
+    shared by `ApiBackend` and `FakeBackend` so the two cannot drift apart.
+    """
+    if not fields:
+        raise EmptyWrite(
+            "update_ticket needs a non-empty fields mapping - a call with nothing in it "
             "would send an empty write to Zendesk: no effect, but it still spends this "
             "tenant's write-rate budget and still lands in the ticket's audit log as an "
             "update that changed nothing."
@@ -188,6 +216,13 @@ class ApiBackend:
         # policy/tool seam (policy._dispatch) before this method is ever
         # reached - this method itself sends whatever `fields` it is given,
         # unshaped, per ADR-002.
+        #
+        # An EMPTY `fields`, though, is refused here rather than sent:
+        # `_forbid(...)` says nothing about `fields` being empty (a denylist
+        # only names keys it excludes), and a bare-Backend caller never
+        # passes through tools.TOOLS at all (ADR-002's public seam). See
+        # EmptyWrite's docstring for why a no-op write is not free.
+        _refuse_an_empty_update(fields=fields)
         return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": fields})
 
     def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
@@ -204,7 +239,7 @@ class ApiBackend:
         # layer alone: `_only("assignee_id", "group_id")` permits any SUBSET
         # of those keys, including the empty one, and a caller holding a bare
         # Backend never passes through tools.TOOLS at all (ADR-002's public
-        # seam). See NothingToAssign's docstring for why an empty write is
+        # seam). See EmptyWrite's docstring for why an empty write is
         # not free even though it changes nothing.
         _refuse_an_empty_assignment(assignee_id=assignee_id, group_id=group_id)
         fields: dict[str, Any] = {}
@@ -264,6 +299,11 @@ class FakeBackend:
         # would show it. Still deep-copies both in and out (this class's own
         # docstring), so neither the caller's `fields` dict nor the returned
         # envelope alias the fixture's backing store.
+        #
+        # Checked first, before the existence lookup, matching ApiBackend and
+        # assign_ticket below: the refusal does not depend on whether
+        # ticket_id is real.
+        _refuse_an_empty_update(fields=fields)
         try:
             ticket = self.tickets[ticket_id]
         except KeyError:

@@ -152,7 +152,7 @@ from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from . import __version__, _untrusted, auth
+from . import __version__, _untrusted, auth, backend
 from . import exceptions as exc
 from ._connect import connect
 from .client import ZendeskClient
@@ -572,6 +572,12 @@ async def _on_list_tools(
 #:     check, `_errors.py`'s 422 branch) use a fixed sentence naming the
 #:     documented 1000-result ceiling - neither interpolates anything Zendesk
 #:     sent back.
+#:   - `backend.EmptyWrite`: both raise sites (`backend.py`'s `_refuse_an_
+#:     empty_assignment`, `_refuse_an_empty_update`) use a fixed sentence
+#:     naming what the call needs (`assignee_id`/`group_id`, or a non-empty
+#:     `fields`) - a local, pre-flight refusal on this process's own
+#:     arguments, before any request is built or sent, the same shape as
+#:     `exc.InvalidPath` and `exc.SearchLimitExceeded` just above.
 #:   - `exc.RateLimited`, `exc.ServiceUnavailable`: `_errors.py` builds both
 #:     from a fixed string ("Zendesk rate limit reached" / "...likely
 #:     maintenance"); `retry_after` is an int off the `Retry-After` header,
@@ -643,6 +649,7 @@ _NEVER_WRAP: tuple[type[exc.ZendeskError], ...] = (
     exc.PolicyError,
     exc.InvalidPath,
     exc.SearchLimitExceeded,
+    backend.EmptyWrite,
     exc.RateLimited,
     exc.ServiceUnavailable,
     auth.NotAuthorised,

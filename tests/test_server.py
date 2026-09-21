@@ -697,6 +697,7 @@ def test_never_wrap_covers_every_exception_type_the_module_docstring_enumerates(
         srv.exc.PolicyError,
         srv.exc.InvalidPath,
         srv.exc.SearchLimitExceeded,
+        srv.backend.EmptyWrite,
         srv.exc.RateLimited,
         srv.exc.ServiceUnavailable,
         srv.auth.NotAuthorised,
