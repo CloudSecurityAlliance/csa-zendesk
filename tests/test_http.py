@@ -756,3 +756,27 @@ def test_a_token_endpoint_failure_inside_on_invalid_token_names_the_token_endpoi
         c.get("/api/v2/tickets/123.json")
     assert "token endpoint" in str(ei.value)
     assert "tickets/123.json" not in str(ei.value)
+
+
+def test_the_retry_budget_and_invalid_token_retry_survive_the_split():
+    # Pins the two behaviours most likely to break when the retry loop moves:
+    # a 429 is retried within budget, and an invalid_token 401 refreshes once.
+    calls = {"n": 0, "refreshed": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": "rate"})
+        if calls["n"] == 2:
+            return httpx.Response(401, json={"error": "invalid_token"})
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: "AT",
+        on_invalid_token=lambda: calls.__setitem__("refreshed", calls["refreshed"] + 1),
+        transport=httpx.MockTransport(handler),
+    )
+    assert c.get("/api/v2/tickets/1") == {"ticket": {"id": 1}}
+    assert calls["n"] == 3
+    assert calls["refreshed"] == 1
