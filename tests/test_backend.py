@@ -7,7 +7,7 @@ import pytest
 
 from csa_zendesk import exceptions as exc
 from csa_zendesk._http import HttpClient
-from csa_zendesk.backend import ApiBackend, Backend, FakeBackend
+from csa_zendesk.backend import ApiBackend, Backend, FakeBackend, NothingToAssign
 
 
 def _client(handler) -> HttpClient:
@@ -460,16 +460,33 @@ def test_api_backend_assign_ticket_sends_both_fields_when_both_are_given():
     assert seen["body"] == {"ticket": {"assignee_id": 42, "group_id": 9}}
 
 
-def test_api_backend_assign_ticket_sends_an_empty_body_when_neither_is_given():
-    seen = {}
+def test_api_backend_assign_ticket_refuses_an_empty_assignment_before_the_call():
+    # A caller reaching Backend directly (ADR-002's public seam) never passes
+    # through tools.TOOLS["assign_ticket"]'s _only(...) check at all, and even
+    # a caller who does isn't stopped by it - _only permits any subset of its
+    # allowed keys, including the empty one. An empty-body PUT would still be
+    # a real write: it spends rate-limit budget and lands in the ticket's
+    # audit log as an update that changed nothing. Refused here, before the
+    # request is ever built, matching test_a_request_past_the_thousand_
+    # result_ceiling_is_refused_before_the_call's shape.
+    called = {"n": 0}
 
-    def handler(request):
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"ticket": {"id": 7}})
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
 
     b = ApiBackend(_client(handler))
-    b.assign_ticket(ticket_id=7)
-    assert seen["body"] == {"ticket": {}}
+    with pytest.raises(NothingToAssign, match="assignee_id"):
+        b.assign_ticket(ticket_id=7)
+    assert called["n"] == 0
+
+
+def test_fake_backend_assign_ticket_refuses_an_empty_assignment_too():
+    # Shares _refuse_an_empty_assignment with ApiBackend, the same way
+    # search's ceiling check is shared - a fake that let this through would
+    # pass a call the real backend rejects outright.
+    with pytest.raises(NothingToAssign, match="assignee_id"):
+        FakeBackend(tickets={7: {"id": 7}}).assign_ticket(ticket_id=7)
 
 
 def test_api_backend_assign_ticket_uses_the_documented_path():

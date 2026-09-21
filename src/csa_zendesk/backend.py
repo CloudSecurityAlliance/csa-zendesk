@@ -53,6 +53,38 @@ def _refuse_past_search_ceiling(*, page: int, per_page: int) -> None:
         )
 
 
+class NothingToAssign(exc.ZendeskError):
+    """`assign_ticket` refused before any request was built or sent.
+
+    Neither `assignee_id` nor `group_id` was given. `tools.TOOLS["assign_ticket"]`'s
+    `_only("assignee_id", "group_id")` is an ALLOWLIST on what a call may contain -
+    it permits any subset of those two keys, including the empty one - so it was
+    never going to catch this even for a caller going through the tool layer. And
+    a caller holding a bare `Backend` (ADR-002's public seam) never passes through
+    `tools.TOOLS` at all (policy.py's own "one wrapper... so a library embedder
+    gets the same guarantee an MCP client does"). An empty-body PUT is not free
+    just because it changes nothing: it spends this tenant's write-rate budget
+    and lands in Zendesk's own audit log as a ticket update, which works against
+    keeping agent writes legible there. Refused here, at the one place both
+    `ApiBackend` and `FakeBackend` go through, rather than only at the tool seam.
+    """
+
+
+def _refuse_an_empty_assignment(*, assignee_id: int | None, group_id: int | None) -> None:
+    """Refuse an `assign_ticket` call naming neither field, before it reaches the wire.
+
+    Shared by `ApiBackend` and `FakeBackend`, the same way `_refuse_past_search_ceiling`
+    is above, so the two cannot drift apart.
+    """
+    if assignee_id is None and group_id is None:
+        raise NothingToAssign(
+            "assign_ticket needs assignee_id, group_id, or both - a call naming neither "
+            "would send an empty write to Zendesk: no effect, but it still spends this "
+            "tenant's write-rate budget and still lands in the ticket's audit log as an "
+            "update that changed nothing."
+        )
+
+
 @runtime_checkable
 class Backend(Protocol):
     """Every Zendesk operation this library reaches, unshaped.
@@ -167,6 +199,14 @@ class ApiBackend:
         # only ever needs to build a body from those two keys - there is no
         # forbidden-key surface here that could fall behind as the OAS grows,
         # unlike update_ticket's denylist.
+        #
+        # Refused here, at the Backend seam, rather than trusted to the tool
+        # layer alone: `_only("assignee_id", "group_id")` permits any SUBSET
+        # of those keys, including the empty one, and a caller holding a bare
+        # Backend never passes through tools.TOOLS at all (ADR-002's public
+        # seam). See NothingToAssign's docstring for why an empty write is
+        # not free even though it changes nothing.
+        _refuse_an_empty_assignment(assignee_id=assignee_id, group_id=group_id)
         fields: dict[str, Any] = {}
         if assignee_id is not None:
             fields["assignee_id"] = assignee_id
@@ -232,6 +272,11 @@ class FakeBackend:
         return {"ticket": copy.deepcopy(ticket)}
 
     def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+        # Checked first, before the existence lookup below, matching
+        # ApiBackend: the refusal does not depend on whether ticket_id is
+        # real, so a call naming neither field is refused identically by
+        # both backends regardless of the id it was given.
+        _refuse_an_empty_assignment(assignee_id=assignee_id, group_id=group_id)
         try:
             ticket = self.tickets[ticket_id]
         except KeyError:
