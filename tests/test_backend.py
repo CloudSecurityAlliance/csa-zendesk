@@ -54,6 +54,12 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
         def assign_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
+        def add_internal_note(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def solve_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
     assert isinstance(NameOnlyImpostor(), Backend)
 
 
@@ -545,3 +551,175 @@ def test_fake_backend_assign_ticket_sets_both_fields():
 def test_fake_backend_assign_ticket_raises_not_found_for_an_unknown_ticket_id():
     with pytest.raises(exc.NotFound):
         FakeBackend().assign_ticket(ticket_id=999, assignee_id=42)
+
+
+# --- add_internal_note: same PUT, public forced by construction, never by input
+
+
+def test_api_backend_add_internal_note_sends_a_private_comment():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="internal note")
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+    assert seen["body"] == {"ticket": {"comment": {"body": "internal note", "public": False}}}
+
+
+def test_api_backend_add_internal_note_has_no_public_parameter_to_override():
+    # THE control this block exists to get right (API-SURFACE §5.4f): there is
+    # no `public` argument here at all for a caller - or an instruction
+    # injected from ticket content the model is reading - to set, so it
+    # cannot be flipped true by any well-formed call. TypeError, not
+    # PolicyError, proves the parameter is simply absent from the signature.
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(TypeError):
+        b.add_internal_note(ticket_id=7, body="hi", public=True)  # type: ignore[call-arg]
+
+
+def test_api_backend_add_internal_note_sends_uploads_when_given():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="see attached", uploads=["tok1", "tok2"])
+    assert seen["body"] == {
+        "ticket": {"comment": {"body": "see attached", "public": False, "uploads": ["tok1", "tok2"]}}
+    }
+
+
+def test_api_backend_add_internal_note_treats_an_empty_list_and_none_uploads_identically():
+    # Task 3 brief: "An empty list and None must behave identically - neither
+    # should put an uploads key in the request body."
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="hi", uploads=None)
+    b.add_internal_note(ticket_id=7, body="hi", uploads=[])
+    assert bodies[0] == bodies[1] == {"ticket": {"comment": {"body": "hi", "public": False}}}
+    assert "uploads" not in bodies[0]["ticket"]["comment"]
+
+
+def test_api_backend_add_internal_note_returns_the_envelope_unshaped():
+    body = {"ticket": {"id": 7, "comment": {"id": 99, "public": False}}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).add_internal_note(ticket_id=7, body="hi") == body
+
+
+def test_api_backend_add_internal_note_refuses_an_empty_note_before_the_call():
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        b.add_internal_note(ticket_id=7, body="")
+    assert called["n"] == 0
+
+
+def test_api_backend_add_internal_note_refuses_a_whitespace_only_body_with_no_uploads():
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        ApiBackend(_client(handler)).add_internal_note(ticket_id=7, body="   ")
+
+
+def test_api_backend_add_internal_note_permits_an_empty_body_when_an_upload_is_attached():
+    # Task 4 attaches files by passing uploads=[token] here - a note that is
+    # "just the attachment" is legitimate, unlike a note that is nothing at all.
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="", uploads=["tok1"])
+    assert seen["body"] == {"ticket": {"comment": {"body": "", "public": False, "uploads": ["tok1"]}}}
+
+
+def test_fake_backend_add_internal_note_returns_the_ticket_unchanged():
+    fake = FakeBackend(tickets={7: {"id": 7, "subject": "hello"}})
+    assert fake.add_internal_note(ticket_id=7, body="internal") == {"ticket": {"id": 7, "subject": "hello"}}
+
+
+def test_fake_backend_add_internal_note_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().add_internal_note(ticket_id=999, body="hi")
+
+
+def test_fake_backend_add_internal_note_refuses_an_empty_note_too():
+    # Shares _refuse_an_empty_note with ApiBackend - a fake that let this
+    # through would pass a call the real backend rejects outright.
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        FakeBackend(tickets={7: {"id": 7}}).add_internal_note(ticket_id=7, body="")
+
+
+def test_fake_backend_add_internal_note_checks_emptiness_before_the_existence_lookup():
+    # Matches update_ticket/assign_ticket: the refusal does not depend on
+    # whether ticket_id is real.
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        FakeBackend().add_internal_note(ticket_id=999, body="")
+
+
+# --- solve_ticket: same PUT, status is the only thing this call can send -----
+
+
+def test_api_backend_solve_ticket_sends_status_solved_only():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7, "status": "solved"}})
+
+    b = ApiBackend(_client(handler))
+    result = b.solve_ticket(ticket_id=7)
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+    assert seen["body"] == {"ticket": {"status": "solved"}}
+    assert result == {"ticket": {"id": 7, "status": "solved"}}
+
+
+def test_api_backend_solve_ticket_returns_the_envelope_unshaped():
+    body = {"ticket": {"id": 7, "status": "solved", "custom_fields": [{"id": 1, "value": None}]}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).solve_ticket(ticket_id=7) == body
+
+
+def test_fake_backend_solve_ticket_mutates_and_returns_the_ticket():
+    fake = FakeBackend(tickets={7: {"id": 7, "status": "open"}})
+    result = fake.solve_ticket(ticket_id=7)
+    assert result == {"ticket": {"id": 7, "status": "solved"}}
+    assert fake.get_ticket(ticket_id=7)["ticket"]["status"] == "solved"
+
+
+def test_fake_backend_solve_ticket_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().solve_ticket(ticket_id=999)

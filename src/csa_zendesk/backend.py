@@ -86,6 +86,28 @@ def _refuse_an_empty_update(*, fields: dict[str, Any]) -> None:
         )
 
 
+def _refuse_an_empty_note(*, body: str, uploads: list[str] | None) -> None:
+    """Refuse an `add_internal_note` call carrying neither text nor an
+    attachment, before it reaches the wire. Same reasoning as
+    `_refuse_an_empty_update`/`_refuse_an_empty_assignment`, and shared by
+    `ApiBackend` and `FakeBackend` for the same reason.
+
+    A whitespace-only body is treated as empty (`.strip()`), not merely an
+    absent one - a body of `"   "` conveys nothing a reader could act on
+    either. `uploads=[]` and `uploads=None` are equivalent here, the same as
+    everywhere else this parameter is threaded (Task 4 attaches files by
+    passing tokens here): both are falsy, so a call with an empty list and no
+    body is refused exactly like a call with neither argument at all.
+    """
+    if not body.strip() and not uploads:
+        raise exc.EmptyWrite(
+            "add_internal_note needs a non-empty body, at least one upload, or both - a call "
+            "with neither would send an empty write to Zendesk: no content added, but it still "
+            "spends this tenant's write-rate budget and still lands in the ticket's audit log as "
+            "an update that changed nothing."
+        )
+
+
 @runtime_checkable
 class Backend(Protocol):
     """Every Zendesk operation this library reaches, unshaped.
@@ -113,6 +135,10 @@ class Backend(Protocol):
     def assign_ticket(
         self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None
     ) -> Envelope: ...
+
+    def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope: ...
+
+    def solve_ticket(self, *, ticket_id: int) -> Envelope: ...
 
 
 class ApiBackend:
@@ -222,6 +248,48 @@ class ApiBackend:
             fields["group_id"] = group_id
         return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": fields})
 
+    def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        # Same operation and path as update_ticket/assign_ticket -
+        # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
+        # /api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes.
+        #
+        # THE CONTROL THIS BLOCK EXISTS TO GET RIGHT (API-SURFACE.md §5.4f):
+        # comment.public has NO fixed default - it inherits from the ticket's
+        # first comment, and a real email-originated ticket on this tenant's
+        # own fixture was confirmed live to make that default PUBLIC. This
+        # method takes no `public` parameter at all, and never will: rather
+        # than accept one and override it, the parameter is simply absent
+        # from the signature, so there is no code path - bare Backend or
+        # policy-wrapped, well-formed caller or an instruction injected from
+        # ticket content the model is reading - through which this call can
+        # become public. `"public": False` below is unconditional.
+        #
+        # An EMPTY note - no body and no attachment - is refused here rather
+        # than sent, same reasoning as update_ticket's empty fields and
+        # assign_ticket's empty assignment: a bare-Backend caller never
+        # passes through tools.TOOLS at all (ADR-002's public seam), so the
+        # refusal belongs at this seam too, not only at the tool layer.
+        _refuse_an_empty_note(body=body, uploads=uploads)
+        comment: dict[str, Any] = {"body": body, "public": False}
+        if uploads:
+            comment["uploads"] = uploads
+        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": {"comment": comment}})
+
+    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+        # Same operation and path as update_ticket/assign_ticket -
+        # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
+        # /api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes.
+        #
+        # No `status` parameter, unlike update_ticket's denylist or
+        # assign_ticket's allowlist over two optional fields: solving is the
+        # only thing this call can do, by construction - there is nothing
+        # here for a caller to choose, so there is nothing to force or
+        # refuse. `tools.TOOLS["solve_ticket"]`'s allowlist over `ticket_id`
+        # alone (tools.py) still refuses an extra kwarg with a clean
+        # PolicyError before it would otherwise reach this method as a raw
+        # TypeError.
+        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": {"status": "solved"}})
+
 
 class FakeBackend:
     """In-memory double, faithful to the shapes observed live.
@@ -298,4 +366,32 @@ class FakeBackend:
             ticket["assignee_id"] = assignee_id
         if group_id is not None:
             ticket["group_id"] = group_id
+        return {"ticket": copy.deepcopy(ticket)}
+
+    def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        # Checked first, before the existence lookup, matching ApiBackend
+        # and both siblings above: the refusal does not depend on whether
+        # ticket_id is real.
+        #
+        # Canned, like list_comments: this fake does not maintain a
+        # per-ticket comment store, so the returned envelope is the ticket
+        # unchanged - there is no comment list here for a caller to read
+        # back and confirm is private, the same limitation list_comments
+        # already documents for itself.
+        _refuse_an_empty_note(body=body, uploads=uploads)
+        try:
+            ticket = self.tickets[ticket_id]
+        except KeyError:
+            raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
+        return {"ticket": copy.deepcopy(ticket)}
+
+    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+        # Mutates the backing store, like update_ticket/assign_ticket: a
+        # caller needs to see the ticket read back as solved on a subsequent
+        # get_ticket, the same way the real API would show it.
+        try:
+            ticket = self.tickets[ticket_id]
+        except KeyError:
+            raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
+        ticket["status"] = "solved"
         return {"ticket": copy.deepcopy(ticket)}

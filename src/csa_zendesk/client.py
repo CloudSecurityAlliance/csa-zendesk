@@ -98,3 +98,31 @@ class ZendeskClient:
         return cast(
             Envelope, self._backend.assign_ticket(ticket_id=ticket_id, assignee_id=assignee_id, group_id=group_id)
         )
+
+    def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        """Add a private, internal-only comment, as the raw upstream envelope.
+
+        Always private, never merely defaulted so: API-SURFACE.md §5.4f -
+        comment.public has no fixed default and inherits from the ticket's
+        first comment, which is PUBLIC on an email-originated ticket. This
+        method (and `Backend.add_internal_note` beneath it) takes no
+        `public` parameter at all, so there is no channel through which a
+        caller - or an instruction injected from ticket content - could make
+        this call reach the requester; `ApiBackend`/`FakeBackend` hardcode
+        `public: False` unconditionally.
+
+        `uploads` is a list of upload tokens (Task 4's `upload_file` return
+        value). An empty list and `None` behave identically - neither puts
+        an `uploads` key in the request body.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.add_internal_note(ticket_id=ticket_id, body=body, uploads=uploads))
+
+    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+        """Mark a ticket solved, as the raw upstream envelope: `{"ticket": {...}}`.
+
+        Sets `status=solved` and nothing else - `Backend.solve_ticket` takes
+        no other parameter, so there is nothing else this call could change.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.solve_ticket(ticket_id=ticket_id))

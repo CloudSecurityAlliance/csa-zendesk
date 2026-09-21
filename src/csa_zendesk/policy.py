@@ -222,6 +222,8 @@ _GATES: dict[str, Gate] = {
     "list_comments": TICKET_READ,
     "update_ticket": TICKET_WRITE,
     "assign_ticket": TICKET_WRITE,
+    "add_internal_note": TICKET_NOTE,
+    "solve_ticket": TICKET_SOLVE,
 }
 
 

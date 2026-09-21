@@ -145,11 +145,35 @@ TOOLS: dict[str, ToolSpec] = {
     "assign_ticket": ToolSpec(
         "ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("assignee_id", "group_id")
     ),
-    "add_internal_note": ToolSpec("ticket.note", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_force_public(False)),
+    # NOTE (Task 3 correction): this entry carried `check=_force_public(False)`
+    # from the Block 0c tool-slice carry-over, which assumed a `comment` dict
+    # argument. `Backend.add_internal_note`'s actual signature (this task) is
+    # flat - `ticket_id`, `body`, `uploads` - with NO `public` parameter at
+    # all: `policy._dispatch` runs `spec.check(kwargs)` against the SAME
+    # kwargs it then forwards to the real backend
+    # (`getattr(backend, name)(**kwargs)`), so a check written for a `comment`
+    # dict would reject every legitimate call outright (`_only("comment")`
+    # sees `body`/`uploads` as unrecognised extras) - verified live against
+    # this dispatch before choosing `_only("body", "uploads")` instead. The
+    # safety property this block exists for - a note can never become public -
+    # is structural here, not enforced by this check: there is no `public`
+    # argument for a caller, or an instruction injected from ticket content
+    # the model is reading, to set in the first place. `_force_public` is
+    # unchanged and stays in use by `reply_publicly` below, whose future
+    # Backend method is expected to take the `comment` shape this helper was
+    # written for.
+    "add_internal_note": ToolSpec("ticket.note", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("body", "uploads")),
     "reply_publicly": ToolSpec(
         "ticket.reply", reach=True, subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_force_public(True)
     ),
-    "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("solved")),
+    # NOTE (Task 3 correction): same reasoning as add_internal_note just
+    # above. `Backend.solve_ticket(*, ticket_id: int)` takes no `status`
+    # parameter - solving is the only thing this call can do, by
+    # construction - so `_status("solved")` (which requires and validates a
+    # `status` key) would reject every real call. `_status` is unchanged and
+    # stays in use by `close_ticket` below, whose Backend method does not
+    # exist yet.
+    "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only()),
     "close_ticket": ToolSpec("ticket.close", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("closed")),
     # ticket.merge, not ticket.close (fix wave C1): POST .../merge accepts
     # source_comment_is_public/target_comment_is_public, the same reach mechanism

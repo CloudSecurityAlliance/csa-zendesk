@@ -75,10 +75,18 @@ def test_update_ticket_permits_a_field_edit():
     tools.TOOLS["update_ticket"].check({"ticket_id": 1, "priority": "high"})
 
 
-def test_add_internal_note_forces_public_false():
-    kwargs = {"ticket_id": 1, "comment": {"body": "note", "public": True}}
-    tools.TOOLS["add_internal_note"].check(kwargs)
-    assert kwargs["comment"]["public"] is False  # forced, not refused
+def test_add_internal_note_permits_only_body_and_uploads():
+    # THE control this block exists to get right (API-SURFACE §5.4f):
+    # Backend.add_internal_note has no `public` parameter at all - there is
+    # nothing to force here, because there is nothing a caller (or an
+    # instruction injected from ticket content) could set in the first
+    # place. The allowlist instead refuses an attempt to smuggle one in as
+    # an extra kwarg, with a clean PolicyError rather than a raw TypeError
+    # three frames later inside ApiBackend.
+    tools.TOOLS["add_internal_note"].check({"ticket_id": 1, "body": "note", "uploads": ["tok1"]})
+    tools.TOOLS["add_internal_note"].check({"ticket_id": 1, "body": "note"})
+    with pytest.raises(exc.PolicyError, match="public"):
+        tools.TOOLS["add_internal_note"].check({"ticket_id": 1, "body": "note", "public": True})
 
 
 def test_reply_publicly_forces_public_true_and_is_flagged_for_reach():
@@ -138,19 +146,20 @@ def test_create_ticket_permits_no_comment_at_all():
 # --- coverage: the remaining check() branches ---------------------------------
 
 
-def test_add_internal_note_requires_a_comment_object():
-    with pytest.raises(exc.PolicyError, match="comment"):
-        tools.TOOLS["add_internal_note"].check({"ticket_id": 1})
-
-
 def test_reply_publicly_requires_a_comment_object():
     with pytest.raises(exc.PolicyError, match="comment"):
         tools.TOOLS["reply_publicly"].check({"ticket_id": 1})
 
 
-def test_solve_ticket_sets_status_solved_only():
-    tools.TOOLS["solve_ticket"].check({"ticket_id": 1, "status": "solved"})
-    with pytest.raises(exc.PolicyError, match="solved"):
+def test_solve_ticket_permits_only_ticket_id():
+    # Backend.solve_ticket(*, ticket_id: int) has no `status` parameter -
+    # solving is the only thing this call can do, by construction
+    # (ApiBackend always sends status="solved"; there is no caller-reachable
+    # channel to send anything else). The allowlist still refuses an extra
+    # kwarg cleanly rather than letting it reach ApiBackend as a raw
+    # TypeError.
+    tools.TOOLS["solve_ticket"].check({"ticket_id": 1})
+    with pytest.raises(exc.PolicyError, match="status"):
         tools.TOOLS["solve_ticket"].check({"ticket_id": 1, "status": "closed"})
 
 

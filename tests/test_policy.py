@@ -654,3 +654,82 @@ def test_assign_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(
     monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
     pb = wrapped(tickets={44821: {"id": 44821}})
     assert pb.assign_ticket(ticket_id=44821, group_id=9) == {"ticket": {"id": 44821, "group_id": 9}}
+
+
+# --- add_internal_note / solve_ticket: THE control this block exists to get
+# right (public forced by construction, never by input) - see backend.py
+
+
+def test_a_policy_without_ticket_note_refuses_add_internal_note_before_reaching_the_backend():
+    class ExplodingNote(FakeBackend):
+        def add_internal_note(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingNote(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.note"):
+        pb.add_internal_note(ticket_id=1, body="hi")
+
+
+def test_a_policy_without_ticket_solve_refuses_solve_ticket_before_reaching_the_backend():
+    class ExplodingSolve(FakeBackend):
+        def solve_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingSolve(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.solve"):
+        pb.solve_ticket(ticket_id=1)
+
+
+def test_the_default_profile_can_add_an_internal_note():
+    pb = wrapped(tickets={1: {"id": 1}})
+    assert pb.add_internal_note(ticket_id=1, body="internal") == {"ticket": {"id": 1}}
+
+
+def test_the_default_profile_cannot_solve_a_ticket():
+    # TICKET_SOLVE is not in the reversible-only default profile (it is an
+    # on-ramp to a terminal state) - "agent" is the profile that carries it.
+    pb = wrapped(tickets={1: {"id": 1}})
+    with pytest.raises(exc.PolicyError, match=pol.TICKET_SOLVE):
+        pb.solve_ticket(ticket_id=1)
+
+
+def test_the_agent_profile_can_solve_a_ticket():
+    pb = wrapped(profile="agent", tickets={1: {"id": 1, "status": "open"}})
+    assert pb.solve_ticket(ticket_id=1) == {"ticket": {"id": 1, "status": "solved"}}
+
+
+def test_add_internal_note_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.add_internal_note(ticket_id=99999, body="hi")
+
+
+def test_add_internal_note_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.add_internal_note(ticket_id=44821, body="hi") == {"ticket": {"id": 44821}}
+
+
+def test_add_internal_note_through_the_real_dispatch_cannot_be_made_public(monkeypatch):
+    # The end-to-end proof of this block's central claim: even through the
+    # real seam, with an allowlisted subject and the capability granted, a
+    # caller attempting to pass public=True gets a clean PolicyError, not a
+    # public note.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    with pytest.raises(exc.PolicyError, match="public"):
+        pb.add_internal_note(ticket_id=44821, body="hi", public=True)
+
+
+def test_solve_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(profile="agent", tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.solve_ticket(ticket_id=99999)
+
+
+def test_solve_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(profile="agent", tickets={44821: {"id": 44821, "status": "open"}})
+    assert pb.solve_ticket(ticket_id=44821) == {"ticket": {"id": 44821, "status": "solved"}}
