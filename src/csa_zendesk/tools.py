@@ -65,8 +65,31 @@ class ToolSpec:
         against the call's raw kwargs - the seam `policy._dispatch` calls,
         so every gated call's constraint runs against the payload it
         constrains, wherever `body_key` says that payload lives.
+
+        A `body_key` payload that is not a mapping is refused here, before
+        `check` ever sees it: `_forbid`'s `k in kwargs` and `_only`'s
+        `set(kwargs)` both work on ANY iterable, not just a `dict` - a
+        malformed call like `update_ticket(ticket_id=X, fields="oops")`
+        would otherwise have `"comment" in "oops"` do silent substring
+        containment (False, here, but for the wrong reason) instead of the
+        key-membership test the constraint is written to mean, and the
+        malformed `fields` would then reach `ApiBackend` unexamined. Refusing
+        it here, with a typed error naming what went wrong, is the same
+        pre-flight-refusal shape as `_refuse_an_empty_update`/
+        `_refuse_an_empty_note` in `backend.py`: a clean `PolicyError` at the
+        seam, not whatever the backend throws three layers later.
         """
-        self.check(kwargs if self.body_key is None else kwargs.get(self.body_key, {}))
+        if self.body_key is None:
+            self.check(kwargs)
+            return
+        body = kwargs.get(self.body_key, {})
+        if not isinstance(body, dict):
+            raise exc.PolicyError(
+                f"this tool's {self.body_key!r} argument must be a mapping (dict); got "
+                f"{type(body).__name__}. A non-mapping body cannot be checked for the keys this "
+                f"constraint forbids or requires."
+            )
+        self.check(body)
 
 
 def _forbid(*keys: str) -> Callable[[dict[str, Any]], None]:

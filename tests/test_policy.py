@@ -699,6 +699,21 @@ def test_update_ticket_through_the_real_dispatch_refuses_each_reach_side_door_ne
         pb.update_ticket(ticket_id=44821, fields={key: value})
 
 
+def test_update_ticket_through_the_real_dispatch_refuses_a_non_mapping_fields(monkeypatch):
+    # Re-review finding: a malformed `fields` (not a dict at all) must be
+    # refused at the seam with a clean PolicyError, not reach ApiBackend and
+    # fail however a string/list/int happens to fail three layers down.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfReached(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingIfReached(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match="mapping"):
+        pb.update_ticket(ticket_id=44821, fields="oops")
+
+
 def test_assign_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
     monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
     pb = wrapped(tickets={99999: {"id": 99999}})

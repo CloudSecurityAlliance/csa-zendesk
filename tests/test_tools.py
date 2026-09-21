@@ -39,6 +39,59 @@ def test_every_gated_backend_method_has_a_tool_spec():
     )
 
 
+def test_body_key_matches_the_real_backend_signature_for_every_live_constrained_tool():
+    # THE GUARD for the update_ticket incident, not just its regression test:
+    # a ToolSpec whose `check` is not the default no-op, and whose Backend
+    # method already exists, is introspected against that method's REAL
+    # signature - `body_key` must name the one parameter holding a nested
+    # mapping, or stay None when every parameter (besides `ticket_id`) is
+    # scalar. Without this, `run_check` silently degenerates to
+    # `check(kwargs)` for any tool that leaves `body_key=None` - correct for
+    # `assign_ticket`, and exactly the update_ticket bug for a tool that
+    # actually nests its payload - and nothing distinguishes the two short of
+    # a human reading both the ToolSpec and the Backend method side by side.
+    #
+    # Skipped by ABSENCE of a Backend method, not a hand-written tool-name
+    # list: `create_ticket`, `reply_publicly`, `close_ticket` and
+    # `merge_tickets` carry a real constraint today but no Backend method -
+    # a literal exemption list would stay silent exactly when one of those
+    # four is implemented, which is the moment this guard is supposed to
+    # start working for it. `hasattr(Backend, name)` is the absence test:
+    # true for every name the Protocol actually declares, false for a
+    # tools.TOOLS entry that is still speculative.
+    import typing
+
+    from csa_zendesk.backend import Backend
+
+    default_check = tools.ToolSpec.__dataclass_fields__["check"].default
+    checked_any = False
+    for name, spec in tools.TOOLS.items():
+        if spec.check is default_check:
+            continue  # no constraint declared - nothing to verify body_key against
+        if not hasattr(Backend, name):
+            continue  # not implemented yet - see docstring
+        checked_any = True
+        hints = typing.get_type_hints(getattr(Backend, name))
+        nested = [
+            pname
+            for pname, hint in hints.items()
+            if pname not in ("ticket_id", "return") and typing.get_origin(hint) is dict
+        ]
+        assert len(nested) <= 1, (
+            f"{name}: Backend.{name} takes more than one nested-mapping parameter {nested} - "
+            f"body_key cannot name a single one; this needs a human decision, not this guard's."
+        )
+        expected = nested[0] if nested else None
+        assert spec.body_key == expected, (
+            f"{name}: Backend.{name}'s real signature says its constrained payload lives at "
+            f"body_key={expected!r}, but tools.TOOLS[{name!r}].body_key is {spec.body_key!r} - "
+            f"`check` would run against the wrong dict here, the exact update_ticket incident."
+        )
+    # A vacuous loop (every branch `continue`s) would pass by construction and
+    # prove nothing - guard the guard itself.
+    assert checked_any, "no live, constrained tool was found to check - this guard has gone vacuous"
+
+
 def test_the_csv_and_tools_table_agree_on_which_tools_reach():
     # Fix wave item 1: `test_every_tool_in_the_table_exists_in_code` above
     # compares tool NAMES only - it would stay green if the table said
@@ -134,6 +187,27 @@ def test_run_check_is_a_no_op_wrapper_when_body_key_is_unset():
     tools.TOOLS["assign_ticket"].run_check({"ticket_id": 1, "assignee_id": 7})
     with pytest.raises(exc.PolicyError, match="priority"):
         tools.TOOLS["assign_ticket"].run_check({"ticket_id": 1, "priority": "high"})
+
+
+@pytest.mark.parametrize("bogus_fields", ["oops", ["comment"], 1, None])
+def test_run_check_refuses_a_non_mapping_body_key_payload(bogus_fields):
+    # Re-review finding: _forbid's `k in kwargs` and _only's `set(kwargs)`
+    # both work on ANY iterable, not just a dict - "comment" in "oops" is a
+    # silent, meaningless substring test rather than the key-membership test
+    # the constraint means, and a non-iterable body (1, None) would raise an
+    # unrelated TypeError instead of a clean refusal. update_ticket(ticket_id=X,
+    # fields="oops") must be refused here, before `check` ever runs against it.
+    with pytest.raises(exc.PolicyError, match="mapping"):
+        tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": bogus_fields})
+
+
+def test_run_check_permits_a_missing_body_key_payload_as_empty():
+    # A body_key naming a key absent from kwargs entirely reads as {} (an
+    # empty mapping), not a malformed one - update_ticket's `fields` is a
+    # required Backend parameter, so this only arises from a raw dispatch
+    # call missing it, which the final backend call itself will refuse with
+    # its own TypeError; run_check does not need to anticipate that here.
+    tools.TOOLS["update_ticket"].run_check({"ticket_id": 1})
 
 
 def test_add_internal_note_permits_only_body_and_uploads():
