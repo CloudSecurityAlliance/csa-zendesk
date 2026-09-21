@@ -1,4 +1,5 @@
 import inspect
+import json
 from typing import Any
 
 import httpx
@@ -45,6 +46,12 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
             return {}
 
         def list_comments(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def update_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def assign_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
     assert isinstance(NameOnlyImpostor(), Backend)
@@ -369,3 +376,128 @@ def test_fake_backend_raises_not_found_for_an_unknown_ticket_id():
     # silently read as "a ticket with zero comments".
     with pytest.raises(exc.NotFound):
         FakeBackend().list_comments(ticket_id=999)
+
+
+# --- update_ticket: PUT /tickets/{id}, constrained to a field edit at the seam
+
+
+def test_api_backend_update_ticket_uses_the_documented_path_and_wraps_the_body():
+    # Path and operation from analysis/operation-inventory.csv row: ticketing,
+    # Tickets,PUT,/api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes
+    # - no .json suffix, matching get_ticket. Confirmed against
+    # specs/zendesk-support-oas.yaml (operationId UpdateTicket).
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7, "priority": "high"}})
+
+    b = ApiBackend(_client(handler))
+    result = b.update_ticket(ticket_id=7, fields={"priority": "high"})
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+    assert seen["body"] == {"ticket": {"priority": "high"}}
+    assert result == {"ticket": {"id": 7, "priority": "high"}}
+
+
+def test_api_backend_update_ticket_returns_the_envelope_unshaped():
+    # ADR-002: no mapping, renaming or pruning.
+    body = {"ticket": {"id": 7, "priority": "high", "custom_fields": [{"id": 1, "value": None}]}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).update_ticket(ticket_id=7, fields={"priority": "high"}) == body
+
+
+def test_fake_backend_update_ticket_mutates_and_returns_the_ticket():
+    fake = FakeBackend(tickets={7: {"id": 7, "priority": "low"}})
+    result = fake.update_ticket(ticket_id=7, fields={"priority": "high"})
+    assert result == {"ticket": {"id": 7, "priority": "high"}}
+    # The mutation is visible on a subsequent read, the same as the real API.
+    assert fake.get_ticket(ticket_id=7)["ticket"]["priority"] == "high"
+
+
+def test_fake_backend_update_ticket_does_not_leak_the_caller_fields_dict_by_reference():
+    fake = FakeBackend(tickets={7: {"id": 7}})
+    fields = {"custom_fields": [{"id": 1, "value": "x"}]}
+    fake.update_ticket(ticket_id=7, fields=fields)
+    fields["custom_fields"][0]["value"] = "tampered"
+    assert fake.get_ticket(ticket_id=7)["ticket"]["custom_fields"] == [{"id": 1, "value": "x"}]
+
+
+def test_fake_backend_update_ticket_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().update_ticket(ticket_id=999, fields={"priority": "high"})
+
+
+# --- assign_ticket: same PUT, bucket-pure by allowlist rather than by denylist
+
+
+def test_api_backend_assign_ticket_sends_only_the_provided_fields():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7, "assignee_id": 42}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7, assignee_id=42)
+    assert seen["body"] == {"ticket": {"assignee_id": 42}}
+
+
+def test_api_backend_assign_ticket_sends_both_fields_when_both_are_given():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7, assignee_id=42, group_id=9)
+    assert seen["body"] == {"ticket": {"assignee_id": 42, "group_id": 9}}
+
+
+def test_api_backend_assign_ticket_sends_an_empty_body_when_neither_is_given():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7)
+    assert seen["body"] == {"ticket": {}}
+
+
+def test_api_backend_assign_ticket_uses_the_documented_path():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7, group_id=9)
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+
+
+def test_fake_backend_assign_ticket_sets_the_group_only():
+    fake = FakeBackend(tickets={7: {"id": 7}})
+    result = fake.assign_ticket(ticket_id=7, group_id=9)
+    assert result == {"ticket": {"id": 7, "group_id": 9}}
+
+
+def test_fake_backend_assign_ticket_sets_both_fields():
+    fake = FakeBackend(tickets={7: {"id": 7}})
+    result = fake.assign_ticket(ticket_id=7, assignee_id=42, group_id=9)
+    assert result == {"ticket": {"id": 7, "assignee_id": 42, "group_id": 9}}
+
+
+def test_fake_backend_assign_ticket_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().assign_ticket(ticket_id=999, assignee_id=42)

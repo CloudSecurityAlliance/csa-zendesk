@@ -7,7 +7,7 @@ the model-facing contract lives.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from .backend import Backend, Envelope
 from .policy import Policy, PolicyBackend
@@ -73,3 +73,28 @@ class ZendeskClient:
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.list_comments(ticket_id=ticket_id))
+
+    def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
+        """Edit ticket fields, as the raw upstream envelope: `{"ticket": {...}}`.
+
+        Never a comment and never a status change - `PUT /tickets/{id}` is
+        five impact levels in one call (ADR-016), and it is the tool/policy
+        constraint (`tools.TOOLS["update_ticket"]`'s `_forbid("comment",
+        "status", ...)`), enforced at the `PolicyBackend` seam, that keeps
+        this call inside the field-edit bucket - not this method, which just
+        forwards `fields` unshaped.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.update_ticket(ticket_id=ticket_id, fields=fields))
+
+    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+        """Reassign a ticket's owner and/or group, as the raw upstream envelope.
+
+        Same operation as `update_ticket` (`PUT /tickets/{id}`), but bucket-pure
+        by construction: `tools.TOOLS["assign_ticket"]`'s `_only("assignee_id",
+        "group_id")` is an allowlist, so no other field can reach this call.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(
+            Envelope, self._backend.assign_ticket(ticket_id=ticket_id, assignee_id=assignee_id, group_id=group_id)
+        )

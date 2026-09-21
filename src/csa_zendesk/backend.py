@@ -57,10 +57,16 @@ def _refuse_past_search_ceiling(*, page: int, per_page: int) -> None:
 class Backend(Protocol):
     """Every Zendesk operation this library reaches, unshaped.
 
-    Adding a method here obliges three things: an `ApiBackend` implementation, a
-    `FakeBackend` implementation, and a `policy._GATES` entry. The gate table
-    fails closed, so a missing entry turns the method off rather than leaving it
-    ungoverned.
+    Adding a method here obliges FOUR things: an `ApiBackend` implementation, a
+    `FakeBackend` implementation, a `policy._GATES` entry, and a `tools.TOOLS`
+    entry. The gate table fails closed, so a missing `_GATES` entry turns the
+    method off rather than leaving it ungoverned - but a `_GATES` entry with no
+    `tools.TOOLS` entry behind it is its own hole: `list_comments` once shipped
+    gated on `ticket.read` with no `ToolSpec`, so `assert_subject_permitted`'s
+    `tools.TOOLS.get(tool)` returned `None` and the read allowlist was
+    decorative for that one method (`tests/test_tools.py::
+    test_every_gated_backend_method_has_a_tool_spec` is the cross-check that
+    now catches a repeat).
     """
 
     def get_ticket(self, *, ticket_id: int) -> Envelope: ...
@@ -68,6 +74,12 @@ class Backend(Protocol):
     def search_tickets(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope: ...
 
     def list_comments(self, *, ticket_id: int) -> Envelope: ...
+
+    def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope: ...
+
+    def assign_ticket(
+        self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None
+    ) -> Envelope: ...
 
 
 class ApiBackend:
@@ -127,6 +139,41 @@ class ApiBackend:
         # reading a long ticket must not assume the result is complete.
         return self._http.get(f"/api/v2/tickets/{ticket_id}/comments")
 
+    def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
+        # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
+        # /api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes - no
+        # .json suffix, matching get_ticket; confirmed against
+        # specs/zendesk-support-oas.yaml (operationId UpdateTicket). Only the
+        # unrelated Countries family carries a .json suffix anywhere in the
+        # inventory - get_ticket's own comment already records that the
+        # suffix does not generalise in either direction.
+        #
+        # This is the operation ADR-016 was written about: PUT here is five
+        # impact levels in one call (field edit, internal note, public reply,
+        # solve, close), decided entirely by the request body. What keeps
+        # THIS call inside the field-edit bucket is tools.TOOLS["update_ticket"]'s
+        # `_forbid("comment", "status", ...)` constraint, enforced at the
+        # policy/tool seam (policy._dispatch) before this method is ever
+        # reached - this method itself sends whatever `fields` it is given,
+        # unshaped, per ADR-002.
+        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": fields})
+
+    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+        # Same operation and path as update_ticket - analysis/operation-inventory.csv
+        # row: ticketing,Tickets,PUT,/api/v2/tickets/{ticket_id},UpdateTicket,
+        # Update Ticket,,,yes. Bucket-pure by construction rather than by
+        # enumeration (analysis/SLICE-FINDINGS.md): tools.TOOLS["assign_ticket"]'s
+        # `_only("assignee_id", "group_id")` is an allowlist, so this method
+        # only ever needs to build a body from those two keys - there is no
+        # forbidden-key surface here that could fall behind as the OAS grows,
+        # unlike update_ticket's denylist.
+        fields: dict[str, Any] = {}
+        if assignee_id is not None:
+            fields["assignee_id"] = assignee_id
+        if group_id is not None:
+            fields["group_id"] = group_id
+        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": fields})
+
 
 class FakeBackend:
     """In-memory double, faithful to the shapes observed live.
@@ -169,3 +216,28 @@ class FakeBackend:
         if ticket_id not in self.tickets:
             raise exc.NotFound(f"no such record (ticket {ticket_id})")
         return {"comments": []}
+
+    def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
+        # Mutates the backing store, unlike search_tickets/list_comments'
+        # canned replies - a caller of update_ticket needs to see its own
+        # write reflected on the next get_ticket, the same way the real API
+        # would show it. Still deep-copies both in and out (this class's own
+        # docstring), so neither the caller's `fields` dict nor the returned
+        # envelope alias the fixture's backing store.
+        try:
+            ticket = self.tickets[ticket_id]
+        except KeyError:
+            raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
+        ticket.update(copy.deepcopy(fields))
+        return {"ticket": copy.deepcopy(ticket)}
+
+    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+        try:
+            ticket = self.tickets[ticket_id]
+        except KeyError:
+            raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
+        if assignee_id is not None:
+            ticket["assignee_id"] = assignee_id
+        if group_id is not None:
+            ticket["group_id"] = group_id
+        return {"ticket": copy.deepcopy(ticket)}

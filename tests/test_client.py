@@ -61,3 +61,25 @@ def test_a_list_comments_not_found_reaches_the_caller_through_the_client():
     c = ZendeskClient(FakeBackend())
     with pytest.raises(exc.NotFound):
         c.list_comments(ticket_id=999)
+
+
+def test_the_client_passes_update_ticket_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4, "priority": "low"}}))
+    assert c.update_ticket(ticket_id=4, fields={"priority": "high"}) == {"ticket": {"id": 4, "priority": "high"}}
+
+
+def test_an_update_ticket_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.update_ticket(ticket_id=999, fields={"priority": "high"})
+
+
+def test_the_client_passes_assign_ticket_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4}}))
+    assert c.assign_ticket(ticket_id=4, assignee_id=7) == {"ticket": {"id": 4, "assignee_id": 7}}
+
+
+def test_an_assign_ticket_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.assign_ticket(ticket_id=999, group_id=9)

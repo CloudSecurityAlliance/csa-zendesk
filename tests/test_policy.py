@@ -110,7 +110,8 @@ def test_an_unknown_profile_is_a_loud_error_listing_the_real_ones():
 
 def test_a_callable_gates_kwargs_reach_it_through_the_wrapper(monkeypatch):
     # ADR-003: one PUT, several authorities - update_ticket itself arrives in
-    # Block 2, but the wiring this depends on must be proven now. A test that
+    # Block 1 (this task's own gate is a constant, not yet callable), but the
+    # wiring a future callable gate would depend on must be proven now. A test that
     # only calls `gate(...)` directly (as an earlier version of this test did)
     # asserts nothing about PolicyBackend: it would still pass with _dispatch
     # deleted, since nothing routes the call's actual kwargs through a gate.
@@ -589,3 +590,67 @@ def test_a_tools_check_is_enforced_by_dispatch_itself_not_only_unit_tested(monke
     assert pb.fake_constrained(subject="x") == {"ok": True, "subject": "x"}
     with pytest.raises(exc.PolicyError, match="priority"):
         pb.fake_constrained(priority="high")
+
+
+# --- update_ticket / assign_ticket: the first two writes, gated on ticket.write
+
+
+def test_a_policy_without_ticket_write_refuses_update_ticket_before_reaching_the_backend():
+    class ExplodingUpdate(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingUpdate(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.write"):
+        pb.update_ticket(ticket_id=1, fields={"priority": "high"})
+
+
+def test_a_policy_without_ticket_write_refuses_assign_ticket_before_reaching_the_backend():
+    class ExplodingAssign(FakeBackend):
+        def assign_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingAssign(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.write"):
+        pb.assign_ticket(ticket_id=1, assignee_id=7)
+
+
+def test_the_default_profile_can_update_a_ticket():
+    pb = wrapped(tickets={1: {"id": 1, "priority": "low"}})
+    assert pb.update_ticket(ticket_id=1, fields={"priority": "high"}) == {"ticket": {"id": 1, "priority": "high"}}
+
+
+def test_the_default_profile_can_assign_a_ticket():
+    pb = wrapped(tickets={1: {"id": 1}})
+    assert pb.assign_ticket(ticket_id=1, assignee_id=7) == {"ticket": {"id": 1, "assignee_id": 7}}
+
+
+def test_update_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    # Sibling of test_get_ticket_through_the_real_dispatch_is_refused_outside_
+    # the_read_allowlist, on the write allowlist this time - update_ticket is
+    # the first tool this repo has ever scoped by CSA_ZD_ALLOWLIST_WRITE.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.update_ticket(ticket_id=99999, fields={"priority": "high"})
+
+
+def test_update_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.update_ticket(ticket_id=44821, fields={"priority": "high"}) == {
+        "ticket": {"id": 44821, "priority": "high"}
+    }
+
+
+def test_assign_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.assign_ticket(ticket_id=99999, assignee_id=7)
+
+
+def test_assign_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.assign_ticket(ticket_id=44821, group_id=9) == {"ticket": {"id": 44821, "group_id": 9}}
