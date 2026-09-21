@@ -643,6 +643,62 @@ def test_update_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(
     }
 
 
+# --- CRITICAL regression: update_ticket must refuse a comment/status/reach-
+# --- side-door NESTED INSIDE `fields`, not only one passed as an extra
+# --- top-level kwarg. `policy._dispatch` calls `spec.run_check(kwargs)` with
+# --- `kwargs == {"ticket_id": ..., "fields": {...}}` - a check that only
+# --- looked at `kwargs` itself would see "comment" nested inside `fields` as
+# --- nothing at all, and this exact call would have reached Zendesk as a
+# --- public reply through a tool gated only on ticket.write, carrying no
+# --- reach=True.
+
+
+def test_update_ticket_through_the_real_dispatch_refuses_a_comment_nested_in_fields(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfCommented(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached - this would have emailed the requester")
+
+    pb = pol.PolicyBackend(ExplodingIfCommented(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match="comment"):
+        pb.update_ticket(ticket_id=44821, fields={"comment": {"body": "surprise!", "public": True}})
+
+
+def test_update_ticket_through_the_real_dispatch_refuses_a_status_nested_in_fields(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfSolved(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingIfSolved(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match="status"):
+        pb.update_ticket(ticket_id=44821, fields={"status": "solved"})
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("custom_status_id", 321),
+        ("additional_collaborators", ["a@example.com"]),
+        ("email_ccs", [{"user_email": "a@example.com", "action": "put"}]),
+        ("followers", [{"user_email": "a@example.com", "action": "put"}]),
+        ("collaborator_ids", [123]),
+    ],
+)
+def test_update_ticket_through_the_real_dispatch_refuses_each_reach_side_door_nested_in_fields(monkeypatch, key, value):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfSideDoored(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingIfSideDoored(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match=key):
+        pb.update_ticket(ticket_id=44821, fields={key: value})
+
+
 def test_assign_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
     monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
     pb = wrapped(tickets={99999: {"id": 99999}})

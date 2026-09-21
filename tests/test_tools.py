@@ -60,8 +60,11 @@ def test_the_csv_and_tools_table_agree_on_which_tools_reach():
 
 
 def test_update_ticket_refuses_a_comment():
-    # The whole of ADR-016 in one assertion: the constraint is the control. A
-    # tool that merely documents "I will not comment" is not a control.
+    # Unit test of the underlying _forbid callable in isolation - not the
+    # shape update_ticket is actually called with (see the run_check tests
+    # below for that). The whole of ADR-016 in one assertion: the constraint
+    # is the control. A tool that merely documents "I will not comment" is
+    # not a control.
     with pytest.raises(exc.PolicyError, match="comment"):
         tools.TOOLS["update_ticket"].check({"ticket_id": 1, "comment": {"body": "hi"}})
 
@@ -73,6 +76,64 @@ def test_update_ticket_refuses_a_status():
 
 def test_update_ticket_permits_a_field_edit():
     tools.TOOLS["update_ticket"].check({"ticket_id": 1, "priority": "high"})
+
+
+# --- regression: update_ticket's constraint must inspect `fields`, the level
+# --- its payload actually arrives at, not the call's own top-level kwargs.
+# --- `Backend.update_ticket(*, ticket_id, fields)` wraps its editable content
+# --- in `fields`; `policy._dispatch` calls `spec.run_check(kwargs)` with
+# --- `kwargs == {"ticket_id": ..., "fields": {...}}`, so a check that only
+# --- ever looked at `kwargs` itself would see "comment"/"status" nested
+# --- inside `fields` as nothing at all. This is the exact bypass:
+# --- `update_ticket(ticket_id=159143, fields={"comment": {"public": True}})`
+# --- would otherwise reach Zendesk as a public reply through a tool gated
+# --- only on ticket.write, carrying no reach=True.
+
+
+def test_update_ticket_body_key_names_fields():
+    assert tools.TOOLS["update_ticket"].body_key == "fields"
+
+
+def test_update_ticket_run_check_refuses_a_comment_nested_in_fields():
+    with pytest.raises(exc.PolicyError, match="comment"):
+        tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {"comment": {"body": "hi", "public": True}}})
+
+
+def test_update_ticket_run_check_refuses_a_status_nested_in_fields():
+    with pytest.raises(exc.PolicyError, match="status"):
+        tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {"status": "solved"}})
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("custom_status_id", 321),
+        ("additional_collaborators", ["a@example.com"]),
+        ("email_ccs", [{"user_email": "a@example.com", "action": "put"}]),
+        ("followers", [{"user_email": "a@example.com", "action": "put"}]),
+        ("collaborator_ids", [123]),
+    ],
+)
+def test_update_ticket_run_check_refuses_each_reach_side_door_nested_in_fields(key, value):
+    # These four exist precisely because they are side doors to reach - a
+    # bypass around the nesting is the same defect wearing a different name.
+    with pytest.raises(exc.PolicyError, match=key):
+        tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {key: value}})
+
+
+def test_update_ticket_run_check_permits_an_ordinary_field_edit():
+    tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {"priority": "high"}})
+
+
+def test_run_check_is_a_no_op_wrapper_when_body_key_is_unset():
+    # Every other live tool (assign_ticket, add_internal_note, solve_ticket)
+    # takes its editable content as top-level kwargs, so its body_key is
+    # None and run_check must behave exactly like calling check(kwargs)
+    # directly - proven here rather than assumed.
+    assert tools.TOOLS["assign_ticket"].body_key is None
+    tools.TOOLS["assign_ticket"].run_check({"ticket_id": 1, "assignee_id": 7})
+    with pytest.raises(exc.PolicyError, match="priority"):
+        tools.TOOLS["assign_ticket"].run_check({"ticket_id": 1, "priority": "high"})
 
 
 def test_add_internal_note_permits_only_body_and_uploads():

@@ -386,9 +386,17 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     # is the thing that must refuse the call. `spec` is None for any dispatched
     # method the tool table says nothing about (there is no obligation for
     # every Backend method to be a tool), which is a no-op, not a refusal.
+    #
+    # `run_check`, not `check` directly: `run_check` looks at `spec.body_key`
+    # to find the payload THIS tool actually constrains before handing it to
+    # `check` - for most tools that payload is the kwargs themselves, but
+    # `update_ticket` wraps its editable fields in a `fields` dict, and a
+    # constraint that inspected the call's raw kwargs there would check
+    # `{"ticket_id", "fields"}` forever and never see what's inside `fields`.
+    # See `ToolSpec.body_key`'s docstring for the incident this closes.
     spec = tools.TOOLS.get(name)
     if spec is not None:
-        spec.check(kwargs)
+        spec.run_check(kwargs)
     assert_subject_permitted(name, kwargs)
     # REACH_CAPABILITIES is CONSUMED here, not hand-listed: whichever
     # capabilities this specific call required (a callable gate's kwargs-

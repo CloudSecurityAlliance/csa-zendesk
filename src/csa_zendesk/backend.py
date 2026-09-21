@@ -216,6 +216,16 @@ class ApiBackend:
         # reached - this method itself sends whatever `fields` it is given,
         # unshaped, per ADR-002.
         #
+        # CORRECTED (post-Task-3 review): that constraint must run against
+        # THIS `fields` dict, not against the call's own top-level kwargs
+        # (`{"ticket_id", "fields"}`) - the two are different levels of the
+        # same call, and `_forbid` was originally wired to the wrong one, so
+        # `update_ticket(ticket_id=X, fields={"comment": {"public": True}})`
+        # sailed through unchecked and reached Zendesk as a public reply.
+        # `tools.ToolSpec.body_key="fields"` on this tool's entry is what
+        # makes `policy._dispatch` extract `fields` before calling `check` -
+        # see that field's docstring for the full incident.
+        #
         # An EMPTY `fields`, though, is refused here rather than sent:
         # `_forbid(...)` says nothing about `fields` being empty (a denylist
         # only names keys it excludes), and a bare-Backend caller never
@@ -270,6 +280,13 @@ class ApiBackend:
         # passes through tools.TOOLS at all (ADR-002's public seam), so the
         # refusal belongs at this seam too, not only at the tool layer.
         _refuse_an_empty_note(body=body, uploads=uploads)
+        # LOAD-BEARING: `"public": False` is a literal, not derived from any
+        # parameter - this line IS the control (tools.TOOLS["add_internal_note"]
+        # only allowlists ticket_id/body/uploads; it has nothing to force,
+        # because there is no `public` argument anywhere upstream of this
+        # call). If this is ever rewritten to build `comment` from a mapping
+        # that could carry a caller-supplied "public" key, that rewrite
+        # removes the only thing keeping this method's notes internal.
         comment: dict[str, Any] = {"body": body, "public": False}
         if uploads:
             comment["uploads"] = uploads

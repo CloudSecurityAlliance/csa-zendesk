@@ -26,16 +26,47 @@ class ToolSpec:
     #: act on no particular subject (a search, or ticket creation - there is no
     #: existing ticket to scope against yet).
     subject_var: str | None = None
+    #: Names the kwarg that carries this tool's REQUEST BODY, when the payload
+    #: `check` must constrain is nested under one - `update_ticket`'s `fields`
+    #: is the one live example (`Backend.update_ticket(*, ticket_id, fields)`
+    #: wraps an arbitrary field-edit mapping in a single dict, unlike
+    #: `assign_ticket`'s two named, top-level parameters). `None` (the
+    #: default) means the call's own kwargs ARE the body - true for every
+    #: tool whose Backend method takes its editable content as individual
+    #: top-level parameters (`assign_ticket`, `add_internal_note`,
+    #: `solve_ticket`, and every not-yet-implemented tool below).
+    #:
+    #: THIS FIELD EXISTS BECAUSE GETTING IT WRONG IS INVISIBLE: `update_ticket`
+    #: shipped with `check=_forbid("comment", "status", ...)` inspecting the
+    #: call's top-level kwargs (`{"ticket_id", "fields"}`) while its actual
+    #: constrained payload lived one level down, inside `fields` - so
+    #: `update_ticket(ticket_id=X, fields={"comment": {"public": True, ...}})`
+    #: sailed through the check and reached Zendesk as a public reply, through
+    #: a tool gated only on `ticket.write`, carrying no `reach=True`. `_forbid`/
+    #: `_only` were never wrong; they were asked to look at the wrong dict.
+    #: `body_key` makes "where does this tool's payload actually live" an
+    #: explicit, reviewable declaration instead of an assumption a constraint
+    #: author can get right for nine tools and wrong for the tenth.
+    body_key: str | None = None
     #: NOTE (fix wave Minor): `_force_public` and `_create_ticket_check` below
-    #: mutate the caller's `kwargs["comment"]` dict IN PLACE rather than copying
-    #: it. `policy._dispatch` runs `spec.check(kwargs)` before the scope and
-    #: reach checks (see that function's docstring for the fixed order), so a
-    #: call later refused by scope or reach has already had the caller's own
-    #: nested `comment` dict rewritten (e.g. `public` forced to `False`) by the
-    #: time the refusal is raised. Harmless today - the call is refused either
-    #: way, and no test has needed the pre-check dict back - but worth knowing
-    #: before any caller starts reusing a `kwargs` dict across retries.
+    #: mutate the checked dict (the call's kwargs, or its `body_key` payload)
+    #: IN PLACE rather than copying it. `policy._dispatch` runs
+    #: `spec.run_check(kwargs)` before the scope and reach checks (see that
+    #: function's docstring for the fixed order), so a call later refused by
+    #: scope or reach has already had the caller's own nested `comment` dict
+    #: rewritten (e.g. `public` forced to `False`) by the time the refusal is
+    #: raised. Harmless today - the call is refused either way, and no test
+    #: has needed the pre-check dict back - but worth knowing before any
+    #: caller starts reusing a `kwargs` dict across retries.
     check: Callable[[dict[str, Any]], None] = field(default=lambda _kwargs: None)
+
+    def run_check(self, kwargs: dict[str, Any]) -> None:
+        """Run `check` against this tool's actual request body, not blindly
+        against the call's raw kwargs - the seam `policy._dispatch` calls,
+        so every gated call's constraint runs against the payload it
+        constrains, wherever `body_key` says that payload lives.
+        """
+        self.check(kwargs if self.body_key is None else kwargs.get(self.body_key, {}))
 
 
 def _forbid(*keys: str) -> Callable[[dict[str, Any]], None]:
@@ -140,6 +171,15 @@ TOOLS: dict[str, ToolSpec] = {
     "update_ticket": ToolSpec(
         "ticket.write",
         subject_var="CSA_ZD_ALLOWLIST_WRITE",
+        # `Backend.update_ticket(*, ticket_id, fields)` wraps the whole
+        # editable payload in `fields` - `body_key="fields"` is what makes
+        # `_forbid` inspect THAT dict rather than the call's own top-level
+        # kwargs (`{"ticket_id", "fields"}`, which never contains "comment"
+        # or "status" no matter what a caller puts inside `fields`). See
+        # `ToolSpec.body_key`'s own docstring for the live incident this
+        # closes: `update_ticket(ticket_id=X, fields={"comment": {"public":
+        # True}})` previously sailed through unchecked.
+        body_key="fields",
         check=_forbid("comment", "status", *_TICKET_REACH_SIDE_DOORS),
     ),
     "assign_ticket": ToolSpec(
@@ -149,12 +189,13 @@ TOOLS: dict[str, ToolSpec] = {
     # from the Block 0c tool-slice carry-over, which assumed a `comment` dict
     # argument. `Backend.add_internal_note`'s actual signature (this task) is
     # flat - `ticket_id`, `body`, `uploads` - with NO `public` parameter at
-    # all: `policy._dispatch` runs `spec.check(kwargs)` against the SAME
-    # kwargs it then forwards to the real backend
-    # (`getattr(backend, name)(**kwargs)`), so a check written for a `comment`
-    # dict would reject every legitimate call outright (`_only("comment")`
-    # sees `body`/`uploads` as unrecognised extras) - verified live against
-    # this dispatch before choosing `_only("body", "uploads")` instead. The
+    # all, and `body_key` is unset (None) here, so `policy._dispatch`'s
+    # `spec.run_check(kwargs)` hands `check` the SAME kwargs it then forwards
+    # to the real backend (`getattr(backend, name)(**kwargs)`) - a check
+    # written for a `comment` dict would reject every legitimate call
+    # outright (`_only("comment")` sees `body`/`uploads` as unrecognised
+    # extras) - verified live against this dispatch before choosing
+    # `_only("body", "uploads")` instead. The
     # safety property this block exists for - a note can never become public -
     # is structural here, not enforced by this check: there is no `public`
     # argument for a caller, or an instruction injected from ticket content
