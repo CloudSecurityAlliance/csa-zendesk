@@ -644,7 +644,14 @@ class FakeBackend:
         # that let this through would pass tests the real API would refuse.
         _refuse_a_filename_without_extension(filename=filename)
         _refuse_an_empty_upload(content=content)
-        return {"upload": {"token": "fake-upload-token"}}
+        # nosec B105 - bandit pattern-matches the KEY name "token" and calls this a
+        # hardcoded password. It is a canned return value in a test double, named
+        # "fake", never sent anywhere and never compared against a real credential;
+        # renaming the value would not help, since the key is what triggers the rule.
+        # Suppressed rather than worked around because the finding is false - contrast
+        # `auth/_callback.py`, where bandit's B101 was RIGHT (python -O strips asserts)
+        # and the code was changed instead of the warning silenced.
+        return {"upload": {"token": "fake-upload-token"}}  # nosec B105
 
     def delete_upload(self, *, token: str) -> Envelope:
         # Canned: no per-upload store exists to check `token` against or

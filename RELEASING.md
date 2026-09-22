@@ -93,6 +93,12 @@ python scripts/check_controls.py
    .venv/bin/python scripts/check_public_safe.py
    .venv/bin/python scripts/check_boundaries.py
    .venv/bin/python scripts/check_controls.py
+   # The security gate, which CI runs and this list originally omitted. Its absence
+   # here is exactly why a bandit finding reached CI instead of a laptop: a local
+   # checklist that is a SUBSET of CI's is a checklist that reports green on work CI
+   # will reject.
+   .venv/bin/python -m bandit -r src
+   .venv/bin/python -m pip_audit --skip-editable
    ```
 
 5. **Create the GitHub Release.** This creates the tag *and* fires `release.yml`:
