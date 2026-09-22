@@ -97,7 +97,7 @@ mcp/_tools/*.py      per-family register_*(app, get_client) producers
 ```
 
 `mcp/_tools/*.py` is the target layout for the full 54-tool surface, not what exists today:
-`csa-zendesk-mcp` (`src/csa_zendesk/server.py`) registers its ten tools flat, with no `mcp/`
+`csa-zendesk-mcp` (`src/csa_zendesk/server.py`) registers its thirteen tools flat, with no `mcp/`
 package and no per-family producer modules yet.
 
 Enforcement lives in the wrapper around the seam, not in the tools, so a library embedder gets
@@ -238,7 +238,9 @@ python3 scripts/probe_families.py    # 43/49 families reachable (as last measure
 ## Using the MCP server
 
 **This rung is E2 — "work tickets for real: + note, write."** `csa-zendesk-mcp` (the console
-script `src/csa_zendesk/server.py` registers) exposes ten tools: four reads — `get_ticket`,
+script `src/csa_zendesk/server.py` registers) exposes thirteen tools — ten that touch ticket
+data, plus the three auth-lifecycle tools (`authenticate`, `auth_status`, `logout`). The ten:
+four reads — `get_ticket`,
 `search_tickets`, `list_comments`, `get_attachment` — and six writes — `update_ticket`,
 `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload` — and
 connects with `TICKET_READ`, `TICKET_WRITE`, `TICKET_NOTE`, `TICKET_SOLVE` and `TICKET_ATTACH`
@@ -306,8 +308,17 @@ Attachments are where the sensitive material usually is, so this is the one plac
 does not deliver what it otherwise does. It is not a hole in a security boundary — the real
 boundary is the OAuth token's own scope, and anyone holding this credential could open the same
 attachment in the Zendesk UI by hand — but it *is* a hole in the blast-radius narrowing that is
-the whole reason to set an allowlist. If that matters for your install, drop `ticket.read` and
-run the write tools only, or do not grant this server the credential at all.
+the whole reason to set an allowlist. There is no setting that turns this one tool off — `E2_CAPABILITIES` is fixed in
+the code — so if it matters for your install, the only remedy available today is not to grant
+this server the credential. `TODO.md` G3 tracks the decision about scoping it properly.
+
+One further thing, which changes the size of this rather than its shape: `get_attachment`
+returns a `content_url`, and **Zendesk attachment content URLs are fetchable without
+authentication** unless the tenant has enabled *"require authentication to download
+attachments"* (it is off by default). So the exposure is not only "whoever holds this
+credential can read any attachment" — it is that the server emits a URL anything else with
+sight of the model's context can fetch, outside the credential entirely. Check that tenant
+setting before relying on this rung.
 
 **`CSA_ZD_ALLOWLIST_READ` is still not optional** (unchanged from E1): unset means nothing is
 permitted for `get_ticket`/`list_comments`, even though `search_tickets` and `get_attachment`

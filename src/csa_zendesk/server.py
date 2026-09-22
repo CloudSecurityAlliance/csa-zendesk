@@ -875,9 +875,19 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
             filename=arguments["filename"], content=content, content_type=arguments["content_type"]
         )
         return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
-    # The only name the membership check above still lets through here.
-    envelope = client.delete_upload(token=arguments["token"])
-    return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
+    # Explicit rather than by exhaustion (final whole-branch review, Minor 8).
+    # This was `delete_upload` reached by falling off the end of the chain, so
+    # adding a name to the membership check above without adding a branch for
+    # it silently routed that call to a DELETE. The membership check is the
+    # only thing standing between an unknown name and this line, and it is not
+    # the thing a future author edits when adding a tool.
+    if name == "delete_upload":
+        envelope = client.delete_upload(token=arguments["token"])
+        return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
+    # pragma: no cover - unreachable while the membership check above names
+    # exactly the tools with branches here; it exists so that adding a name
+    # there and forgetting a branch fails loudly instead of silently deleting.
+    raise ValueError(f"unknown tool: {name!r}")  # pragma: no cover
 
 
 async def _on_list_tools(
@@ -906,10 +916,16 @@ async def _on_list_tools(
 #:     check, `_errors.py`'s 422 branch) use a fixed sentence naming the
 #:     documented 1000-result ceiling - neither interpolates anything Zendesk
 #:     sent back.
-#:   - `exc.EmptyWrite`: both raise sites (`backend.py`'s `_refuse_an_empty_
-#:     assignment`, `_refuse_an_empty_update`) use a fixed sentence naming
-#:     what the call needs (`assignee_id`/`group_id`, or a non-empty
-#:     `fields`) - a pre-flight refusal on this process's own arguments,
+#:   - `exc.EmptyWrite`: all FOUR raise sites (`backend.py`'s
+#:     `_refuse_an_empty_assignment`, `_refuse_an_empty_update`,
+#:     `_refuse_an_empty_note`, `_refuse_an_empty_upload`) use a fixed
+#:     sentence naming what the call needs (`assignee_id`/`group_id`, a
+#:     non-empty `fields`, a body or an upload, or non-empty content). This
+#:     said "both" and named two until the final whole-branch review; the
+#:     other two were added by Tasks 3 and 5 of this same branch, which is
+#:     exactly the decay an enumeration invites - the property being claimed
+#:     (own prose, nothing vendor-derived) held throughout, but the list
+#:     stopped being a list of what exists - a pre-flight refusal on this process's own arguments,
 #:     before any request is built or sent, the same shape as `exc.
 #:     InvalidPath` and `exc.SearchLimitExceeded` just above.
 #:   - `exc.RateLimited`, `exc.ServiceUnavailable`: `_errors.py` builds both

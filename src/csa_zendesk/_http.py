@@ -134,9 +134,14 @@ class HttpClient:
 
         `idempotent` defaults to `False`, unlike `request`'s default of `True` -
         deliberately the opposite way round (Task 4 decision, carried forward
-        from Task 1's review). `request`'s callers are all `PUT`s that edit a
-        ticket to a target state, so replaying one on a 503 reproduces the same
-        state. This client's one binary POST creates a new upload each time it
+        from Task 1's review). MOST of `request`'s callers are `PUT`s that edit
+        a ticket to a target state, so replaying one on a 503 reproduces the
+        same state - but not all: `add_internal_note` APPENDS a comment and
+        passes `idempotent=False` for that reason, which is why `request`'s
+        default is a default and not an assumption. (This sentence previously
+        said "all", which was true while every caller was a GET and became
+        false in the same branch that wrote it - final whole-branch review,
+        Important 3.) This client's one binary POST creates a new upload each time it
         is sent: a retried upload does not repeat a no-op, it MINTS A SECOND
         TOKEN - a second file on Zendesk's side, attached to nothing, that
         nothing in the ticket surface will ever show. That is a worse outcome
@@ -200,6 +205,23 @@ class HttpClient:
                 f"refusing path {path!r}: it contains '?' or '#'. A query string or "
                 f"fragment embedded in `path` is silently dropped rather than sent - pass "
                 f"query parameters via params= instead, so they can be checked."
+            )
+        # The condition this method's own docstring named as its expiry - "it
+        # becomes reachable the moment a model-supplied path exists" - arrived
+        # with `delete_upload`, whose `token` is the first caller-interpolated
+        # STRING segment in this codebase, on a DELETE, with no allowlist and
+        # no per-tool constraint. httpx normalises dot segments when it builds
+        # the URL, so `/api/v2/uploads/../tickets/123` left here as a DELETE on
+        # /api/v2/tickets/123: a tool gated on `ticket.attach` performing a
+        # ticket deletion, which no profile grants. The host never changes, so
+        # `Transport._send`'s host check sees nothing wrong. Refused here
+        # because this is the one function every caller already passes through.
+        if any(segment in {".", ".."} for segment in path.split("/")):
+            raise exc.InvalidPath(
+                f"refusing path {path!r}: it contains a '.' or '..' segment, which is "
+                f"normalised away when the URL is built and can redirect this request to a "
+                f"different endpoint on the tenant - a value interpolated into a path must "
+                f"not be able to change which operation is performed."
             )
 
     @staticmethod

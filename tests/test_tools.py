@@ -205,22 +205,25 @@ def test_the_csv_and_tools_table_agree_on_which_tools_reach():
 
 
 def test_update_ticket_refuses_a_comment():
-    # Unit test of the underlying _forbid callable in isolation - not the
-    # shape update_ticket is actually called with (see the run_check tests
-    # below for that). The whole of ADR-016 in one assertion: the constraint
-    # is the control. A tool that merely documents "I will not comment" is
-    # not a control.
+    # Unit test of the underlying callable in isolation - the `fields` payload
+    # it inspects, not the call's own kwargs (see the run_check tests below for
+    # that shape). No `ticket_id` here: `_only_fields` does not fold it into
+    # the allowed set the way `_only` does, because with body_key="fields" the
+    # dict under inspection is the editable payload, where a ticket_id has no
+    # business. The whole of ADR-016 in one assertion: the constraint is the
+    # control. A tool that merely documents "I will not comment" is not a
+    # control.
     with pytest.raises(exc.PolicyError, match="comment"):
-        tools.TOOLS["update_ticket"].check({"ticket_id": 1, "comment": {"body": "hi"}})
+        tools.TOOLS["update_ticket"].check({"comment": {"body": "hi"}})
 
 
 def test_update_ticket_refuses_a_status():
     with pytest.raises(exc.PolicyError, match="status"):
-        tools.TOOLS["update_ticket"].check({"ticket_id": 1, "status": "solved"})
+        tools.TOOLS["update_ticket"].check({"status": "solved"})
 
 
 def test_update_ticket_permits_a_field_edit():
-    tools.TOOLS["update_ticket"].check({"ticket_id": 1, "priority": "high"})
+    tools.TOOLS["update_ticket"].check({"priority": "high"})
 
 
 # --- regression: update_ticket's constraint must inspect `fields`, the level
@@ -437,7 +440,7 @@ def test_merge_tickets_forbids_target_comment_is_public():
 )
 def test_update_ticket_forbids_the_reach_side_doors(key, value):
     with pytest.raises(exc.PolicyError, match=key):
-        tools.TOOLS["update_ticket"].check({"ticket_id": 1, key: value})
+        tools.TOOLS["update_ticket"].check({key: value})
 
 
 @pytest.mark.parametrize(
@@ -522,3 +525,72 @@ def test_assert_subject_permitted_refuses_a_scoped_tool_with_no_subject_id():
     # `ticket_id` - a programming error, not a configuration problem.
     with pytest.raises(exc.PolicyError, match="ticket_id"):
         policy.assert_subject_permitted("update_trigger", {"trigger_id": 1})
+
+
+# --- final whole-branch review, Critical 2: the denylist named five keys of
+# --- TicketObject's 65. These are the writeOnly reach vectors it missed, all
+# --- declared in the SAME OAS schema the old denylist cited. Each one reached
+# --- the wire before update_ticket was inverted to an allowlist.
+
+
+@pytest.mark.parametrize(
+    "key,value,why",
+    [
+        ("collaborators", [{"name": "X", "email": "x@example.com"}], "adds a CC"),
+        ("requester", {"email": "x@example.com"}, "changes who receives all future correspondence"),
+        ("assignee_email", "x@example.com", "assigns by email address"),
+        ("sharing_agreements", [1], "shares the ticket into another Zendesk instance"),
+        ("recipient", "x@example.com", "the address notifications are sent from"),
+        ("voice_comment", {"body": "hi"}, "a comment under another name"),
+        ("email_cc_ids", [1], "the CC list by id"),
+        ("follower_ids", [1], "the follower list by id"),
+        ("brand_id", 1, "selects the brand whose email template a notification uses"),
+    ],
+)
+def test_update_ticket_refuses_the_reach_vectors_the_denylist_never_named(key, value, why):
+    with pytest.raises(exc.PolicyError, match=key):
+        tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {key: value}})
+
+
+def test_update_ticket_refuses_a_field_nobody_has_heard_of():
+    # The property an allowlist has and a denylist cannot: a key invented after
+    # this test was written - by Zendesk, or by an instruction injected into
+    # ticket content the model is reading - fails closed.
+    with pytest.raises(exc.PolicyError, match="not_a_real_zendesk_field"):
+        tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {"not_a_real_zendesk_field": 1}})
+
+
+@pytest.mark.parametrize("key", tools._TICKET_EDITABLE_FIELDS)
+def test_every_permitted_field_is_actually_permitted(key):
+    # The other half: an allowlist that refused its own members would be a
+    # tool that cannot do its job, and the failure would look like a policy
+    # bug rather than a typo in the tuple.
+    tools.TOOLS["update_ticket"].run_check({"ticket_id": 1, "fields": {key: "x"}})
+
+
+def test_no_permitted_field_names_a_person_or_an_address():
+    # A cheap standing guard on the tuple's membership: the substrings that
+    # have marked every reach vector found so far. It does not prove a future
+    # addition is safe - only a human can - but it makes the careless kind of
+    # addition fail loudly at the moment it is made.
+    marks = ("email", "cc", "collaborat", "follow", "requester", "assignee", "recipient", "shar", "brand")
+    offenders = [f for f in tools._TICKET_EDITABLE_FIELDS if any(m in f for m in marks)]
+    assert offenders == [], f"these permitted fields name a person, an address or a delivery route: {offenders}"
+
+
+def test_the_csv_constraint_column_names_update_tickets_real_allowlist():
+    # Minor 6 (final whole-branch review): the `constraint` column is prose and
+    # nothing compared it to the code, so `add_internal_note`'s row still said
+    # "public forced false" long after `_force_public` was replaced by
+    # `_only("body","uploads")` plus a hardcoded literal. Prose cannot be
+    # diffed against a callable in general - but the one column that names a
+    # concrete field list can be, and that is the one most likely to mislead.
+    import csv
+    import pathlib
+
+    csv_path = pathlib.Path(__file__).resolve().parent.parent / "analysis/tool-boundaries.csv"
+    with csv_path.open(newline="") as fh:
+        rows = {r["tool"]: r for r in csv.DictReader(fh)}
+    constraint = rows["update_ticket"]["constraint"]
+    for field in tools._TICKET_EDITABLE_FIELDS:
+        assert field in constraint, f"{field} is permitted in code but absent from the CSV constraint column"

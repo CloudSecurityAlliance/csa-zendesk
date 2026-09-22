@@ -91,6 +91,33 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
                 ]
             }
 
+        # The seven Block 1 added. Each envelope carries at least one
+        # requester-authored string, because an envelope of pure machine keys
+        # would let this test pass without proving anything.
+        def _ticket(self):
+            return {"ticket": {"id": 1, "status": "open", "subject": "help", "description": "from a requester"}}
+
+        def update_ticket(self, *, ticket_id, fields):
+            return self._ticket()
+
+        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None):
+            return self._ticket()
+
+        def add_internal_note(self, *, ticket_id, body, uploads=None):
+            return self._ticket()
+
+        def solve_ticket(self, *, ticket_id):
+            return self._ticket()
+
+        def upload_file(self, *, filename, content, content_type):
+            return {"upload": {"token": "t", "attachment": {"id": 9, "file_name": "r.pdf"}}}
+
+        def delete_upload(self, *, token):
+            return {"upload": {"file_name": "r.pdf"}}
+
+        def get_attachment(self, *, attachment_id):
+            return {"attachment": {"id": attachment_id, "file_name": "r.pdf", "content_url": "https://x/y"}}
+
     monkeypatch.setattr(srv, "_client", lambda: _Client())
 
     def _assert_wrapped_or_machine_set(node: object, *, path: str) -> None:
@@ -107,11 +134,28 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
             for index, item in enumerate(node):
                 _assert_wrapped_or_machine_set(item, path=f"{path}[{index}]")
 
-    for name, args in [
-        ("get_ticket", {"ticket_id": 1}),
-        ("search_tickets", {"query": "x"}),
-        ("list_comments", {"ticket_id": 1}),
-    ]:
+    cases = {
+        "get_ticket": {"ticket_id": 1},
+        "search_tickets": {"query": "x"},
+        "list_comments": {"ticket_id": 1},
+        "update_ticket": {"ticket_id": 1, "fields": {"priority": "high"}},
+        "assign_ticket": {"ticket_id": 1, "assignee_id": 7},
+        "add_internal_note": {"ticket_id": 1, "body": "hi"},
+        "solve_ticket": {"ticket_id": 1},
+        "upload_file": {"filename": "r.pdf", "content_base64": "SGk=", "content_type": "text/plain"},
+        "delete_upload": {"token": "t"},
+        "get_attachment": {"attachment_id": 9},
+    }
+    # The completeness assertion this test lacked while its sibling
+    # (`test_no_tool_path_returns_an_unwrapped_envelope`) had one. Without it
+    # the loop covered three of ten data tools and said nothing about the
+    # seven Block 1 added - so every new tool was protected only by the weaker
+    # `MARKER_OPEN in output` check that this test's own docstring explains is
+    # insufficient. A loop that silently skips the cases that matter, and an
+    # assertion that went vacuous as the collection grew, in one place.
+    data_tools = {t.name for t in srv.READ_TOOLS + srv.WRITE_TOOLS}
+    assert data_tools == set(cases), "a data tool was added without a matching case here"
+    for name, args in cases.items():
         out = srv.call_tool_sync(name, args)
         _assert_wrapped_or_machine_set(json.loads(out), path=name)
 

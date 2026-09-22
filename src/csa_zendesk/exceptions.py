@@ -120,9 +120,11 @@ class EmptyWrite(ZendeskError):
     would change nothing: `backend.assign_ticket` naming neither `assignee_id`
     nor `group_id`, or `backend.update_ticket` with an empty `fields` mapping.
 
-    Raised by `backend.py`'s `_refuse_an_empty_assignment` and `_refuse_an_
-    empty_update` (one exception for both - the same defect in two sibling
-    methods, not two near-identical types), each building its message from a
+    Raised by `backend.py`'s `_refuse_an_empty_assignment`,
+    `_refuse_an_empty_update`, `_refuse_an_empty_note` and
+    `_refuse_an_empty_upload` (one exception for all four - the same defect in
+    sibling methods, not four near-identical types), each building its message
+    from a
     fixed sentence naming what the call needed - never text out of a Zendesk
     response, since nothing has been sent yet. An empty-body write is not
     free just because it changes nothing: it spends this tenant's write-rate

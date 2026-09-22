@@ -142,17 +142,26 @@ def _status(value: str) -> Callable[[dict[str, Any]], None]:
     return check
 
 
-# Forbidden on both create and update (fix wave C3/C4): `custom_status_id` is a
-# second route into solve/close alongside the literal `status` key - the OAS's
-# own example for updating a ticket pairs `custom_status_id: 321` with
-# `status: solved` - and `additional_collaborators`/`email_ccs`/`followers`/
-# `collaborator_ids` each notify someone when the ticket changes, which is
-# reach from a tool that carries no `reach=True` flag. Forbidding these named
-# keys does not make either tool bucket-pure the way an allowlist would (root
-# finding: a denylist over a body the tool never enumerates is unclosable) -
-# it closes the four known routes without claiming to close routes the OAS has
-# not shown us yet. See `specs/zendesk-support-oas.yaml`'s `UpdateTicket` and
-# `Ticket` schema examples for the exact fields.
+# Forbidden on create (fix wave C3/C4): `custom_status_id` is a second route
+# into solve/close alongside the literal `status` key - the OAS's own example
+# for updating a ticket pairs `custom_status_id: 321` with `status: solved` -
+# and `additional_collaborators`/`email_ccs`/`followers`/`collaborator_ids`
+# each notify someone when the ticket changes, which is reach from a tool that
+# carries no `reach=True` flag.
+#
+# THIS IS A DENYLIST, AND THE COMMENT THAT SHIPPED WITH IT SAID SO: "a denylist
+# over a body the tool never enumerates is unclosable". The final whole-branch
+# review proved the point rather than the principle. `TicketObject` has 65
+# properties; this names five. `collaborators` ("Users to add as cc's"),
+# `requester` (changes who receives all future correspondence),
+# `assignee_email`, `sharing_agreements` (shares the ticket into another
+# Zendesk instance), `recipient` (the address notifications are sent from) and
+# `voice_comment` are all `writeOnly` in the SAME schema this list cites, and
+# none of them is here. `update_ticket` no longer uses this list - it uses
+# `_TICKET_EDITABLE_FIELDS` below, which fails closed. This tuple remains only
+# for `create_ticket`, which is declared but has no `Backend` method and is
+# therefore unreachable; when it is built, it should be given an allowlist too
+# rather than inheriting this.
 _TICKET_REACH_SIDE_DOORS = (
     "custom_status_id",
     "additional_collaborators",
@@ -160,6 +169,64 @@ _TICKET_REACH_SIDE_DOORS = (
     "followers",
     "collaborator_ids",
 )
+
+# What `update_ticket` is FOR, stated positively: ordinary ticket attributes
+# that name no person and no address. Anything absent is refused, so a field
+# nobody here has heard of - including one Zendesk adds after this is written -
+# fails closed instead of sailing through.
+#
+# Deliberately absent, each for a stated reason rather than by omission:
+#   - `comment`, `status`      other tools (`add_internal_note`, `solve_ticket`);
+#                              ADR-016 - a tool is an operation AND its arguments
+#   - `assignee_id`, `group_id`  `assign_ticket`'s job, same rule
+#   - anything naming a person or an address (`collaborators`, `requester`,
+#     `assignee_email`, `email_ccs`, `followers`, `recipient`, ...) - that is
+#     reach, and this tool carries no `reach=True`
+#   - `sharing_agreements`     shares the ticket into another Zendesk instance
+#   - `brand_id`               selects which brand's email template and address
+#                              a notification would use
+#
+# HONEST LIMIT: this does not promise that no email is ever sent. A tenant
+# trigger can be configured to notify on a tag or priority change, and that is
+# the tenant's own configuration - equally true of an agent doing this by hand,
+# which is the project invariant. What it does promise is that this tool cannot
+# ITSELF add a CC, change the requester, post a comment, or change status.
+_TICKET_EDITABLE_FIELDS = (
+    "subject",
+    "priority",
+    "type",
+    "tags",
+    "custom_fields",
+    "ticket_form_id",
+    "due_at",
+    "external_id",
+    "problem_id",
+)
+
+
+def _only_fields(*keys: str) -> Callable[[dict[str, Any]], None]:
+    """`_only` for a `body_key` payload rather than a call's own kwargs.
+
+    `_only` folds `ticket_id` into the allowed set, which is right when it
+    inspects the kwargs themselves and wrong here: with `body_key="fields"` the
+    inspected dict is the editable payload, and `ticket_id` has no business in
+    it. A separate helper rather than a flag, so neither caller can acquire the
+    other's exemption by accident.
+    """
+    allowed = set(keys)
+
+    def check(fields: dict[str, Any]) -> None:
+        extra = sorted(set(fields) - allowed)
+        if extra:
+            raise exc.PolicyError(
+                f"update_ticket edits only {sorted(allowed)}; got {extra}. This is an allowlist, "
+                f"so a field it does not name is refused whether or not it is dangerous - if one "
+                f"of these is ordinary ticket data, add it there deliberately. Comments, status "
+                f"changes, assignment and anything naming a person or an address each have their "
+                f"own tool, or are not offered at this rung."
+            )
+
+    return check
 
 
 def _create_ticket_check(kwargs: dict[str, Any]) -> None:
@@ -203,7 +270,12 @@ TOOLS: dict[str, ToolSpec] = {
         # closes: `update_ticket(ticket_id=X, fields={"comment": {"public":
         # True}})` previously sailed through unchecked.
         body_key="fields",
-        check=_forbid("comment", "status", *_TICKET_REACH_SIDE_DOORS),
+        # An ALLOWLIST, not the denylist this carried until the final
+        # whole-branch review: `collaborators`, `requester`, `assignee_email`,
+        # `sharing_agreements`, `recipient` and `voice_comment` are all
+        # writeOnly in the same OAS schema the old denylist cited, and none was
+        # on it. See `_TICKET_EDITABLE_FIELDS` for what is permitted and why.
+        check=_only_fields(*_TICKET_EDITABLE_FIELDS),
     ),
     "assign_ticket": ToolSpec(
         "ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("assignee_id", "group_id")

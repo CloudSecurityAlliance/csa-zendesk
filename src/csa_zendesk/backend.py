@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import os
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import quote
 
 from . import exceptions as exc
 from ._http import HttpClient
@@ -361,7 +362,22 @@ class ApiBackend:
         comment: dict[str, Any] = {"body": body, "public": False}
         if uploads:
             comment["uploads"] = uploads
-        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": {"comment": comment}})
+        # idempotent=False, unlike its three PUT siblings: this is the one
+        # write here that APPENDS rather than setting a target state. Replaying
+        # update_ticket/assign_ticket/solve_ticket on a 503 re-sends the same
+        # desired state and converges; replaying this adds a SECOND identical
+        # note, and a fourth after three retries, each with its own audit
+        # entry - the duplication a human reading the ticket sees first.
+        # (Final whole-branch review, Important 3: `post_binary`'s docstring
+        # claimed every `request` caller was a state-setting PUT. That was true
+        # when the only callers were GETs and became false in the same branch
+        # that wrote it; the claim is corrected there.)
+        return self._http.request(
+            "PUT",
+            f"/api/v2/tickets/{ticket_id}",
+            json={"ticket": {"comment": comment}},
+            idempotent=False,
+        )
 
     def solve_ticket(self, *, ticket_id: int) -> Envelope:
         # Same operation and path as update_ticket/assign_ticket -
@@ -422,7 +438,15 @@ class ApiBackend:
         # surface (task brief) - without this method, a failed or abandoned
         # `upload_file` call (or a retried one under the decision above)
         # leaves litter nobody can find.
-        return self._http.request("DELETE", f"/api/v2/uploads/{token}")
+        # quote(safe="") is the second guard, at the interpolation site.
+        # `_validate_path` refuses a dot segment for every caller, which is the
+        # general fix; this one makes the specific claim that a `token` is a
+        # single path SEGMENT and cannot become a path - `safe=""` encodes `/`
+        # too, so `../tickets/1` becomes `..%2Ftickets%2F1` and addresses a
+        # (non-existent) upload rather than a ticket. Both are kept: the choke
+        # point cannot know that this particular value is model-supplied, and
+        # this line cannot protect the other callers.
+        return self._http.request("DELETE", f"/api/v2/uploads/{quote(token, safe='')}")
 
     def get_attachment(self, *, attachment_id: int) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Attachments,GET,

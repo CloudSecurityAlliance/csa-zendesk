@@ -889,3 +889,61 @@ def test_the_fake_refuses_empty_content_too():
     # extension rule.
     with pytest.raises(exc.EmptyWrite, match="non-empty content"):
         FakeBackend().upload_file(filename="r.pdf", content=b"", content_type="application/pdf")
+
+
+def test_delete_upload_encodes_the_token_so_it_cannot_become_a_path():
+    # The second guard, at the interpolation site. `_validate_path` refuses a
+    # dot segment for every caller; this makes the narrower claim that a token
+    # is one path SEGMENT. safe="" encodes "/" too, so a token shaped like a
+    # path addresses a non-existent upload instead of a ticket.
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    ApiBackend(_client(handler)).delete_upload(token="../tickets/159143")
+    assert seen[0].endswith("/api/v2/uploads/..%2Ftickets%2F159143")
+    assert "/api/v2/tickets/" not in seen[0]
+
+
+def test_delete_upload_leaves_an_ordinary_token_alone():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    ApiBackend(_client(handler)).delete_upload(token="abc123")
+    assert seen[0].endswith("/api/v2/uploads/abc123")
+
+
+def test_add_internal_note_is_not_retried_on_503():
+    # The one write here that APPENDS rather than setting a target state.
+    # Retrying update_ticket/assign_ticket/solve_ticket re-sends the same
+    # desired state and converges; retrying this adds a second identical note,
+    # and a fourth after three retries, each with its own audit entry.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        ApiBackend(_client(handler)).add_internal_note(ticket_id=1, body="hi", uploads=None)
+    assert calls["n"] == 1, "an appending write must not be replayed"
+
+
+def test_the_state_setting_writes_are_still_retried_on_503():
+    # The other half, so the change above is a decision about THIS method
+    # rather than a blanket switch nobody notices: a PUT that sets a target
+    # state converges on replay and should keep retrying.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    assert calls["n"] > 1, "a state-setting PUT should still be retried"

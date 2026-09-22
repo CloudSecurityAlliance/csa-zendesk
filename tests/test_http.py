@@ -780,3 +780,45 @@ def test_the_retry_budget_and_invalid_token_retry_survive_the_split():
     assert c.get("/api/v2/tickets/1") == {"ticket": {"id": 1}}
     assert calls["n"] == 3
     assert calls["refreshed"] == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v2/uploads/../tickets/159143",
+        "/api/v2/uploads/../../users/5",
+        "/api/v2/uploads/./x",
+        "/api/v2/tickets/..",
+    ],
+)
+def test_a_dot_segment_is_refused_before_the_call(path):
+    # httpx normalises dot segments when it builds the URL, so without this
+    # check `delete_upload(token="../tickets/159143")` sent
+    # DELETE /api/v2/tickets/159143 - a tool gated on `ticket.attach`
+    # performing a ticket deletion, which no profile grants, on any ticket in
+    # the tenant regardless of the allowlist. The host is unchanged throughout,
+    # so Transport's host check sees nothing wrong.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(exc.InvalidPath, match="'\\.' or '\\.\\.' segment"):
+        h.request("DELETE", path)
+    assert called["n"] == 0
+
+
+def test_an_ordinary_path_with_dots_inside_a_segment_is_still_allowed():
+    # Only a WHOLE segment of "." or ".." is a traversal; a filename-ish
+    # segment containing dots is ordinary and must not be refused.
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
+    h.request("GET", "/api/v2/uploads/a.b.c")
+    assert seen[0].endswith("/api/v2/uploads/a.b.c")
