@@ -1,0 +1,35 @@
+name: controls
+
+# The controls this project's release depends on live in GitHub's and PyPI's settings,
+# not in this tree: the Trusted Publisher binding constrained to the `pypi` environment,
+# that environment still requiring a reviewer, and branch protection on `main`. None of
+# them appears in a diff, no test covers them, and a green CI run says nothing about
+# whether they are still on - so a weekly run asks.
+#
+# `--strict` here and NOT on the release path: nobody is watching this run, so
+# "could not verify" must fail rather than pass quietly. On the release path the same
+# script runs without --strict, because an outage must not redden a release.
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+      # set -o pipefail is load-bearing with the tee below: without it the step takes
+      # tee's exit status and passes however the script exited. csa-google-workspace's
+      # equivalent silently always-passed for exactly this reason (its #316) - the
+      # checker failing the way the thing it checks fails.
+      - name: Assert the externally-enforced controls
+        run: |
+          set -o pipefail
+          python scripts/check_controls.py --strict | tee -a "$GITHUB_STEP_SUMMARY"

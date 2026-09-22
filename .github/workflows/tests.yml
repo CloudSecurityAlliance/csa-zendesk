@@ -1,6 +1,19 @@
 name: tests
 on: [push, pull_request]
 
+# Declared at workflow level so every job inherits it, rather than per-job on the one
+# CodeQL happened to flag. Without this block each job takes the REPOSITORY default,
+# which can be read-write - so a compromised step in any of them could push to the
+# repo. Nothing here needs more than read: the jobs check out, install, and run
+# gates. `release.yml` scopes `id-token: write` to its publish job alone and states
+# `contents: read` at the top for the same reason.
+#
+# Found by CodeQL (actions/missing-workflow-permissions) on the PR that added the
+# `security` job. It had been true of lint/test/gates since this file was written -
+# the new job did not introduce it, it made it visible.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -48,3 +61,17 @@ jobs:
       # than a false pass, which is the intended behaviour.
       - run: python3 scripts/check_public_safe.py
       - run: python3 scripts/check_spec.py
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with: { python-version: "3.12" }
+      # Deliberately unpinned: the point is to observe what a real `pip install
+      # csa-zendesk` resolves to today, not what a pinned closure nobody installs
+      # resolves to. The same gate runs on the release path, because a CVE disclosed
+      # after the last merge would otherwise ship.
+      - run: pip install -e ".[dev,server]" pip-audit bandit
+      - run: pip-audit --skip-editable
+      - run: bandit -r src

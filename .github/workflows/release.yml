@@ -1,0 +1,136 @@
+name: release
+
+# Publishes to PyPI when a GitHub Release is published, via PyPI Trusted Publishing
+# (OIDC, no stored token) with PEP 740 attestations. One-time setup and the per-release
+# steps are in RELEASING.md. Actions are pinned to commit SHAs.
+#
+# TWO JOBS, AND THE SPLIT IS THE POINT. `build` runs every piece of third-party code
+# involved in a release - pip resolving dependency ranges, pip-audit, bandit, the test
+# suite, the build backend - and holds NO credential. `publish` holds `id-token: write`
+# and runs exactly one action against artifacts it downloads; no project code and no
+# dependency of ours executes in it.
+#
+# Without the split, all of that runs in the job that can mint a PyPI-audience OIDC
+# token, so a compromised dependency could read ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN and
+# publish arbitrary artifacts as `csa-zendesk`. That needs a compromised dependency
+# first - it is amplification rather than a hole of ours - but it turns "a dependency was
+# compromised" into "our published artifact was compromised", and this package asks
+# operators for a Zendesk credential. Copied from csa-google-workspace, which arrived at
+# the split after shipping the single-job form (its #186).
+#
+# The `pypi` environment gate sits on `publish`, with the credential, which also improves
+# the approval: it happens AFTER the suite and the sdist guard have passed, so a reviewer
+# approves a build they can see succeeded rather than one about to start.
+#
+# KNOWN GAP, recorded rather than hidden: csa-google-workspace installs from hash-pinned
+# `requirements/*.txt` here and sets PIP_CONSTRAINT so the build backend resolves from a
+# closure recorded in the repo. csa-zendesk has no lockfiles yet, so the suite and the
+# build backend resolve from PyPI at release time. That is a reproducibility gap, not a
+# publishing-credential gap - the split above is what protects the credential. TODO.md
+# tracks adding lockfiles; do not describe this pipeline as reproducible until it does.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # No `id-token` here, deliberately and load-bearingly: everything below executes
+    # third-party code, and none of it can mint a publishing credential that does not exist.
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          # Full history and tags: the gate scripts read git, and a release must not be
+          # gated by guards that cannot see what they check.
+          fetch-depth: 0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      # The controls this release depends on are configured in GitHub and PyPI, not here,
+      # so they are checked at the moment they matter rather than only on the weekly
+      # schedule. A REMOVED REVIEWER would otherwise let this very run publish unattended.
+      #
+      # Safe on the release path because the script degrades correctly: an outage or a
+      # token without rights is UNVERIFIABLE and exits 0; only an actually-violated control
+      # exits non-zero. It cannot redden a release for being unable to reach GitHub.
+      - name: Assert the externally-enforced controls
+        run: python scripts/check_controls.py
+
+      # Deliberately NOT pinned: pip-audit's job is to observe what a real install of this
+      # package resolves to today. Auditing a pinned closure would audit the one
+      # environment nobody installs.
+      - name: Security gate (pip-audit + bandit, unpinned runtime closure on purpose)
+        run: |
+          pip install -e ".[dev,server]" pip-audit bandit
+          pip-audit --skip-editable
+          bandit -r src
+
+      - name: Unit suite (never publish a red tag)
+        run: pytest -q --cov=csa_zendesk --cov-report=term-missing
+
+      - name: The repo's own gates
+        run: |
+          ruff check .
+          ruff format --check src tests
+          mypy
+          python scripts/check_public_safe.py
+          python scripts/check_boundaries.py
+          python scripts/check_spec.py
+          python scripts/check_counts.py
+
+      - name: Build sdist + wheel
+        run: |
+          pip install build twine
+          python -m build
+
+      - name: Check metadata + guard dist contents
+        run: |
+          twine check dist/*
+          # Fail loudly if a probe transcript, a credential-shaped file, or the research
+          # directories ever reach the sdist. These are currently excluded only by
+          # setuptools' defaults - nothing declares the intent - so this is the thing that
+          # actually enforces it.
+          #
+          # `.py` files are excluded from the WORD match, and only from the word match:
+          # the pattern is a substring test on paths, and csa-google-workspace had a real
+          # release blocked by a test file legitimately named ..._token.py. Credential
+          # files are .json/.txt/.pem and are all still caught; a secret hardcoded inside
+          # a .py was never visible to a filename check and is bandit's and gitleaks' job.
+          if tar tzf dist/*.tar.gz | grep -Ev '\.py$' \
+               | grep -Ei '(^|/)(analysis|experiments|specs|docs)/|token|credential|client_secret'; then
+            echo "::error::unexpected file in sdist - refusing to publish"; exit 1
+          fi
+
+      - name: Upload the built distributions for the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error      # an empty publish would otherwise look like a success
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi          # protected environment - gates the publish behind approval
+    permissions:
+      id-token: write          # required for Trusted Publishing (OIDC) + attestations
+    # Deliberately minimal: download the artifacts and hand them to the PyPA action. No
+    # checkout, so project code is not even present in the job holding the credential -
+    # which is the whole property the split buys. Adding a step here that runs anything of
+    # ours, or installs anything, gives that property back.
+    # `tests/test_release_workflow_shape.py` enforces this structurally.
+    steps:
+      - name: Download the distributions built above
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI (Trusted Publishing + PEP 740 attestations)
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # v1.13.0
+        with:
+          attestations: true

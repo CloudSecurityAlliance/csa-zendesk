@@ -172,7 +172,16 @@ class Listener:
             )
         if self._error is not None:
             raise CallbackError(self._error)
-        assert self._result is not None  # pragma: no cover - guarded by _error above
+        if self._result is None:  # pragma: no cover - guarded by _error above
+            # A `raise`, not an `assert`: `python -O` strips asserts entirely, and
+            # this one is the last thing between a None and a caller annotated to
+            # receive a str. The invariant it restates (a request arrived, no error
+            # was recorded, therefore a result exists) holds today - but an
+            # invariant that only holds today is exactly what a guard is for, and a
+            # guard that disappears under a common interpreter flag is not one.
+            # Also what bandit B101 is pointing at, so the gate goes green because
+            # the code improved rather than because the finding was silenced.
+            raise CallbackError("the callback server recorded neither a result nor an error")
         return self._result
 
 
