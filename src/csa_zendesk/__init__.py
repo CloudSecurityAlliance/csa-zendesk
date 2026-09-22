@@ -19,7 +19,7 @@ from .backend import ApiBackend, Backend, Envelope, FakeBackend
 from .client import ZendeskClient
 from .policy import ALL_CAPABILITIES, PROFILES, Policy, PolicyBackend
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ALL_CAPABILITIES",
