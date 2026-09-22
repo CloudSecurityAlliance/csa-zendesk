@@ -1006,3 +1006,86 @@ def test_no_id_that_is_not_a_number_reaches_a_path(method, kwargs):
     with pytest.raises(exc.InvalidPath, match="whole number"):
         getattr(ApiBackend(_client(handler)), method)(**kwargs)
     assert called["n"] == 0
+
+
+#: A BOM, not a ZWSP: `_markdown._STRIP` deliberately does NOT strip U+200B
+#: (Thai/Khmer word segmentation - see `_markdown.strip_suspicious`'s
+#: docstring), so a ZWSP fixture here would assert stripping that Task 3's
+#: corrected `_STRIP` set no longer performs. A mid-document BOM IS in
+#: `_STRIP` (same codepoint `tests/test_markdown.py`'s own
+#: `test_codepoints_with_no_communicative_purpose_are_removed` and
+#: `test_to_markdown_strips_in_both_the_visible_and_hidden_output` fixtures
+#: use), so this still proves what the test is for: that `to_markdown`'s
+#: codepoint stripping flows through the Backend seam, not just the
+#: conversion.
+BOM = "﻿"
+
+
+def _comment_html(html):
+    return {"comments": [{"id": 1, "public": True, "body": "plain", "html_body": html}]}
+
+
+def test_list_comments_returns_markdown_not_html():
+    def handler(request):
+        return httpx.Response(200, json=_comment_html("<p>Hello <strong>world</strong></p>"))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "**world**" in cm["html_body"]
+    assert "<p>" not in cm["html_body"]
+
+
+def test_hidden_text_arrives_in_its_own_key_and_not_in_the_body():
+    def handler(request):
+        return httpx.Response(200, json=_comment_html('<p>Refund please.</p><div style="display:none">SECRET</div>'))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "SECRET" not in cm["html_body"]
+    assert cm["hidden_text"] == ["SECRET"]
+
+
+def test_no_hidden_key_when_there_is_no_hidden_text():
+    # A key present on every comment with an empty list is noise on ~96% of them.
+    def handler(request):
+        return httpx.Response(200, json=_comment_html("<p>ordinary</p>"))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "hidden_text" not in cm
+
+
+def test_plain_body_is_left_alone():
+    # `body` is Zendesk's own tag strip and is NOT the source of truth here,
+    # but it is also not ours to rewrite - callers may rely on it verbatim.
+    def handler(request):
+        return httpx.Response(200, json=_comment_html("<p>x</p>"))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert cm["body"] == "plain"
+
+
+def test_a_ticket_description_is_converted_too():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "ticket": {
+                    "id": 1,
+                    "subject": "s",
+                    "description": "d",
+                    "html_body": f"<p>tick{BOM}et</p>",
+                }
+            },
+        )
+
+    t = ApiBackend(_client(handler)).get_ticket(ticket_id=1)["ticket"]
+    assert BOM not in t["html_body"]
+    assert "<p>" not in t["html_body"]
+
+
+def test_the_fake_converts_too():
+    # A fake that returned raw HTML would let every markdown assertion pass
+    # while doing nothing in production - the reason the fake enforces the
+    # extension and empty-upload rules too.
+    fake = FakeBackend()
+    fake.tickets[1] = {"id": 1, "html_body": "<p>hi <em>there</em></p>"}
+    out = fake.get_ticket(ticket_id=1)["ticket"]
+    assert "*there*" in out["html_body"] and "<em>" not in out["html_body"]

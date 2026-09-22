@@ -18,6 +18,7 @@ import re
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote
 
+from . import _markdown
 from . import exceptions as exc
 from ._http import HttpClient
 
@@ -229,6 +230,43 @@ def _refuse_a_filename_without_extension(*, filename: str) -> None:
         )
 
 
+def _convert_html_bodies(envelope: Envelope) -> Envelope:
+    """Replace every `html_body` in `envelope` with Markdown, in place.
+
+    Walks the whole envelope rather than naming ticket/comment shapes, because
+    `html_body` appears on tickets, comments, audit events and search results,
+    and a shape-specific walk would silently miss the next one.
+
+    Adds a sibling `hidden_text` list ONLY when there is hidden text - a key
+    present on every comment with an empty list is noise on the ~96% that carry
+    none (measured).
+
+    Applied at the Backend seam, not in `server.py`: the library is callable
+    without the MCP server, and a control in the delivery layer is one a library
+    consumer does not get.
+    """
+    if isinstance(envelope, dict):
+        html = envelope.get("html_body")
+        if isinstance(html, str):
+            markdown, hidden = _markdown.to_markdown(html)
+            envelope["html_body"] = markdown
+            if hidden:
+                envelope["hidden_text"] = hidden
+        # `hidden_text` above is added BEFORE this loop starts, not inside it:
+        # `.values()` is a live view over the dict, and adding a key to a dict
+        # while an iterator over it is active raises `RuntimeError: dictionary
+        # changed size during iteration`. Both mutations to THIS dict (the
+        # `html_body` overwrite and the possible `hidden_text` insert) are
+        # already done by the time the loop below opens its iterator, so the
+        # dict's size is stable for the whole walk.
+        for value in envelope.values():
+            _convert_html_bodies(value)
+    elif isinstance(envelope, list):
+        for item in envelope:
+            _convert_html_bodies(item)
+    return envelope
+
+
 @runtime_checkable
 class Backend(Protocol):
     """Every Zendesk operation this library reaches, unshaped.
@@ -281,7 +319,7 @@ class ApiBackend:
         # ShowTicket), whose own response example's `url` field also omits it.
         # Only the unrelated Countries family carries a .json suffix anywhere in
         # the inventory; it is not a general convention to imitate here.
-        return self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}")
+        return _convert_html_bodies(self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}"))
 
     def search_tickets(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Search,GET,/api/v2/search,
@@ -309,7 +347,9 @@ class ApiBackend:
         # never match anything - narrowed to nothing, never widened to users. A
         # caller cannot make this tool's bucket bigger by asking twice.
         constrained_query = f"{query} type:ticket"
-        return self._http.get("/api/v2/search", params={"query": constrained_query, "page": page, "per_page": per_page})
+        return _convert_html_bodies(
+            self._http.get("/api/v2/search", params={"query": constrained_query, "page": page, "per_page": per_page})
+        )
 
     def list_comments(self, *, ticket_id: int) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Ticket Comments,GET,
@@ -323,7 +363,7 @@ class ApiBackend:
         # than 100 comments silently omits its newest ones here. This method
         # does not add a paging parameter the brief did not ask for; a caller
         # reading a long ticket must not assume the result is complete.
-        return self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}/comments")
+        return _convert_html_bodies(self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}/comments"))
 
     def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
@@ -545,7 +585,7 @@ class FakeBackend:
 
     def get_ticket(self, *, ticket_id: int) -> Envelope:
         try:
-            return {"ticket": copy.deepcopy(self.tickets[ticket_id])}
+            return _convert_html_bodies({"ticket": copy.deepcopy(self.tickets[ticket_id])})
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
 
@@ -554,17 +594,24 @@ class FakeBackend:
         # does not implement Zendesk's query language against `self.tickets`.
         # It still enforces the same 1000-result ceiling `ApiBackend` does: a
         # fake that let this through would pass tests the real API rejects.
+        #
+        # Wrapped in `_convert_html_bodies` for symmetry with `ApiBackend`, even
+        # though the canned envelope below carries no `html_body` today - this
+        # is a no-op now, not a promise that stays true if the canned shape
+        # ever grows one.
         _refuse_past_search_ceiling(page=page, per_page=per_page)
-        return {"results": [], "count": 0}
+        return _convert_html_bodies({"results": [], "count": 0})
 
     def list_comments(self, *, ticket_id: int) -> Envelope:
         # Canned, like search_tickets: this fake does not maintain a per-ticket
         # comment store. It does share get_ticket's existence check against
         # self.tickets, so a ticket_id nothing has ever heard of still raises
         # NotFound rather than a silent, misleadingly-empty conversation.
+        # Wrapped in `_convert_html_bodies` for the same symmetry reason as
+        # search_tickets above - a no-op today.
         if ticket_id not in self.tickets:
             raise exc.NotFound(f"no such record (ticket {ticket_id})")
-        return {"comments": []}
+        return _convert_html_bodies({"comments": []})
 
     def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
         # Mutates the backing store, unlike search_tickets/list_comments'
