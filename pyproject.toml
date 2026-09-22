@@ -26,9 +26,15 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries",
 ]
-# httpx, not requests: the sibling projects use it and it gives us one client type
-# for sync now and async later without a second dependency.
-dependencies = ["httpx>=0.27"]
+# markdownify + beautifulsoup4, not markitdown or pandoc: the bakeoff
+# (research/html-to-markdown/) measured all four real converters leaking
+# CSS-hidden text identically, so the choice is fidelity and packaging only.
+# markdownify ties at 10/10 fidelity and is BeautifulSoup-based, so the
+# hidden-element pre-pass and the conversion share ONE parse and one
+# dependency. markitdown wraps markdownify and pulls in ~112MB of ML runtime
+# (magika -> onnxruntime + numpy) to detect a format we read from a field
+# named html_body.
+dependencies = ["httpx>=0.27", "markdownify>=1.2", "beautifulsoup4>=4.12"]
 
 # A door into OAuth, not a product: `auth login` / `auth whoami` / `auth status`
 # only. See `src/csa_zendesk/cli.py`. `csa-zendesk-mcp` is the separate stdio
