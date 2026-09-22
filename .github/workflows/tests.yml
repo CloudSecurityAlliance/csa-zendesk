@@ -1,6 +1,19 @@
 name: tests
 on: [push, pull_request]
 
+# Declared at workflow level so every job inherits it, rather than per-job on the one
+# CodeQL happened to flag. Without this block each job takes the REPOSITORY default,
+# which can be read-write - so a compromised step in any of them could push to the
+# repo. Nothing here needs more than read: the jobs check out, install, and run
+# gates. `release.yml` scopes `id-token: write` to its publish job alone and states
+# `contents: read` at the top for the same reason.
+#
+# Found by CodeQL (actions/missing-workflow-permissions) on the PR that added the
+# `security` job. It had been true of lint/test/gates since this file was written -
+# the new job did not introduce it, it made it visible.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
