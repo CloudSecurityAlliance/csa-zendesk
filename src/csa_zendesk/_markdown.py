@@ -36,24 +36,61 @@ HIDING_RULES: tuple[str, ...] = (
 )
 _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 
-#: Codepoints with no communicative purpose in prose. STRIPPED, never folded.
-#: Measured 2026-09-22: `unidecode` also removes these, and additionally folds
-#: `Pаypal` (Cyrillic а) to a byte-identical `Paypal` - completing the homoglyph
-#: attack and destroying the evidence. Stripping is the same defang at zero
-#: language cost: German, French, Russian, Japanese, Arabic and emoji are
-#: unchanged, and so is `xʷməθkʷəy` (Musqueam).
+#: Codepoints stripped because they have no legitimate use in prose. STRIPPED,
+#: never folded (see `strip_suspicious`'s docstring on why folding is worse).
+#:
+#: Corrected 2026-09-22: a first version of this set was written from the
+#: threat list alone (zero-width space, ZWNJ, ZWJ, LRM/RLM, bidi EMBEDDING,
+#: bidi isolates, tag characters, soft hyphen, Mongolian vowel separator) and
+#: never checked against a legitimacy list. Measured against real script
+#: usage, it damaged seven legitimate cases: Persian ZWNJ is SEMANTIC
+#: (می‌رود "mi-ravad" vs میرود are different words), ZWJ is required for
+#: Arabic letter shaping, Indic conjuncts and emoji ZWJ sequences (a family
+#: emoji decomposes into three separate people without it), LRM/RLM are
+#: legitimate directional marks, bidi EMBEDDING (as opposed to override) is
+#: ordinary right-to-left text, and tag characters compose subdivision-flag
+#: emoji (Scotland's flag becomes a plain black flag without them). None of
+#: that is stripped now.
+#:
+#: What remains: the Trojan Source bidi-OVERRIDE pair (LRO/RLO reorder how
+#: text renders without reordering the source, which is how `invoice[RLO]
+#: fdp.exe` displays as `invoice.exe`, with no legitimate prose use), a
+#: mid-document BOM, the presentation-only word joiner (a no-break hint that
+#: carries no meaning of its own), and C0 controls other than tab/LF/CR.
+#:
+#: Consequence, not an oversight: this no longer defangs the observed
+#: zero-width-signature attack (U+200C interleaved through a name), because
+#: U+200C cannot be stripped unconditionally without breaking Persian and
+#: Indic text. Catching that needs a density-based detector, deliberately out
+#: of scope here - see
+#: `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
 _STRIP = (
-    frozenset(range(0x200B, 0x200F))  # zero-width space/non-joiner/joiner/marks
-    | {0x2060, 0xFEFF, 0x180E, 0x00AD}  # word joiner, BOM, Mongolian vowel sep, soft hyphen
-    | frozenset(range(0x202A, 0x202F))  # bidi embedding and OVERRIDE
-    | frozenset(range(0x2066, 0x206A))  # bidi isolates
-    | frozenset(range(0xE0000, 0xE0080))  # tag characters ("invisible ink")
+    {0x202D, 0x202E}  # LEFT-TO-RIGHT OVERRIDE, RIGHT-TO-LEFT OVERRIDE - Trojan Source
+    | {0x2060, 0xFEFF}  # word joiner (no meaning, presentation only), BOM
     | frozenset(c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D))  # controls
 )
 
 
 def strip_suspicious(text: str) -> str:
-    """Remove codepoints that carry no meaning a reader could receive.
+    """Remove codepoints that have no legitimate use in prose.
+
+    Strips: the Trojan Source bidi-override pair (LRO/RLO), a mid-document
+    BOM, the presentation-only word joiner, and C0 controls other than
+    tab/LF/CR.
+
+    Deliberately NOT stripped, because each has a real, meaning-bearing use
+    somewhere in ordinary text: ZWSP (Thai/Khmer word segmentation), ZWNJ
+    (semantic in Persian and Indic scripts), ZWJ (Arabic letter shaping,
+    Indic conjuncts, emoji ZWJ sequences), LRM/RLM (legitimate directional
+    marks), bidi EMBEDDING codepoints (ordinary right-to-left text, as
+    opposed to override), bidi isolates, tag characters (subdivision-flag
+    emoji), soft hyphen, and the Mongolian vowel separator. A broader first
+    version of this set stripped all of those and was measured to damage
+    seven languages/scripts; this is what survived checking it against a
+    legitimacy list, not just a threat list. One consequence of that: this
+    function does NOT defang the zero-width-signature attack (U+200C
+    interleaved through a name) - see
+    `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
 
     NOT a homoglyph check. A rule that flags mixed scripts within a word also
     flags Indigenous orthographies (Musqueam contains a Greek theta, because

@@ -2,8 +2,6 @@ import pytest
 
 from csa_zendesk._markdown import HIDING_RULES, strip_suspicious, to_markdown
 
-ZWSP = "​"
-
 
 def test_basic_html_becomes_markdown():
     md, hidden = to_markdown("<p>Hello <strong>world</strong></p>")
@@ -102,15 +100,24 @@ def test_every_hiding_rule_is_exercised_by_a_test():
 @pytest.mark.parametrize(
     "text,gone",
     [
-        (ZWSP.join("Alexander"), ZWSP),  # the observed signature case
-        ("invoice‮fdp.exe", "‮"),  # bidi override
-        ("hello\U000e0041\U000e0042", "\U000e0041"),  # tag characters
+        ("invoice‮fdp.exe", "‮"),  # bidi override (Trojan Source)
         ("a﻿b", "﻿"),  # BOM mid-text
         ("x\u0000y", "\u0000"),  # control character
     ],
 )
 def test_codepoints_with_no_communicative_purpose_are_removed(text, gone):
     assert gone not in strip_suspicious(text)
+
+
+def test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping():
+    # KNOWN LIMIT, pinned so narrowing _STRIP later is a deliberate act.
+    # U+200C is semantic in Persian (می‌رود vs میرود) and required for Indic
+    # conjuncts and Arabic shaping, so it cannot be stripped unconditionally.
+    # The observed 2026-09 case interleaved U+200C through a signature at
+    # 174 per 1k characters; catching THAT needs a density rule, which is
+    # deliberately not in this block.
+    attacked = "‌".join("Best regards")
+    assert strip_suspicious(attacked) == attacked
 
 
 @pytest.mark.parametrize(
@@ -124,16 +131,25 @@ def test_codepoints_with_no_communicative_purpose_are_removed(text, gone):
         "Thanks! \U0001f642\U0001f44d",
         "xʷməθkʷəy",  # Musqueam - MUST survive
         "Pаypal",  # homoglyph - NOT our job here
+        "می‌رود",  # Persian ZWNJ is semantic: "mi-ravad" vs "میرود" is a different word
+        "\U0001f468‍\U0001f469‍\U0001f467",  # family emoji - a ZWJ sequence
+        "\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",  # Scotland flag - tag chars
+        "‫שלום‬",  # Hebrew wrapped in bidi EMBEDDING (not override)
+        "100‎$",  # LRM - a legitimate directional mark
+        "क्‍ष",  # Hindi conjunct control - ZWJ changes the rendered glyph
+        "أحب‍ك",  # Arabic ZWJ - letter shaping
     ],
 )
 def test_legitimate_text_is_untouched(text):
     # Four detectors before this one had non-English content as their dominant
-    # failure mode. Stripping must have ZERO language cost - measured.
+    # failure mode, and a first pass at this one's own _STRIP set damaged
+    # seven more (Persian, emoji, subdivision flags, Hebrew embedding, LRM,
+    # Hindi and Arabic shaping) before being measured against this corpus.
     assert strip_suspicious(text) == text
 
 
 def test_to_markdown_strips_in_both_the_visible_and_hidden_output():
-    html = f'<p>Hi {ZWSP}there</p><div style="display:none">bad{ZWSP}text</div>'
+    html = '<p>Hi ﻿there</p><div style="display:none">bad﻿text</div>'
     md, hidden = to_markdown(html)
-    assert ZWSP not in md
-    assert hidden and ZWSP not in hidden[0]
+    assert "﻿" not in md
+    assert hidden and "﻿" not in hidden[0]
