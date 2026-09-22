@@ -13,7 +13,7 @@ change, possibly incompatibly, between `0.x` releases. `1.0.0` is the commitment
 have stopped moving. Within `0.x`, a MINOR bump means new capability (tools, operations);
 a PATCH bump means a fix with no surface change.
 
-## [Unreleased]
+## [0.2.0] — 2026-09-22
 
 **Block 1 — the write surface and attachments.** `csa-zendesk-mcp` moves from rung E1
 (read-only) to rung **E2** — "work tickets for real: + note, write." Ten tools now, not
@@ -101,12 +101,40 @@ with a human present.
   carries `triggers:write`, unused by anything this block ships. No credential or code
   changed — the client's actual ceiling didn't move, the record of it was corrected to match.
 
-### Not verified
-Restated because it is the fact most likely to drift into an overclaim later: **no write
-tool, and no read/write combination, has been exercised against live Zendesk in this block.**
-The write-scoped OAuth token and the live fixture ticket created for this purpose
-(`progress.md`) exist for the human-supervised walkthrough at `TODO.md` F1, not for anything
-that ran during Block 1's build or review.
+### Verified live — the F1 walkthrough, 2026-09-22
+This entry originally said no write tool had touched live Zendesk. **It has now.** The
+walkthrough ran at rung E2 against a disposable test ticket, with both allowlists pinned to
+that single id: `get_ticket`, `update_ticket`, `assign_ticket`, `upload_file`,
+`add_internal_note` (with the upload attached) and `get_attachment` all succeeded against the
+real API. Write-up: `experiments/2026-09-22-f1-live-walkthrough/RESULTS.md`.
+
+The one that matters most: **`add_internal_note`'s `public: false` is now confirmed on a live
+audit event**, not against `FakeBackend`. That literal is the only thing keeping a note from
+emailing a customer, and until this run it had been proven exclusively against a double.
+
+Four findings, three of which no offline test could have produced:
+
+- **`solve_ticket` cannot solve a ticket on this tenant.** Zendesk refuses with
+  a `ValidationError` naming two tenant-specific required custom fields (names withheld — they are internal field names) as required when solving —
+  so the API enforces the same constraint as the agent UI *and names which fields are missing*,
+  rather than failing generically. The workflow exists at E2 (`custom_fields` is on `update_ticket`'s allowlist) but
+  needs the field ids, which is an admin read this rung does not have. **E2 can work a ticket
+  and cannot finish one here.**
+- **`priority` cannot be reset once set** — `update_ticket` is reversible to another value but
+  not to unset. `analysis/tool-boundaries.csv` said `reversible` flatly; corrected.
+- **The surface can assign but cannot unassign** (`TODO.md` G4). `update_ticket`'s allowlist
+  excludes `assignee_id` by design and `assign_ticket` refuses an empty write — both correct
+  alone, a one-way door together. `assign_ticket` also moves `status` `new`→`open` as an
+  unannounced side effect, and `new` is unreachable afterwards.
+- **Attachment `content_url`s are not anonymously fetchable on this tenant** — an
+  unauthenticated GET returns 403. `TODO.md` G3 stays a blast-radius note rather than becoming
+  a credential-bypass one. It is a tenant setting, so re-check it if that config changes.
+
+### Still not verified
+`reply_publicly` and `merge_tickets` are rung E5 and not built; `close_ticket` is deliberately
+not built (closed is terminal). Whether Zendesk's plain `body` strips `display:none` text from
+inbound email HTML is still open — it needs an email sent to the support address, which is a
+separate experiment from this one.
 
 ## [0.1.0] — 2026-09-19
 

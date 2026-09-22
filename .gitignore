@@ -68,3 +68,9 @@ htmlcov/
 *.swp
 .idea/
 .vscode/
+
+# F1 and later live-run artifacts: these carry a real content_url (tenant
+# subdomain + attachment id) and raw API responses. RESULTS.md is the tracked
+# write-up; the raw material stays local.
+experiments/**/attachment.json
+experiments/**/steps-*.json
