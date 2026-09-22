@@ -1,6 +1,8 @@
 import pytest
 
-from csa_zendesk._markdown import HIDING_RULES, to_markdown
+from csa_zendesk._markdown import HIDING_RULES, strip_suspicious, to_markdown
+
+ZWSP = "​"
 
 
 def test_basic_html_becomes_markdown():
@@ -95,3 +97,43 @@ def test_every_hiding_rule_is_exercised_by_a_test():
     exercised = {"display", "visibility", "font-size", "height", "opacity", "left", "text-indent"}
     for rule in HIDING_RULES:
         assert any(token in rule for token in exercised), f"{rule} has no test"
+
+
+@pytest.mark.parametrize(
+    "text,gone",
+    [
+        (ZWSP.join("Alexander"), ZWSP),  # the observed signature case
+        ("invoice‮fdp.exe", "‮"),  # bidi override
+        ("hello\U000e0041\U000e0042", "\U000e0041"),  # tag characters
+        ("a﻿b", "﻿"),  # BOM mid-text
+        ("x\u0000y", "\u0000"),  # control character
+    ],
+)
+def test_codepoints_with_no_communicative_purpose_are_removed(text, gone):
+    assert gone not in strip_suspicious(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Sehr geehrte Damen und Herren",
+        "Château, naïve, résumé",
+        "Здравствуйте",
+        "パスワード",
+        "أحتاج إلى مساعدة",
+        "Thanks! \U0001f642\U0001f44d",
+        "xʷməθkʷəy",  # Musqueam - MUST survive
+        "Pаypal",  # homoglyph - NOT our job here
+    ],
+)
+def test_legitimate_text_is_untouched(text):
+    # Four detectors before this one had non-English content as their dominant
+    # failure mode. Stripping must have ZERO language cost - measured.
+    assert strip_suspicious(text) == text
+
+
+def test_to_markdown_strips_in_both_the_visible_and_hidden_output():
+    html = f'<p>Hi {ZWSP}there</p><div style="display:none">bad{ZWSP}text</div>'
+    md, hidden = to_markdown(html)
+    assert ZWSP not in md
+    assert hidden and ZWSP not in hidden[0]

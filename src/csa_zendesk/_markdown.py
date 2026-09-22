@@ -36,6 +36,33 @@ HIDING_RULES: tuple[str, ...] = (
 )
 _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 
+#: Codepoints with no communicative purpose in prose. STRIPPED, never folded.
+#: Measured 2026-09-22: `unidecode` also removes these, and additionally folds
+#: `Pаypal` (Cyrillic а) to a byte-identical `Paypal` - completing the homoglyph
+#: attack and destroying the evidence. Stripping is the same defang at zero
+#: language cost: German, French, Russian, Japanese, Arabic and emoji are
+#: unchanged, and so is `xʷməθkʷəy` (Musqueam).
+_STRIP = (
+    frozenset(range(0x200B, 0x200F))  # zero-width space/non-joiner/joiner/marks
+    | {0x2060, 0xFEFF, 0x180E, 0x00AD}  # word joiner, BOM, Mongolian vowel sep, soft hyphen
+    | frozenset(range(0x202A, 0x202F))  # bidi embedding and OVERRIDE
+    | frozenset(range(0x2066, 0x206A))  # bidi isolates
+    | frozenset(range(0xE0000, 0xE0080))  # tag characters ("invisible ink")
+    | frozenset(c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D))  # controls
+)
+
+
+def strip_suspicious(text: str) -> str:
+    """Remove codepoints that carry no meaning a reader could receive.
+
+    NOT a homoglyph check. A rule that flags mixed scripts within a word also
+    flags Indigenous orthographies (Musqueam contains a Greek theta, because
+    IPA-derived characters are its standard written form) and IPA
+    transcriptions. That rule is measured at 6-of-8 false positives against
+    legitimate content and is deliberately absent here.
+    """
+    return "".join(ch for ch in text if ord(ch) not in _STRIP)
+
 
 def _soup(html: str) -> BeautifulSoup:
     return BeautifulSoup(html or "", "html.parser")
@@ -74,4 +101,4 @@ def to_markdown(html: str) -> tuple[str, list[str]]:
         element.decompose()
 
     markdown = MarkdownConverter().convert_soup(soup)
-    return markdown.strip(), hidden_texts
+    return strip_suspicious(markdown.strip()), [strip_suspicious(t) for t in hidden_texts]
