@@ -760,21 +760,29 @@ def test_upload_refuses_a_filename_with_no_extension():
     # The spec requires the uploaded filename's extension to match the real
     # file's; a filename with none cannot satisfy that, and the failure would
     # surface as an unopenable attachment rather than an API error.
+    called = {"n": 0}
+
     def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
         return httpx.Response(201, json={})
 
-    with pytest.raises(exc.ZendeskError, match="extension"):
+    with pytest.raises(exc.InvalidFilename, match="extension"):
         ApiBackend(_client(handler)).upload_file(filename="report", content=b"x", content_type="application/pdf")
+    assert called["n"] == 0
 
 
 def test_upload_refuses_a_filename_that_is_only_a_trailing_dot():
     # os.path.splitext("report.") == ("report", ".") - a dot with nothing
     # after it to call an extension, the same defect as no dot at all.
+    called = {"n": 0}
+
     def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
         return httpx.Response(201, json={})
 
     with pytest.raises(exc.InvalidFilename, match="extension"):
         ApiBackend(_client(handler)).upload_file(filename="report.", content=b"x", content_type="application/pdf")
+    assert called["n"] == 0
 
 
 def test_upload_is_not_retried_on_503():

@@ -4,14 +4,18 @@
 Redacts follower/requester names - the ticket has four human followers and this
 output is written next to a git repo.
 """
-import json, os, pathlib, sys
+import json
+import os
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts"))
 from zd import call
 
+TID = int(os.environ.get("ZD_TEST_TICKET", "0"))  # export ZD_TEST_TICKET=<id>
 if not TID:
     raise SystemExit("set ZD_TEST_TICKET to a disposable ticket id")
 
-TID = int(os.environ.get("ZD_TEST_TICKET", "0"))  # export ZD_TEST_TICKET=<id>
 status, hdr, doc, raw = call("GET", f"/api/v2/tickets/{TID}.json")
 print(f"HTTP {status}")
 t = (doc or {}).get("ticket", {})
