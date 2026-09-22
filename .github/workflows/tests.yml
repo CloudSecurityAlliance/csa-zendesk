@@ -9,7 +9,11 @@ jobs:
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with: { python-version: "3.12" }
       - run: pip install -e ".[dev,server]"
-      - run: ruff check src tests scripts
+      # `.` not a list of directory names: `ruff check src tests scripts` left
+      # experiments/ - tracked, and the live-walkthrough path - silently unlinted,
+      # hiding a NameError in all three write scripts. Anything to skip goes in
+      # pyproject's exclude/per-file-ignores, where it is reviewable.
+      - run: ruff check .
       # Formatting is gated on the shipped package and its tests only. scripts/ is
       # excluded deliberately: check_public_safe.py is the publication gate, its
       # regexes and STRUCTURAL table are hand-aligned for readability, and CLAUDE.md

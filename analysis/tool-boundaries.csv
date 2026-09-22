@@ -3,11 +3,14 @@ get_ticket,GET,/api/v2/tickets/{ticket_id},none,read,n/a,internal,ticket.read
 search_tickets,GET,/api/v2/search,type:ticket composed onto every query,read,n/a,internal,ticket.read
 list_comments,GET,/api/v2/tickets/{ticket_id}/comments,none,read,n/a,internal,ticket.read
 create_ticket,POST,/api/v2/tickets,no public comment; body must not contain status or custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids,write,reversible,internal,ticket.write
-update_ticket,PUT,/api/v2/tickets/{ticket_id},body must not contain comment or status; nor custom_status_id / additional_collaborators / email_ccs / followers / collaborator_ids,write,reversible,internal,ticket.write
+update_ticket,PUT,/api/v2/tickets/{ticket_id},allowlist: body may contain ONLY subject / priority / type / tags / custom_fields / ticket_form_id / due_at / external_id / problem_id,write,reversible,internal,ticket.write
 assign_ticket,PUT,/api/v2/tickets/{ticket_id},body may contain only assignee_id or group_id,write,reversible,internal,ticket.write
-add_internal_note,PUT,/api/v2/tickets/{ticket_id},comment only; public forced false,note,reversible,internal,ticket.note
+add_internal_note,PUT,/api/v2/tickets/{ticket_id},only body+uploads; public is a hardcoded literal in the backend,note,reversible,internal,ticket.note
 reply_publicly,PUT,/api/v2/tickets/{ticket_id},comment only; public forced true,reply,irreversible,contacts-a-person,ticket.reply
 solve_ticket,PUT,/api/v2/tickets/{ticket_id},status only; solved,solve,reversible-for-a-period,internal,ticket.solve
 close_ticket,PUT,/api/v2/tickets/{ticket_id},status only; closed,close,irreversible,internal,ticket.close
 merge_tickets,POST,/api/v2/tickets/{ticket_id}/merge,forbid source_comment_is_public and target_comment_is_public,close,irreversible,contacts-a-person,ticket.merge
 update_trigger,PUT,/api/v2/triggers/{trigger_id},none,write,reversible,internal,admin.write
+upload_file,POST,/api/v2/uploads,none,attach,reversible,internal,ticket.attach
+delete_upload,DELETE,/api/v2/uploads/{token},none,delete,recoverable-with-effort,internal,ticket.attach
+get_attachment,GET,/api/v2/attachments/{attachment_id},none,read,n/a,internal,ticket.read

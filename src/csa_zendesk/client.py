@@ -7,7 +7,7 @@ the model-facing contract lives.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from .backend import Backend, Envelope
 from .policy import Policy, PolicyBackend
@@ -73,3 +73,91 @@ class ZendeskClient:
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.list_comments(ticket_id=ticket_id))
+
+    def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
+        """Edit ticket fields, as the raw upstream envelope: `{"ticket": {...}}`.
+
+        Never a comment and never a status change - `PUT /tickets/{id}` is
+        five impact levels in one call (ADR-016), and it is the tool/policy
+        constraint (`tools.TOOLS["update_ticket"]`'s `_forbid("comment",
+        "status", ...)`), enforced at the `PolicyBackend` seam, that keeps
+        this call inside the field-edit bucket - not this method, which just
+        forwards `fields` unshaped.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.update_ticket(ticket_id=ticket_id, fields=fields))
+
+    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+        """Reassign a ticket's owner and/or group, as the raw upstream envelope.
+
+        Same operation as `update_ticket` (`PUT /tickets/{id}`), but bucket-pure
+        by construction: `tools.TOOLS["assign_ticket"]`'s `_only("assignee_id",
+        "group_id")` is an allowlist, so no other field can reach this call.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(
+            Envelope, self._backend.assign_ticket(ticket_id=ticket_id, assignee_id=assignee_id, group_id=group_id)
+        )
+
+    def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        """Add a private, internal-only comment, as the raw upstream envelope.
+
+        Always private, never merely defaulted so: API-SURFACE.md §5.4f -
+        comment.public has no fixed default and inherits from the ticket's
+        first comment, which is PUBLIC on an email-originated ticket. This
+        method (and `Backend.add_internal_note` beneath it) takes no
+        `public` parameter at all, so there is no channel through which a
+        caller - or an instruction injected from ticket content - could make
+        this call reach the requester; `ApiBackend`/`FakeBackend` hardcode
+        `public: False` unconditionally.
+
+        `uploads` is a list of upload tokens (Task 4's `upload_file` return
+        value). An empty list and `None` behave identically - neither puts
+        an `uploads` key in the request body.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.add_internal_note(ticket_id=ticket_id, body=body, uploads=uploads))
+
+    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+        """Mark a ticket solved, as the raw upstream envelope: `{"ticket": {...}}`.
+
+        Sets `status=solved` and nothing else - `Backend.solve_ticket` takes
+        no other parameter, so there is nothing else this call could change.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.solve_ticket(ticket_id=ticket_id))
+
+    def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
+        """Upload a file's bytes, as the raw upstream envelope: `{"upload": {"token": ...}}`.
+
+        This is not itself an attachment: the returned token names bytes that
+        exist on Zendesk's side attached to nothing at all, and become
+        visible on a ticket only once passed to `add_internal_note(uploads=
+        [token])`. `filename` must carry an extension - Zendesk requires it
+        to match the real file's, or a reader may fail to open the result -
+        and a call omitting one is refused before it reaches the wire.
+
+        An unattached upload is invisible everywhere else in this library's
+        surface; use `delete_upload` to clean one up rather than leaving it
+        as litter nobody can find.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.upload_file(filename=filename, content=content, content_type=content_type))
+
+    def delete_upload(self, *, token: str) -> Envelope:
+        """Delete an unattached upload by its token, as the raw upstream envelope.
+
+        The cleanup counterpart to `upload_file`: an upload that is never
+        attached to a comment is otherwise invisible litter.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.delete_upload(token=token))
+
+    def get_attachment(self, *, attachment_id: int) -> Envelope:
+        """Read one attachment's metadata, as the raw upstream envelope: `{"attachment": {...}}`.
+
+        A read, not an attach operation - it does not create or delete
+        anything, so it needs only `ticket.read`.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.get_attachment(attachment_id=attachment_id))

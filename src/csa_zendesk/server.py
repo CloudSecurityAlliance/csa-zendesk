@@ -9,26 +9,54 @@ directly, go to stderr - `tests/test_public_api.py`'s import-time guard and
 `ruff`'s `T20` selection both police this, and `test_server.py` adds a
 registration-time check neither of those two can perform.
 
-**Three tools, read-only, honestly annotated.** `get_ticket`, `search_tickets`
-and `list_comments` are the whole surface: `readOnlyHint=True`,
-`destructiveHint=False` on every one, because that is what they actually are.
-No write tool is registered - `E1_CAPABILITIES` (below), the exact set this
-module connects with, would refuse one anyway (it grants only
-`TICKET_READ`), but a tool a model can see and cannot use is a worse
-experience than one that is simply absent (task brief). This is rung E1 of
-the whole-project design's enablement track - "triage the live queue;
-propose everything, change nothing" - and it is asserted, not assumed:
-`test_the_server_requests_only_read_capabilities` and
-`test_no_registered_tool_maps_to_a_write_operation` (Task 7) check both
-halves of that claim.
+**Four read tools, six write tools, both honestly annotated.** `get_ticket`,
+`search_tickets`, `list_comments` and `get_attachment` are `READ_TOOLS`:
+`read_only_hint=True`, `destructive_hint=False` on every one, because that is
+what they actually are. `get_attachment` sits here rather than among the
+write tools even though it is registered in the same task that adds them
+(orchestrator amendment to the task brief, before dispatch): it gates on
+`TICKET_READ` (`policy._GATES["get_attachment"]`), the same capability
+`E1_CAPABILITIES` already grants, so a server that never reaches E2 can
+still read an attachment already on a ticket - putting it in `WRITE_TOOLS`
+instead would have made its gate, its annotation and its collection
+disagree with each other for no reason but which list a name landed in.
 
-**`READ_TOOLS` and `TOOLS` are named separately on purpose.** `TOOLS` is set to
-`READ_TOOLS` here, as a plain list - not re-derived - so that a later task
-extending the surface with auth-lifecycle tools (`authenticate`, not
-read-only; `logout`, destructive) can write `TOOLS = READ_TOOLS + AUTH_TOOLS`
-as an ordinary concatenation. Tests that must keep holding once that happens
-(every read tool is read-only and non-destructive) assert against
-`READ_TOOLS`, never `TOOLS`, for the same reason.
+`update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`,
+`upload_file` and `delete_upload` are `WRITE_TOOLS`: every one is
+`read_only_hint=False` - no exceptions, no member that is secretly a read
+wearing a write's annotation to avoid a second list. `destructive_hint` is
+`True` only for `delete_upload` (it removes bytes that exist nowhere else);
+the other five add or change without discarding anything, so they are
+`destructive_hint=False`. `solve_ticket` is additionally
+`idempotent_hint=True`: calling it again on an already-solved ticket asks
+for the same status it already has. This is rung E2 of the whole-project
+design's enablement track - "work tickets for real: + note, write" - and,
+per ADR-016, each write tool is `(operation x constrained arguments)`: the
+`ToolSpec` constraints in `tools.py` (not this module) are what keep
+`update_ticket` from also being able to comment, reply, solve or close, and
+this module trusts that enforcement rather than re-implementing it.
+
+`reply_publicly`, `merge_tickets` and `close_ticket` are deliberately NOT
+registered here. Reach (rung E5) and irreversibility are separate rungs from
+E2, and a tool the model can see but must not use is worse than one that is
+simply absent (task brief) - the same reasoning `AUTH_TOOLS`' absence of a
+write tool at E1 already relied on. `E2_CAPABILITIES` (below) would refuse
+all three anyway (it grants none of `TICKET_REPLY`, `TICKET_MERGE`,
+`TICKET_CLOSE`), but the tool table not naming them is the belt to the
+policy gate's suspenders. This is asserted, not assumed:
+`test_the_server_requests_only_read_capabilities`,
+`test_every_registered_tool_gates_on_the_capability_its_annotation_implies`
+and `test_reply_publicly_and_merge_and_close_are_not_registered` check all
+three halves of that claim.
+
+**`READ_TOOLS`, `WRITE_TOOLS`, `AUTH_TOOLS` and `TOOLS` are named
+separately on purpose.** `TOOLS` is `READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS`,
+an ordinary concatenation, not re-derived from any of the three - so a
+property that must keep holding of one collection as the others grow
+(every read tool is read-only and non-destructive; every write tool is
+`read_only_hint=False`; every auth tool is reachable regardless of
+capability rung) can assert against that collection by name, never against
+`TOOLS`, and stay true no matter what the other two collections later gain.
 
 **Every response passes through `_untrusted` before it leaves this module.**
 No tool returns a raw envelope to a model - this is the block's security
@@ -62,9 +90,9 @@ triage decision made on an incomplete conversation.
 reachable without leaving the session (TODO E21).** A user of this server who
 is logged out, or whose 90-day refresh token has lapsed, would otherwise have
 to leave Claude Code, find the right directory and venv, and run `csa-zendesk
-auth login` by hand while every tool call fails in the meantime. `TOOLS` is
-reassigned here to `READ_TOOLS + AUTH_TOOLS` - a plain concatenation, per the
-note above - and `INSTRUCTIONS` is threaded into `build_server()` so a model
+auth login` by hand while every tool call fails in the meantime. `TOOLS`
+includes `AUTH_TOOLS` as part of the plain concatenation described above,
+and `INSTRUCTIONS` is threaded into `build_server()` so a model
 that hits `NotAuthorised` knows to call `authenticate` itself rather than
 retrying a call that cannot succeed or going looking for a token file on disk
 (the precedent is `csa-google-workspace`'s server instructions).
@@ -143,6 +171,7 @@ would invite the model to discount it. See the provenance comment at
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import time
@@ -156,14 +185,16 @@ from . import __version__, _untrusted, auth
 from . import exceptions as exc
 from ._connect import connect
 from .client import ZendeskClient
-from .policy import TICKET_READ
+from .policy import TICKET_ATTACH, TICKET_NOTE, TICKET_READ, TICKET_SOLVE, TICKET_WRITE
 
 __all__ = [
     "AUTH_TOOLS",
     "E1_CAPABILITIES",
+    "E2_CAPABILITIES",
     "INSTRUCTIONS",
     "READ_TOOLS",
     "TOOLS",
+    "WRITE_TOOLS",
     "build_server",
     "call_tool_sync",
     "main",
@@ -189,16 +220,36 @@ _TRUNCATION_WARNING = (
 #: everything, change nothing." `TICKET_READ` alone - not
 #: `policy.PROFILES["readonly"]`, which also grants `HC_READ`/`PEOPLE_READ`/
 #: `REPORTING_READ`/`ADMIN_READ` that none of `get_ticket`/`search_tickets`/
-#: `list_comments` exercises - is the minimum authority this file's tools
-#: actually need, matching their honest `readOnlyHint=True` annotation
-#: exactly rather than "at least as much." No capability here ends in
-#: anything but `.read`, and none names `write`/`reply`/`close`/`solve` -
-#: `test_the_server_requests_only_read_capabilities` pins both properties.
-#: A write tool registered here by mistake still could not be reached: the
-#: gate in `policy.py` refuses any capability this set does not grant,
-#: independent of what `TOOLS` happens to list. Built from `policy.TICKET_READ`
-#: rather than the literal `"ticket.read"` so the two can never drift apart.
+#: `list_comments`/`get_attachment` exercises - is the minimum authority
+#: this file's read tools actually need, matching their honest
+#: `read_only_hint=True` annotation exactly rather than "at least as much."
+#: No capability here ends in anything but `.read`, and none names
+#: `write`/`reply`/`close`/`solve` - `test_the_server_requests_only_read_
+#: capabilities` pins both properties. A write tool registered here by
+#: mistake still could not be reached: the gate in `policy.py` refuses any
+#: capability this set does not grant, independent of what `TOOLS` happens
+#: to list. Built from `policy.TICKET_READ` rather than the literal
+#: `"ticket.read"` so the two can never drift apart. Still exported and kept
+#: exactly as it was at E1 (not folded into `E2_CAPABILITIES`'s definition as
+#: a literal set) - `E2_CAPABILITIES` is built as `E1_CAPABILITIES | {...}`,
+#: below, so the read rung's own definition stays the single source of truth
+#: for what it grants regardless of which rung the running server requests.
 E1_CAPABILITIES: frozenset[str] = frozenset({TICKET_READ})
+
+#: Rung E2 (whole-project design §5): "work tickets for real: + note,
+#: write." Adds exactly the four capabilities `WRITE_TOOLS`' six tools need -
+#: `TICKET_WRITE` (`update_ticket`, `assign_ticket`), `TICKET_NOTE`
+#: (`add_internal_note`), `TICKET_SOLVE` (`solve_ticket`), `TICKET_ATTACH`
+#: (`upload_file`, `delete_upload`) - over `E1_CAPABILITIES`, union rather
+#: than a fresh literal set so the read rung's grants can never silently
+#: drop out from under a server that has moved on to write. Deliberately
+#: excludes `TICKET_REPLY`, `TICKET_MERGE` and `TICKET_CLOSE`: reach (rung
+#: E5) and irreversibility are different rungs from E2, and
+#: `reply_publicly`/`merge_tickets`/`close_ticket` are not registered in
+#: `TOOLS` at all (see the module docstring) - this is the second, redundant
+#: layer that would refuse them even if a future edit registered one by
+#: mistake.
+E2_CAPABILITIES: frozenset[str] = E1_CAPABILITIES | {TICKET_WRITE, TICKET_NOTE, TICKET_SOLVE, TICKET_ATTACH}
 
 
 def _client() -> ZendeskClient:
@@ -207,11 +258,18 @@ def _client() -> ZendeskClient:
     Every real call goes through `connect()`, which reads
     `CSA_ZENDESK_SUBDOMAIN` and the OAuth token store itself - nothing in this
     module holds a credential or constructs a `ZendeskClient` any other way.
-    Connects with `capabilities=E1_CAPABILITIES` rather than
-    `profile="readonly"`: a named profile is a convenience for a caller
-    composing several capabilities, and this server only ever needs the one.
+    Connects with `capabilities=E2_CAPABILITIES` rather than
+    `profile="default"` (or any other named profile): a named profile is a
+    convenience for a caller composing several capabilities, and this server
+    only ever needs this one explicit set - naming it directly is also what
+    keeps `connect()`'s own refusal ("neither profile nor capabilities") from
+    ever firing here. `E2_CAPABILITIES` (not `E1_CAPABILITIES`) is what makes
+    the six `WRITE_TOOLS` calls actually reach `ApiBackend` rather than being
+    registered, annotated, and then refused by policy on every call - this is
+    the point in the file where the server actually moves from rung E1 to
+    rung E2, not merely where the tools are listed.
     """
-    return connect(capabilities=E1_CAPABILITIES)
+    return connect(capabilities=E2_CAPABILITIES)
 
 
 _TICKET_ID_SCHEMA: dict[str, Any] = {
@@ -252,8 +310,24 @@ _SEARCH_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-#: The three read tools this server exposes. Scoped by tests independently of
+_ATTACHMENT_ID_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "attachment_id": {
+            "type": "integer",
+            "description": "The numeric Zendesk attachment id, as it appears on a comment already read.",
+        },
+    },
+    "required": ["attachment_id"],
+    "additionalProperties": False,
+}
+
+#: The four read tools this server exposes. Scoped by tests independently of
 #: `TOOLS` below - see the module docstring's note on why the two names exist.
+#: `get_attachment` lives here, not in `WRITE_TOOLS`, per the orchestrator
+#: amendment to this task's brief: it gates on `TICKET_READ`
+#: (`policy._GATES["get_attachment"]`), so its collection matches its gate
+#: and its annotation with no special case.
 READ_TOOLS: list[mcp_types.Tool] = [
     mcp_types.Tool(
         name="get_ticket",
@@ -280,6 +354,186 @@ READ_TOOLS: list[mcp_types.Tool] = [
         ),
         input_schema=_TICKET_ID_SCHEMA,
         annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="get_attachment",
+        description=(
+            "Fetch one attachment's metadata by id, as the raw upstream envelope. A read, not "
+            "part of the upload/attach workflow - it does not create, change or delete anything."
+        ),
+        input_schema=_ATTACHMENT_ID_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False),
+    ),
+]
+
+_UPDATE_TICKET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ticket_id": {
+            "type": "integer",
+            "description": "The numeric Zendesk ticket id.",
+        },
+        "fields": {
+            "type": "object",
+            "description": (
+                "Ticket fields to edit (e.g. subject, priority, tags, custom_fields). Must NOT "
+                "contain `comment`, `status`, or a collaborator/notification field "
+                "(custom_status_id, additional_collaborators, email_ccs, followers, "
+                "collaborator_ids) - each of those changes what kind of call this is and needs a "
+                "different tool (add_internal_note, solve_ticket, ...); this tool refuses a call "
+                "carrying any of them rather than sending it."
+            ),
+            "additionalProperties": True,
+        },
+    },
+    "required": ["ticket_id", "fields"],
+    "additionalProperties": False,
+}
+
+_ASSIGN_TICKET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ticket_id": {
+            "type": "integer",
+            "description": "The numeric Zendesk ticket id.",
+        },
+        "assignee_id": {
+            "type": "integer",
+            "description": "The numeric id of the agent to assign this ticket to.",
+        },
+        "group_id": {
+            "type": "integer",
+            "description": "The numeric id of the group to assign this ticket to.",
+        },
+    },
+    "required": ["ticket_id"],
+    "additionalProperties": False,
+}
+
+_ADD_INTERNAL_NOTE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ticket_id": {
+            "type": "integer",
+            "description": "The numeric Zendesk ticket id.",
+        },
+        "body": {
+            "type": "string",
+            "description": "The note's text. Never emailed or shown to the requester - internal only.",
+        },
+        "uploads": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Upload tokens (from upload_file) to attach to this note.",
+        },
+    },
+    "required": ["ticket_id", "body"],
+    "additionalProperties": False,
+}
+
+_UPLOAD_FILE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "filename": {
+            "type": "string",
+            "description": (
+                "Must carry an extension matching the real file's content (e.g. `report.pdf`) - "
+                "Zendesk requires this, and a filename without one is refused before this reaches "
+                "the wire."
+            ),
+        },
+        "content_base64": {
+            "type": "string",
+            "description": (
+                "The file's raw bytes, base64-encoded (MCP tool arguments are JSON, which has no binary type)."
+            ),
+        },
+        "content_type": {
+            "type": "string",
+            "description": "The file's MIME type, e.g. application/pdf.",
+        },
+    },
+    "required": ["filename", "content_base64", "content_type"],
+    "additionalProperties": False,
+}
+
+_DELETE_UPLOAD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "token": {
+            "type": "string",
+            "description": "The upload token returned by a prior upload_file call.",
+        },
+    },
+    "required": ["token"],
+    "additionalProperties": False,
+}
+
+#: The six write tools this server exposes at rung E2 - see the module
+#: docstring for why each is annotated the way it is, and why
+#: `reply_publicly`/`merge_tickets`/`close_ticket` are not here at all.
+#: Scoped by tests independently of `TOOLS` below, the same as `READ_TOOLS`.
+WRITE_TOOLS: list[mcp_types.Tool] = [
+    mcp_types.Tool(
+        name="update_ticket",
+        description=(
+            "Edit a ticket's fields (subject, priority, tags, custom fields, ...), as the raw "
+            "upstream ticket envelope. Cannot add a comment, change status, or notify a "
+            "collaborator - use add_internal_note or solve_ticket for those."
+        ),
+        input_schema=_UPDATE_TICKET_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="assign_ticket",
+        description=(
+            "Reassign a ticket's agent and/or group, as the raw upstream ticket envelope. At "
+            "least one of assignee_id/group_id is required - a call naming neither is refused."
+        ),
+        input_schema=_ASSIGN_TICKET_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="add_internal_note",
+        description=(
+            "Add a private, internal-only comment to a ticket, as the raw upstream ticket "
+            "envelope. Never emailed or shown to the requester - there is no way to make this "
+            "call public. At least one of body/uploads is required."
+        ),
+        input_schema=_ADD_INTERNAL_NOTE_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="solve_ticket",
+        description=(
+            "Mark a ticket solved, as the raw upstream ticket envelope. Sets status=solved and "
+            "nothing else. Not itself terminal, but the on-ramp to it: many accounts auto-close a "
+            "solved ticket after a fixed period, after which no further write is possible."
+        ),
+        input_schema=_TICKET_ID_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
+    ),
+    mcp_types.Tool(
+        name="upload_file",
+        description=(
+            "Upload a file's bytes and get back an upload token, as the raw upstream envelope. "
+            "This is not itself an attachment: the token names bytes on Zendesk's side attached "
+            "to nothing until a later add_internal_note call passes it in `uploads`. An orphaned "
+            "upload is invisible everywhere else in this server's surface - clean one up with "
+            "delete_upload rather than leaving it as litter."
+        ),
+        input_schema=_UPLOAD_FILE_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="delete_upload",
+        description=(
+            "Delete an unattached upload by its token, as the raw upstream envelope. Only "
+            "removes an upload that was never attached to a comment - it has no effect on, and no "
+            "access to, an attachment already on a ticket."
+        ),
+        input_schema=_DELETE_UPLOAD_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=True),
     ),
 ]
 
@@ -349,10 +603,14 @@ AUTH_TOOLS: list[mcp_types.Tool] = [
     ),
 ]
 
-#: `READ_TOOLS + AUTH_TOOLS`, an ordinary concatenation - reassigning the
-#: module-level name Task 5 defined, not shadowing it, so `srv.TOOLS` means
-#: the same thing to every caller regardless of which task's code they read.
-TOOLS: list[mcp_types.Tool] = READ_TOOLS + AUTH_TOOLS
+#: `READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS`, an ordinary concatenation -
+#: reassigning the module-level name that first held `READ_TOOLS + AUTH_TOOLS`,
+#: not shadowing it, so `srv.TOOLS` means the same thing to every caller
+#: regardless of which task's code they read. `WRITE_TOOLS` sits between the
+#: other two, matching the rung order (read, then write, then the
+#: always-available auth-lifecycle tools) rather than being appended at the
+#: end.
+TOOLS: list[mcp_types.Tool] = READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS
 
 #: Threaded into `build_server()`. The second sentence is the load-bearing
 #: one - see `csa-google-workspace`'s identical precedent in the module
@@ -518,6 +776,30 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
     no stored credential, ...) - a caller who passed a bad tool name should
     see that mistake, not a connection failure that has nothing to do with
     what they asked for.
+
+    Every branch below wraps its envelope with the `_untrusted` wrapper named
+    for that envelope's OWN kind: `wrap_ticket` for the four writes that
+    return `{"ticket": {...}}`, `wrap_comments`, `wrap_search`, and
+    `wrap_upload`/`wrap_attachment` for the attachment family.
+
+    Reaching for `wrap_ticket` generically WOULD work in the sense that
+    matters least - it walks and wraps the whole envelope regardless of shape,
+    and is proven to tolerate one with no `"ticket"` key
+    (`test_wrap_ticket_tolerates_an_envelope_with_no_ticket_key`). But the
+    `"ticket"` key is what it uses to LABEL the wrap's `source`, so an upload
+    or attachment put through it comes back marked `source=zendesk-ticket...`,
+    which is false. The markers would still delimit the data correctly and the
+    claim beside them would be wrong - and the whole value of a provenance
+    marker is that the model can believe it. Naming a sibling per envelope
+    kind is not duplication to be avoided here; it is how this module encodes
+    provenance at all, which is why `wrap_comments` and `wrap_search` are each
+    a single line. `upload_file`'s `content_base64` argument is
+    decoded before the call: MCP tool arguments are JSON, which has no binary
+    type, so the file's bytes travel as base64 text - decoded with
+    `validate=True` so that a malformed value raises `binascii.Error` (a
+    `ValueError` subclass) rather than silently decoding to `b""`, which
+    reaches `_on_call_tool`'s existing `except ValueError` branch exactly
+    like an unknown tool name does, rather than needing a new branch.
     """
     if name == "authenticate":
         return _cmd_authenticate()
@@ -525,7 +807,18 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         return _cmd_auth_status()
     if name == "logout":
         return _cmd_logout()
-    if name not in {"get_ticket", "search_tickets", "list_comments"}:
+    if name not in {
+        "get_ticket",
+        "search_tickets",
+        "list_comments",
+        "get_attachment",
+        "update_ticket",
+        "assign_ticket",
+        "add_internal_note",
+        "solve_ticket",
+        "upload_file",
+        "delete_upload",
+    }:
         raise ValueError(f"unknown tool: {name!r}")
     client = _client()
     if name == "get_ticket":
@@ -536,14 +829,65 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         per_page = arguments.get("per_page", 25)
         envelope = client.search_tickets(query=arguments["query"], page=page, per_page=per_page)
         return json.dumps(_untrusted.wrap_search(envelope), indent=2)
-    # The only name the membership check above still lets through here.
-    envelope = client.list_comments(ticket_id=arguments["ticket_id"])
-    text = json.dumps(_untrusted.wrap_comments(envelope), indent=2)
-    comments = envelope.get("comments")
-    count = len(comments) if isinstance(comments, list) else 0
-    if count >= _COMMENTS_PAGE_CAP:
-        text = _TRUNCATION_WARNING.format(count=count) + text
-    return text
+    if name == "list_comments":
+        envelope = client.list_comments(ticket_id=arguments["ticket_id"])
+        text = json.dumps(_untrusted.wrap_comments(envelope), indent=2)
+        comments = envelope.get("comments")
+        count = len(comments) if isinstance(comments, list) else 0
+        if count >= _COMMENTS_PAGE_CAP:
+            text = _TRUNCATION_WARNING.format(count=count) + text
+        return text
+    if name == "get_attachment":
+        envelope = client.get_attachment(attachment_id=arguments["attachment_id"])
+        return json.dumps(_untrusted.wrap_attachment(envelope), indent=2)
+    if name == "update_ticket":
+        envelope = client.update_ticket(ticket_id=arguments["ticket_id"], fields=arguments["fields"])
+        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+    if name == "assign_ticket":
+        envelope = client.assign_ticket(
+            ticket_id=arguments["ticket_id"],
+            assignee_id=arguments.get("assignee_id"),
+            group_id=arguments.get("group_id"),
+        )
+        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+    if name == "add_internal_note":
+        envelope = client.add_internal_note(
+            ticket_id=arguments["ticket_id"],
+            body=arguments["body"],
+            uploads=arguments.get("uploads"),
+        )
+        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+    if name == "solve_ticket":
+        envelope = client.solve_ticket(ticket_id=arguments["ticket_id"])
+        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+    if name == "upload_file":
+        # validate=True, NOT the default: `b64decode` discards non-alphabet
+        # characters BEFORE checking padding, so `b64decode("!!!!")` returns
+        # b"" rather than raising - garbage whose junk-character count happens
+        # to land on a multiple of 4 would decode to an empty file, upload
+        # successfully, and hand back a token for a zero-byte attachment. The
+        # docstring above once claimed malformed input always raises
+        # `binascii.Error`; that is true only of the cases this flag makes
+        # true of all of them. `backend._refuse_an_empty_upload` is the second
+        # guard, at the seam, since the library is callable without this path.
+        content = base64.b64decode(arguments["content_base64"], validate=True)
+        envelope = client.upload_file(
+            filename=arguments["filename"], content=content, content_type=arguments["content_type"]
+        )
+        return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
+    # Explicit rather than by exhaustion (final whole-branch review, Minor 8).
+    # This was `delete_upload` reached by falling off the end of the chain, so
+    # adding a name to the membership check above without adding a branch for
+    # it silently routed that call to a DELETE. The membership check is the
+    # only thing standing between an unknown name and this line, and it is not
+    # the thing a future author edits when adding a tool.
+    if name == "delete_upload":
+        envelope = client.delete_upload(token=arguments["token"])
+        return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
+    # pragma: no cover - unreachable while the membership check above names
+    # exactly the tools with branches here; it exists so that adding a name
+    # there and forgetting a branch fails loudly instead of silently deleting.
+    raise ValueError(f"unknown tool: {name!r}")  # pragma: no cover
 
 
 async def _on_list_tools(
@@ -572,6 +916,18 @@ async def _on_list_tools(
 #:     check, `_errors.py`'s 422 branch) use a fixed sentence naming the
 #:     documented 1000-result ceiling - neither interpolates anything Zendesk
 #:     sent back.
+#:   - `exc.EmptyWrite`: all FOUR raise sites (`backend.py`'s
+#:     `_refuse_an_empty_assignment`, `_refuse_an_empty_update`,
+#:     `_refuse_an_empty_note`, `_refuse_an_empty_upload`) use a fixed
+#:     sentence naming what the call needs (`assignee_id`/`group_id`, a
+#:     non-empty `fields`, a body or an upload, or non-empty content). This
+#:     said "both" and named two until the final whole-branch review; the
+#:     other two were added by Tasks 3 and 5 of this same branch, which is
+#:     exactly the decay an enumeration invites - the property being claimed
+#:     (own prose, nothing vendor-derived) held throughout, but the list
+#:     stopped being a list of what exists - a pre-flight refusal on this process's own arguments,
+#:     before any request is built or sent, the same shape as `exc.
+#:     InvalidPath` and `exc.SearchLimitExceeded` just above.
 #:   - `exc.RateLimited`, `exc.ServiceUnavailable`: `_errors.py` builds both
 #:     from a fixed string ("Zendesk rate limit reached" / "...likely
 #:     maintenance"); `retry_after` is an int off the `Retry-After` header,
@@ -643,6 +999,8 @@ _NEVER_WRAP: tuple[type[exc.ZendeskError], ...] = (
     exc.PolicyError,
     exc.InvalidPath,
     exc.SearchLimitExceeded,
+    exc.EmptyWrite,
+    exc.InvalidFilename,
     exc.RateLimited,
     exc.ServiceUnavailable,
     auth.NotAuthorised,

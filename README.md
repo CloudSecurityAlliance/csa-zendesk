@@ -10,29 +10,39 @@ project_source: github:CloudSecurityAlliance-Internal/CINO-Projects/projects/Clo
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
-> **Status: Block 0 (foundations), Block 0b (OAuth) and Block 0e (a read-only MCP server) are
-> complete.** `src/` holds the typed error hierarchy, the error parser, the pagination guard, the
-> HTTP client with OAuth end to end (`connect()`), the `Backend` seam with an offline
-> `FakeBackend`, the fail-closed capability policy, and a thin `ZendeskClient`. Three operations —
-> `get_ticket`, `search_tickets`, `list_comments` — reach through every layer.
+> **Status: Block 0 (foundations), Block 0b (OAuth), Block 0e (a read-only MCP server) and
+> Block 1 (the write surface and attachments) are complete.** `src/` holds the typed error
+> hierarchy, the error parser, the pagination guard, a transport with OAuth end to end
+> (`connect()`), the `Backend` seam with an offline `FakeBackend`, the fail-closed capability
+> policy, and a thin `ZendeskClient`.
 >
-> **What exists: `csa-zendesk-mcp`, a stdio MCP server at rung E1** — see
-> [Using the MCP server](#using-the-mcp-server) below. It connects with exactly one capability,
-> `TICKET_READ`, and registers those same three operations as read-only tools, plus three
-> auth-lifecycle tools (`authenticate`, `auth_status`, `logout`) that sit outside the capability
-> model by design (ADR-017) so a user never has to leave the session to sign in or out.
+> **What exists: `csa-zendesk-mcp`, a stdio MCP server at rung E2** — "work tickets for real:
+> + note, write" — see [Using the MCP server](#using-the-mcp-server) below. Ten tools:
+> four reads (`get_ticket`, `search_tickets`, `list_comments`, `get_attachment`), six writes
+> (`update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`,
+> `delete_upload`), plus three auth-lifecycle tools (`authenticate`, `auth_status`, `logout`)
+> that sit outside the capability model by design (ADR-017) so a user never has to leave the
+> session to sign in or out. `reply_publicly`, `merge_tickets` and `close_ticket` are
+> deliberately **not** registered — see "What does not exist" below.
 >
-> **What has not been verified: the read tools against a live ticket.** OAuth
-> (login/`whoami`/refresh/revoke) and the MCP handshake have each been proven against the real
-> Zendesk tenant and a real client, but no `get_ticket` call has ever fetched a real ticket —
-> see `TODO.md` F1–F5. "0.1.0" (see `CHANGELOG.md`) means mostly sort of works a bit, not more.
+> **What has not been verified: any write, against a live ticket.** The read path — OAuth,
+> the MCP handshake, the allowlist failing closed, ticket text wrapped as untrusted data — was
+> confirmed live against the real Zendesk tenant on 2026-09-21, from a separate, unmodified
+> clone at `0.1.0`. **No tool in the write surface (`update_ticket`, `assign_ticket`,
+> `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload`) has been exercised
+> against live Zendesk — Block 1 was built and reviewed entirely offline, against `FakeBackend`
+> and mocked transports.** The live end-to-end write walkthrough is `TODO.md` F1 and happens
+> after this branch merges, with a human present; do not read "Block 1 is complete" as "Block 1
+> is live-verified" — they are separate claims.
 >
-> **What does not exist: everything past rung E1.** No write tool is registered and no capability
-> beyond `TICKET_READ` is granted — the server cannot write even by mistake, this is a control the
-> tests assert, not an oversight to note. Of the 54 tools in the whole-project design, three data
-> tools are built; the rest of the write/reply/admin surface (rungs beyond E1, the B1–B5 track) is
-> still to come. Do not describe any tool beyond those six as working: the Scope table below is
-> the coverage target this project is building toward, not the built surface.
+> **What does not exist: reach, admin, and the rest of the B1–B5 track.** `reply_publicly`
+> (public reply) and `merge_tickets` both email a requester and are held for rung E5
+> (`CSA_ZD_ALLOW_REACH`); `close_ticket` is terminal (`analysis/API-SURFACE.md` §5.4d — Zendesk
+> accepts `status: "closed"` and never lets it change again) and is held back deliberately, not
+> because it is unbuilt. No admin capability (`ADMIN_READ`/`ADMIN_WRITE`) is granted. Of the 54
+> tools in the whole-project design, ten are built; the rest is still to come. Do not describe
+> any tool beyond those ten as working: the Scope table below is the coverage target this
+> project is building toward, not the built surface.
 
 ## Scope
 
@@ -87,8 +97,8 @@ mcp/_tools/*.py      per-family register_*(app, get_client) producers
 ```
 
 `mcp/_tools/*.py` is the target layout for the full 54-tool surface, not what exists today:
-Block 0e's `csa-zendesk-mcp` (`src/csa_zendesk/server.py`) registers its six tools flat, with no
-`mcp/` package and no per-family producer modules yet.
+`csa-zendesk-mcp` (`src/csa_zendesk/server.py`) registers its thirteen tools flat, with no `mcp/`
+package and no per-family producer modules yet.
 
 Enforcement lives in the wrapper around the seam, not in the tools, so a library embedder gets
 the same guarantee an MCP client does.
@@ -173,9 +183,13 @@ off a vendor screen, it takes the vendor's own label for the last segment — Ze
 id the **Identifier**, so the variable does too, and nobody has to translate while looking at the
 form.
 
-Registered ceiling: `read tickets:write ticket_attachments:write ticket_views:write`. `impersonate`
-is deliberately absent — it is the one scope that would break the invariant that this tool can do
-nothing in Zendesk that its operator could not already do.
+Registered ceiling: `read tickets:write ticket_attachments:write ticket_views:write
+triggers:write` (corrected 2026-09-21 — a live screenshot showed `triggers:write` was already on
+the client and missing from this line; see `analysis/API-SURFACE.md` §7.2b). `triggers:write` is
+not requested by anything this project ships at rung E2; it sits on the ceiling unused until an
+admin-configuration tool needs it. `impersonate` is deliberately absent — it is the one scope that
+would break the invariant that this tool can do nothing in Zendesk that its operator could not
+already do.
 
 ### Getting a token
 
@@ -223,12 +237,23 @@ python3 scripts/probe_families.py    # 43/49 families reachable (as last measure
 
 ## Using the MCP server
 
-**This rung is read-only.** `csa-zendesk-mcp` (the console script `src/csa_zendesk/server.py`
-registers) exposes exactly three data tools — `get_ticket`, `search_tickets`, `list_comments` —
-and connects with `TICKET_READ` and no other capability (`server.E1_CAPABILITIES`). It is
-incapable of a write even if one were registered by mistake: `policy.py`'s gate refuses any
-capability this set does not grant, independent of what the tool table lists. This is rung E1 of
-the design's enablement track — *triage the live queue; propose everything, change nothing.*
+**This rung is E2 — "work tickets for real: + note, write."** `csa-zendesk-mcp` (the console
+script `src/csa_zendesk/server.py` registers) exposes thirteen tools — ten that touch ticket
+data, plus the three auth-lifecycle tools (`authenticate`, `auth_status`, `logout`). The ten:
+four reads — `get_ticket`,
+`search_tickets`, `list_comments`, `get_attachment` — and six writes — `update_ticket`,
+`assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload` — and
+connects with `TICKET_READ`, `TICKET_WRITE`, `TICKET_NOTE`, `TICKET_SOLVE` and `TICKET_ATTACH`
+(`server.E2_CAPABILITIES`), nothing more. `reply_publicly`, `merge_tickets` and `close_ticket`
+are not registered at all — a tool the model can see but must not use is worse than one that is
+simply absent — so no capability grant here can reach them. `policy.py`'s gate refuses any
+capability `E2_CAPABILITIES` does not grant, independent of what the tool table lists.
+
+**`get_attachment` is a read, not a write**, even though it is documented here and not above: it
+gates on `TICKET_READ`, the same capability rung E1 already grants, so it works at E1 too —
+reading a ticket's attachments is no more privileged than reading the ticket itself. It is also
+scoped by *neither* allowlist: an attachment is named by `attachment_id`, not `ticket_id`, so
+there is no ticket for `CSA_ZD_ALLOWLIST_READ` to check against — only the capability gates it.
 
 **The `server` extra is not installed by default** — the library itself has no dependency on the
 MCP SDK, so a consumer who only wants the typed `ZendeskClient` never pulls it in:
@@ -237,13 +262,68 @@ MCP SDK, so a consumer who only wants the typed `ZendeskClient` never pulls it i
 pip install -e '.[server]'
 ```
 
-**`CSA_ZD_ALLOWLIST_READ` is not optional.** Unset never means unrestricted (`_scope.py`) — it
-means nothing is permitted, so `get_ticket` and `list_comments` refuse every ticket with a
-`PolicyError` until this is set, even though `search_tickets` (which carries no `subject_var`)
-works fine in the meantime. That asymmetry makes the failure harder to diagnose, not easier, so
-set it explicitly: `*` for the normal triage posture (see the whole-of-queue note in
-`_scope.py`'s module docstring), or a comma-separated list of ticket ids to scope this install
-narrowly from day one.
+### E2 needs two things E1 did not, and neither is guessable
+
+**1. The token must carry write scope, and the client must be re-authenticated.** A token
+minted for E1 requested only `read`. Every one of the six write tools calls a `PUT`/`POST`/
+`DELETE` endpoint, and a read-scoped token fails all of them with a plain **403** — which reads
+exactly like a permissions misconfiguration, not like "this token was never asked for write."
+Widen `CSA_ZENDESK_SCOPES` before re-running login:
+
+```bash
+export CSA_ZENDESK_SCOPES='read tickets:write ticket_attachments:write'
+csa-zendesk auth login   # re-run — a wider scope only takes effect on a fresh grant
+```
+
+`tickets:write` covers `update_ticket`/`assign_ticket`/`add_internal_note`/`solve_ticket` (all
+`PUT /api/v2/tickets/{id}`, constrained per-tool by `tools.py`, not by the scope);
+`ticket_attachments:write` covers `upload_file`/`delete_upload` (`/api/v2/uploads`). Both are
+within the OAuth client's registered ceiling (`read tickets:write ticket_attachments:write
+ticket_views:write triggers:write` — see [OAuth client](#oauth-client) above); requesting
+anything outside that ceiling fails closed with `400 invalid_scope` at login, not silently.
+`auth_status` reports the token's granted scope with no network call — check it after
+re-running login if a write still 403s.
+
+**2. `CSA_ZD_ALLOWLIST_WRITE` must name the ticket ids writes may touch, and unset permits
+nothing.** Exactly the same shape as `CSA_ZD_ALLOWLIST_READ` at E1, and the same failure mode
+that was a **Critical finding in Block 0e**: unset does not mean unrestricted, it means every
+write is refused with a `PolicyError` and no clue why, since the token, the capability grant and
+the tool registration are all otherwise correct. Set it explicitly — `*` to permit every ticket,
+or a comma-separated list of ticket ids to scope this install narrowly (the safer default for a
+write-capable install, unlike the read side's usual `*`-for-triage posture):
+
+```bash
+export CSA_ZD_ALLOWLIST_WRITE='<ticket-id>,<ticket-id>'
+```
+
+`upload_file`, `delete_upload` and `get_attachment` are **not** scoped by either allowlist —
+none of the three takes a `ticket_id` (an upload is not yet attached to any ticket; an
+attachment is named by its own id) — so `CSA_ZD_ALLOWLIST_WRITE` governs exactly the other four
+write tools, the ones that act on a named ticket.
+
+**Know what that means for `get_attachment` before you rely on the allowlist.** An install
+pinned to one ticket can still read the content of *any* attachment in the tenant, because an
+`attachment_id` does not say which ticket it belongs to and this server does not go looking.
+Attachments are where the sensitive material usually is, so this is the one place the allowlist
+does not deliver what it otherwise does. It is not a hole in a security boundary — the real
+boundary is the OAuth token's own scope, and anyone holding this credential could open the same
+attachment in the Zendesk UI by hand — but it *is* a hole in the blast-radius narrowing that is
+the whole reason to set an allowlist. There is no setting that turns this one tool off — `E2_CAPABILITIES` is fixed in
+the code — so if it matters for your install, the only remedy available today is not to grant
+this server the credential. `TODO.md` G3 tracks the decision about scoping it properly.
+
+One further thing, which changes the size of this rather than its shape: `get_attachment`
+returns a `content_url`, and **Zendesk attachment content URLs are fetchable without
+authentication** unless the tenant has enabled *"require authentication to download
+attachments"* (it is off by default). So the exposure is not only "whoever holds this
+credential can read any attachment" — it is that the server emits a URL anything else with
+sight of the model's context can fetch, outside the credential entirely. Check that tenant
+setting before relying on this rung.
+
+**`CSA_ZD_ALLOWLIST_READ` is still not optional** (unchanged from E1): unset means nothing is
+permitted for `get_ticket`/`list_comments`, even though `search_tickets` and `get_attachment`
+(neither carries a `subject_var`) work regardless. Set both allowlists explicitly rather than
+relying on this asymmetry.
 
 Then register the server with Claude Code. The registration name is **`csa-zendesk`** — a
 different namespace from the executable, matching the rest of this fleet (`csa-google-workspace`,
@@ -259,6 +339,7 @@ claude mcp add csa-zendesk -s user \
   -e CSA_ZENDESK_SUBDOMAIN=<subdomain> \
   -e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id> \
   -e CSA_ZD_ALLOWLIST_READ='*' \
+  -e CSA_ZD_ALLOWLIST_WRITE='<ticket-id>,<ticket-id>' \
   -- /abs/path/to/csa-zendesk/.venv/bin/csa-zendesk-mcp
 ```
 
@@ -276,7 +357,8 @@ the executable):
       "env": {
         "CSA_ZENDESK_SUBDOMAIN": "<subdomain>",
         "CSA_ZENDESK_MCP_SERVER_IDENTIFIER": "<client-id>",
-        "CSA_ZD_ALLOWLIST_READ": "*"
+        "CSA_ZD_ALLOWLIST_READ": "*",
+        "CSA_ZD_ALLOWLIST_WRITE": "<ticket-id>,<ticket-id>"
       }
     }
   }
@@ -284,23 +366,47 @@ the executable):
 ```
 
 `CSA_ZENDESK_SCOPES` (see the [OAuth client](#oauth-client) table above) is read at `authenticate`
-time — `_cmd_authenticate`, defaulting to `read` — and is optional here for that reason: it only
-matters if this install needs a browser consent scope other than the default, which read-only
-triage does not.
+time — `_cmd_authenticate`, defaulting to `read` — which is why widening it and re-running
+`auth login` (above) is a step of its own, not something this registration triggers on its own.
 
 **There is no separate login step to run first.** `authenticate`, `auth_status` and `logout` are
-themselves tools, reachable from inside the session at every rung — including this read-only
-one — so a user who is logged out, or whose credential has lapsed, never has to leave Claude
-Code to fix it: the server's own instructions tell the model to call `authenticate` the moment
-another tool reports it is not authorized. `logout` sits alongside them rather than being left to
-the CLI, per [ADR-017](DECISIONS-ADR/ADR-017.md) — a surface that can acquire a credential must
-also expose a way to relinquish it, reachable at least as easily as the tool that acquires it.
+themselves tools, reachable from inside the session at every rung — including before this one
+has a working credential — so a user who is logged out, or whose credential has lapsed, never
+has to leave Claude Code to fix it: the server's own instructions tell the model to call
+`authenticate` the moment another tool reports it is not authorized. `logout` sits alongside them
+rather than being left to the CLI, per [ADR-017](DECISIONS-ADR/ADR-017.md) — a surface that can
+acquire a credential must also expose a way to relinquish it, reachable at least as easily as the
+tool that acquires it.
 
 **Verify the install worked** before relying on it: ask the model to call `auth_status` (confirms
-a token is on disk, with its expiry and granted scope, no network call), then `get_ticket` on a
-ticket id you know exists. A `PolicyError` naming `CSA_ZD_ALLOWLIST_READ` at that second step means
-the allowlist above is still unset or too narrow — set it and retry the same call before assuming
-anything else is wrong.
+a token is on disk, with its expiry and granted scope, no network call — check the scope here
+first if a write is about to 403), then `get_ticket` on a ticket id you know exists. A
+`PolicyError` naming `CSA_ZD_ALLOWLIST_READ` or `CSA_ZD_ALLOWLIST_WRITE` at that step, or at a
+write, means the corresponding allowlist above is still unset or too narrow — set it and retry
+the same call before assuming anything else is wrong. A plain `403` on a write (not a
+`PolicyError`) means the token itself lacks the scope — re-check `auth_status`'s reported scope
+against the two above.
+
+### Uploading and attaching a file — two steps, not one
+
+`upload_file` alone does **not** put a file on a ticket. It sends the file's bytes to Zendesk and
+gets back a token naming bytes that exist on Zendesk's side attached to *nothing* — invisible
+everywhere else in this server's surface, including `get_ticket` and `list_comments` on the
+ticket you meant to attach it to. Calling only `upload_file` and stopping looks like it did
+nothing, because from the ticket's point of view it did. The file becomes visible on a ticket
+only on a **second** call, `add_internal_note(ticket_id=..., uploads=[token])`, which carries the
+token onto the ticket as a comment attachment. `delete_upload(token=...)` exists specifically to
+clean up a token from a failed or abandoned first step — an unattached upload is litter nothing
+else in this surface will ever show you, so without a deliberate `delete_upload` call it stays on
+Zendesk's side indefinitely.
+
+`upload_file`'s bytes travel over MCP as `content_base64` — a base64-encoded string, not raw
+bytes or a file path — because MCP tool arguments are JSON, which has no binary type. Decoding
+uses `validate=True`, so malformed base64 is refused with an error rather than silently decoding
+to truncated or empty bytes. `upload_file` also refuses empty content outright, which is not the
+ordinary empty-write refusal every other write tool has: Zendesk *accepts* a zero-byte upload and
+hands back a real, usable-looking token for it, so without this refusal the failure would be
+silent — a token that names an attachment which downloads as nothing.
 
 ## Development
 
@@ -317,10 +423,19 @@ library stays importable without the MCP SDK. Install it anyway in a dev environ
 
 ```bash
 ./.venv/bin/pytest --cov=csa_zendesk --cov-fail-under=100 -q
-./.venv/bin/ruff check src tests && ./.venv/bin/ruff format --check src tests
+./.venv/bin/ruff check .
+./.venv/bin/ruff format --check src tests
 ./.venv/bin/mypy --strict src
 python3 scripts/check_public_safe.py
+python3 scripts/check_boundaries.py
 ```
+
+**`ruff check .` lints the whole tree, not a directory list.** `ruff check src tests scripts`
+once left tracked-but-unnamed `experiments/` unlinted, hiding a `NameError` in all three scripts
+that write to a live ticket. Anything that needs to be exempted from lint or format is an
+exclusion in `pyproject.toml`, where it is reviewable — not an absence from the command line.
+`check_boundaries.py` fails if a tool is not bucket-pure: every operation shared by more than one
+tool must carry a real constraint distinguishing them (ADR-016).
 
 ## License
 

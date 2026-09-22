@@ -100,6 +100,9 @@ ignore = ["E702"]
 # stdout prohibition binds the PACKAGE, which is what gets imported into an MCP
 # server; it was never meant to bind the tooling around it.
 "scripts/*" = ["T20"]
+# experiments/ are one-shot probes run by hand against a live disposable ticket -
+# operator-facing, stdout IS their output, and never imported by the package.
+"experiments/*" = ["T20"]
 
 [tool.mypy]
 files = ["src"]

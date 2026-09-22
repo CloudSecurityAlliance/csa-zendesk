@@ -18,7 +18,10 @@ property and stops. That is why this script exists as a conformance check rather
 than a one-off: if upstream changes the shape, the comparison fails loudly
 instead of the precheck quietly under-reporting.
 """
-import os, pathlib, sys
+import os
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts"))
 from zd import call
 

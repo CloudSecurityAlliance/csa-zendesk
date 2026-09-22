@@ -23,10 +23,16 @@ Everything runs from a venv; CI gates four things and so should you:
 
 ```bash
 .venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing   # 100% required
-.venv/bin/ruff check src tests scripts        # T20 included: no `print` in src/ or tests/
+.venv/bin/ruff check .                        # `.`, not a directory list - see below
 .venv/bin/ruff format --check src tests       # scripts/ is exempt from format, not from lint
 .venv/bin/mypy                                # strict, over src
 ```
+
+**Lint the whole tree, not a directory list.** `ruff check src tests scripts` once left
+tracked-but-unnamed `experiments/` unlinted, hiding a `NameError` in all three scripts that
+write to a live ticket (Block 1, Task 4/CI fix). CI runs `ruff check .`; anything that needs
+to be skipped is an exclusion in `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`, where
+it is reviewable, not an absence from the command line.
 
 The coverage gate is **100%, not 90%** — a gate below the measured state cannot fail.
 `# pragma: no cover` is the explicit hatch, and using it is a decision to write down.
@@ -102,6 +108,12 @@ share their architecture.
    (`source_comment_is_public` / `target_comment_is_public`) the way `ticket.reply` does — it is the
    one capability that combines both properties, so it is also, with `ticket.reply`, in
    `REACH_CAPABILITIES` and requires `CSA_ZD_ALLOW_REACH` in addition to being granted.
+   `ticket.attach` (Task 4) sits off this chain entirely rather than slotting in below `ticket.note`:
+   `upload_file` reaches nobody and touches no existing ticket at all — it stages bytes on Zendesk's
+   side, invisible until a later `ticket.note`/`ticket.write` call carries the token onto one — so it
+   is not comparable to the others by reversibility the way they are to each other. It carries no
+   `subject_var`, the same as `ticket.read`'s `search_tickets`, for the same reason: there is no
+   ticket yet to scope against.
 
 ## Invariants that fail silently — check these when editing
 

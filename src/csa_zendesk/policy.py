@@ -37,6 +37,17 @@ log = logging.getLogger(__name__)
 
 # --- capabilities, ordered by reversibility within each domain ---------------
 TICKET_READ = "ticket.read"
+# Deliberately its OWN capability, not folded into TICKET_WRITE or TICKET_NOTE
+# (Task 4): `upload_file` reaches nobody the moment it runs - the returned
+# token names bytes on Zendesk's side attached to nothing at all, invisible
+# everywhere in the ticket surface until a later `add_internal_note(uploads=
+# [token])` call carries it onto a ticket. Granting TICKET_WRITE would let a
+# caller create these files without ever being able to attach or clean them
+# up; TICKET_ATTACH covers both `upload_file` and its cleanup counterpart
+# `delete_upload` - orphaned uploads are otherwise invisible litter (task
+# brief) - and is checked independently of whatever capability the later
+# attaching call (`add_internal_note`, gated on TICKET_NOTE) needs.
+TICKET_ATTACH = "ticket.attach"  # create/delete an upload; not yet attached to any ticket
 TICKET_NOTE = "ticket.note"  # internal note; never leaves the org
 TICKET_WRITE = "ticket.write"  # fields, assignee, tags; audited
 TICKET_REPLY = "ticket.reply"  # PUBLIC comment; emailed, irreversible
@@ -83,6 +94,7 @@ BULK = "bulk"  # cross-cutting; additive, never a substitute
 
 ALL_CAPABILITIES: tuple[str, ...] = (
     TICKET_READ,
+    TICKET_ATTACH,
     TICKET_NOTE,
     TICKET_WRITE,
     TICKET_REPLY,
@@ -114,10 +126,13 @@ ALL_CAPABILITIES: tuple[str, ...] = (
 # enabling them is a deliberate act.
 PROFILES: dict[str, frozenset[str]] = {
     "readonly": frozenset({TICKET_READ, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}),
-    "default": frozenset({TICKET_READ, TICKET_NOTE, TICKET_WRITE, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}),
+    "default": frozenset(
+        {TICKET_READ, TICKET_ATTACH, TICKET_NOTE, TICKET_WRITE, HC_READ, PEOPLE_READ, REPORTING_READ, ADMIN_READ}
+    ),
     "agent": frozenset(
         {
             TICKET_READ,
+            TICKET_ATTACH,
             TICKET_NOTE,
             TICKET_WRITE,
             TICKET_SOLVE,
@@ -220,6 +235,15 @@ _GATES: dict[str, Gate] = {
     "get_ticket": TICKET_READ,
     "search_tickets": TICKET_READ,
     "list_comments": TICKET_READ,
+    "update_ticket": TICKET_WRITE,
+    "assign_ticket": TICKET_WRITE,
+    "add_internal_note": TICKET_NOTE,
+    "solve_ticket": TICKET_SOLVE,
+    "upload_file": TICKET_ATTACH,
+    "delete_upload": TICKET_ATTACH,
+    # Reading an attachment already on a ticket is a read, not the act of
+    # creating an orphaned upload - see Backend.get_attachment's own comment.
+    "get_attachment": TICKET_READ,
 }
 
 
@@ -382,9 +406,17 @@ def _dispatch(pb: PolicyBackend, name: str, kwargs: dict[str, Any]) -> Any:
     # is the thing that must refuse the call. `spec` is None for any dispatched
     # method the tool table says nothing about (there is no obligation for
     # every Backend method to be a tool), which is a no-op, not a refusal.
+    #
+    # `run_check`, not `check` directly: `run_check` looks at `spec.body_key`
+    # to find the payload THIS tool actually constrains before handing it to
+    # `check` - for most tools that payload is the kwargs themselves, but
+    # `update_ticket` wraps its editable fields in a `fields` dict, and a
+    # constraint that inspected the call's raw kwargs there would check
+    # `{"ticket_id", "fields"}` forever and never see what's inside `fields`.
+    # See `ToolSpec.body_key`'s docstring for the incident this closes.
     spec = tools.TOOLS.get(name)
     if spec is not None:
-        spec.check(kwargs)
+        spec.run_check(kwargs)
     assert_subject_permitted(name, kwargs)
     # REACH_CAPABILITIES is CONSUMED here, not hand-listed: whichever
     # capabilities this specific call required (a callable gate's kwargs-

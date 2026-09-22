@@ -5,7 +5,9 @@ For a free-text or integer field, yes. For a tagger (a fixed choice list) the
 error says the field is required and gives its type - but not its allowed values.
 This measures what a second lookup costs, using only the ids the error handed us.
 """
-import pathlib, sys
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts"))
 from zd import call
 

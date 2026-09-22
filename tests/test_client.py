@@ -61,3 +61,70 @@ def test_a_list_comments_not_found_reaches_the_caller_through_the_client():
     c = ZendeskClient(FakeBackend())
     with pytest.raises(exc.NotFound):
         c.list_comments(ticket_id=999)
+
+
+def test_the_client_passes_update_ticket_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4, "priority": "low"}}))
+    assert c.update_ticket(ticket_id=4, fields={"priority": "high"}) == {"ticket": {"id": 4, "priority": "high"}}
+
+
+def test_an_update_ticket_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.update_ticket(ticket_id=999, fields={"priority": "high"})
+
+
+def test_the_client_passes_assign_ticket_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4}}))
+    assert c.assign_ticket(ticket_id=4, assignee_id=7) == {"ticket": {"id": 4, "assignee_id": 7}}
+
+
+def test_an_assign_ticket_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.assign_ticket(ticket_id=999, group_id=9)
+
+
+def test_the_client_passes_add_internal_note_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4, "subject": "s"}}))
+    assert c.add_internal_note(ticket_id=4, body="internal") == {"ticket": {"id": 4, "subject": "s"}}
+
+
+def test_an_add_internal_note_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.add_internal_note(ticket_id=999, body="internal")
+
+
+def test_the_client_passes_solve_ticket_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend({4: {"id": 4, "status": "open"}}))
+    assert c.solve_ticket(ticket_id=4) == {"ticket": {"id": 4, "status": "solved"}}
+
+
+def test_a_solve_ticket_not_found_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.NotFound):
+        c.solve_ticket(ticket_id=999)
+
+
+def test_the_client_passes_upload_file_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.upload_file(filename="report.pdf", content=b"x", content_type="application/pdf") == {
+        "upload": {"token": "fake-upload-token"}
+    }
+
+
+def test_an_upload_file_extension_refusal_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.InvalidFilename):
+        c.upload_file(filename="report", content=b"x", content_type="application/pdf")
+
+
+def test_the_client_passes_delete_upload_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.delete_upload(token="abc123") == {}
+
+
+def test_the_client_passes_get_attachment_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.get_attachment(attachment_id=42) == {"attachment": {"id": 42}}

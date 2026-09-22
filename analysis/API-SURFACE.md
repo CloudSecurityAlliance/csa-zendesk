@@ -587,6 +587,22 @@ Registered 2026-09-18 on the `csa-zendesk` client, verified against the spec's s
 read  tickets:write  ticket_attachments:write  ticket_views:write
 ```
 
+**Correction (2026-09-21, Block 1 Task 6): the recorded ceiling above was wrong.** A screenshot of
+the live client taken 2026-09-21 shows a fifth scope, `triggers:write`, that this section omitted.
+The ceiling actually registered on the client is:
+
+```
+read  tickets:write  ticket_attachments:write  ticket_views:write  triggers:write
+```
+
+`triggers:write` is deliberately unused at rung E2 (this block): no tool built so far requests it,
+`CSA_ZENDESK_SCOPES` does not name it, and nothing in `policy.ALL_CAPABILITIES` maps to it yet —
+`admin.write` (TODO B9) is the eventual capability it would back, once an admin-configuration tool
+exists to use it. Its presence on the ceiling only means a future token request for it would be
+honoured, not that anything requests it today. How the first five-scope registration was transcribed
+with one scope missing, five days before anyone reread the client's own screen, was not
+investigated further.
+
 `read` is documented as *"Read all data. Gives access to GET endpoints, including permission to
 sideload related resources."* Mixing a broad read with specific writes is explicitly legal — the spec
 gives `"organizations:write read"` as an example — so this combination is well-formed despite §7.2.

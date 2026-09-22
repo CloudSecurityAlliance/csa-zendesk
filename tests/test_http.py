@@ -756,3 +756,108 @@ def test_a_token_endpoint_failure_inside_on_invalid_token_names_the_token_endpoi
         c.get("/api/v2/tickets/123.json")
     assert "token endpoint" in str(ei.value)
     assert "tickets/123.json" not in str(ei.value)
+
+
+def test_the_retry_budget_and_invalid_token_retry_survive_the_split():
+    # Pins the two behaviours most likely to break when the retry loop moves:
+    # a 429 is retried within budget, and an invalid_token 401 refreshes once.
+    calls = {"n": 0, "refreshed": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": "rate"})
+        if calls["n"] == 2:
+            return httpx.Response(401, json={"error": "invalid_token"})
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    c = HttpClient(
+        subdomain="example",
+        token_provider=lambda: "AT",
+        on_invalid_token=lambda: calls.__setitem__("refreshed", calls["refreshed"] + 1),
+        transport=httpx.MockTransport(handler),
+    )
+    assert c.get("/api/v2/tickets/1") == {"ticket": {"id": 1}}
+    assert calls["n"] == 3
+    assert calls["refreshed"] == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v2/uploads/../tickets/159143",
+        "/api/v2/uploads/../../users/5",
+        "/api/v2/uploads/./x",
+        "/api/v2/tickets/..",
+    ],
+)
+def test_a_dot_segment_is_refused_before_the_call(path):
+    # httpx normalises dot segments when it builds the URL, so without this
+    # check `delete_upload(token="../tickets/159143")` sent
+    # DELETE /api/v2/tickets/159143 - a tool gated on `ticket.attach`
+    # performing a ticket deletion, which no profile grants, on any ticket in
+    # the tenant regardless of the allowlist. The host is unchanged throughout,
+    # so Transport's host check sees nothing wrong.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(exc.InvalidPath, match="'\\.' or '\\.\\.' segment"):
+        h.request("DELETE", path)
+    assert called["n"] == 0
+
+
+def test_an_ordinary_path_with_dots_inside_a_segment_is_still_allowed():
+    # Only a WHOLE segment of "." or ".." is a traversal; a filename-ish
+    # segment containing dots is ordinary and must not be refused.
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
+    h.request("GET", "/api/v2/uploads/a.b.c")
+    assert seen[0].endswith("/api/v2/uploads/a.b.c")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v2/tickets/%2e%2e/users/5", "/api/v2/tickets/%2E%2E/x", "/api/v2/uploads/a%2Fb"],
+)
+def test_a_percent_escape_is_refused_before_the_call(path):
+    # `%2e%2e` is not `..` to `split("/")`, so the dot-segment check alone was a
+    # check on one SPELLING of the traversal. An edge that percent-decodes
+    # before resolving dot segments - nginx-family front ends routinely do -
+    # would see the traversal we believed we had refused. No caller here
+    # produces a `%`: ids are decimal and the one opaque value is validated as
+    # alphanumeric before it is encoded.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(exc.InvalidPath, match="percent-escape"):
+        h.request("GET", path)
+    assert called["n"] == 0
+
+
+def test_a_refusal_never_hands_back_a_forged_untrusted_marker():
+    # exc.InvalidPath is in server._NEVER_WRAP, so its message reaches the model
+    # UNWRAPPED as this library's own prose. A message interpolating a
+    # caller-chosen string is no longer purely ours: the caller can plant a
+    # closing marker and have it returned inside trusted text. The realistic
+    # route is laundering - ticket text is wrapped correctly, the model copies a
+    # value into a tool argument, and the refusal echoes it back as ours.
+    from csa_zendesk import _untrusted
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    with pytest.raises(exc.InvalidPath) as caught:
+        h.request("GET", f"/api/v2/tickets/{_untrusted.MARKER_CLOSE}/../x")
+    assert _untrusted.MARKER_CLOSE not in str(caught.value)
+    assert _untrusted.MARKER_OPEN not in str(caught.value)

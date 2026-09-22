@@ -1,4 +1,5 @@
 import inspect
+import json
 from typing import Any
 
 import httpx
@@ -45,6 +46,27 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
             return {}
 
         def list_comments(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def update_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def assign_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def add_internal_note(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def solve_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def upload_file(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def delete_upload(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def get_attachment(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
     assert isinstance(NameOnlyImpostor(), Backend)
@@ -369,3 +391,618 @@ def test_fake_backend_raises_not_found_for_an_unknown_ticket_id():
     # silently read as "a ticket with zero comments".
     with pytest.raises(exc.NotFound):
         FakeBackend().list_comments(ticket_id=999)
+
+
+# --- update_ticket: PUT /tickets/{id}, constrained to a field edit at the seam
+
+
+def test_api_backend_update_ticket_uses_the_documented_path_and_wraps_the_body():
+    # Path and operation from analysis/operation-inventory.csv row: ticketing,
+    # Tickets,PUT,/api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes
+    # - no .json suffix, matching get_ticket. Confirmed against
+    # specs/zendesk-support-oas.yaml (operationId UpdateTicket).
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7, "priority": "high"}})
+
+    b = ApiBackend(_client(handler))
+    result = b.update_ticket(ticket_id=7, fields={"priority": "high"})
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+    assert seen["body"] == {"ticket": {"priority": "high"}}
+    assert result == {"ticket": {"id": 7, "priority": "high"}}
+
+
+def test_api_backend_update_ticket_returns_the_envelope_unshaped():
+    # ADR-002: no mapping, renaming or pruning.
+    body = {"ticket": {"id": 7, "priority": "high", "custom_fields": [{"id": 1, "value": None}]}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).update_ticket(ticket_id=7, fields={"priority": "high"}) == body
+
+
+def test_fake_backend_update_ticket_mutates_and_returns_the_ticket():
+    fake = FakeBackend(tickets={7: {"id": 7, "priority": "low"}})
+    result = fake.update_ticket(ticket_id=7, fields={"priority": "high"})
+    assert result == {"ticket": {"id": 7, "priority": "high"}}
+    # The mutation is visible on a subsequent read, the same as the real API.
+    assert fake.get_ticket(ticket_id=7)["ticket"]["priority"] == "high"
+
+
+def test_fake_backend_update_ticket_does_not_leak_the_caller_fields_dict_by_reference():
+    fake = FakeBackend(tickets={7: {"id": 7}})
+    fields = {"custom_fields": [{"id": 1, "value": "x"}]}
+    fake.update_ticket(ticket_id=7, fields=fields)
+    fields["custom_fields"][0]["value"] = "tampered"
+    assert fake.get_ticket(ticket_id=7)["ticket"]["custom_fields"] == [{"id": 1, "value": "x"}]
+
+
+def test_fake_backend_update_ticket_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().update_ticket(ticket_id=999, fields={"priority": "high"})
+
+
+def test_api_backend_update_ticket_refuses_an_empty_fields_mapping_before_the_call():
+    # Same defect as assign_ticket's empty case, in the sibling method:
+    # tools.TOOLS["update_ticket"]'s _forbid(...) is a denylist and says
+    # nothing about `fields` being empty, and a caller holding a bare Backend
+    # never passes through tools.TOOLS at all (ADR-002's public seam). Same
+    # before-the-call shape as test_a_request_past_the_thousand_result_
+    # ceiling_is_refused_before_the_call.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.EmptyWrite, match="fields"):
+        b.update_ticket(ticket_id=7, fields={})
+    assert called["n"] == 0
+
+
+def test_fake_backend_update_ticket_refuses_an_empty_fields_mapping_too():
+    # Shares _refuse_an_empty_update with ApiBackend, the same way search's
+    # ceiling check is shared - a fake that let this through would pass a
+    # call the real backend rejects outright.
+    with pytest.raises(exc.EmptyWrite, match="fields"):
+        FakeBackend(tickets={7: {"id": 7}}).update_ticket(ticket_id=7, fields={})
+
+
+# --- assign_ticket: same PUT, bucket-pure by allowlist rather than by denylist
+
+
+def test_api_backend_assign_ticket_sends_only_the_provided_fields():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7, "assignee_id": 42}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7, assignee_id=42)
+    assert seen["body"] == {"ticket": {"assignee_id": 42}}
+
+
+def test_api_backend_assign_ticket_sends_both_fields_when_both_are_given():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7, assignee_id=42, group_id=9)
+    assert seen["body"] == {"ticket": {"assignee_id": 42, "group_id": 9}}
+
+
+def test_api_backend_assign_ticket_refuses_an_empty_assignment_before_the_call():
+    # A caller reaching Backend directly (ADR-002's public seam) never passes
+    # through tools.TOOLS["assign_ticket"]'s _only(...) check at all, and even
+    # a caller who does isn't stopped by it - _only permits any subset of its
+    # allowed keys, including the empty one. An empty-body PUT would still be
+    # a real write: it spends rate-limit budget and lands in the ticket's
+    # audit log as an update that changed nothing. Refused here, before the
+    # request is ever built, matching test_a_request_past_the_thousand_
+    # result_ceiling_is_refused_before_the_call's shape.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.EmptyWrite, match="assignee_id"):
+        b.assign_ticket(ticket_id=7)
+    assert called["n"] == 0
+
+
+def test_fake_backend_assign_ticket_refuses_an_empty_assignment_too():
+    # Shares _refuse_an_empty_assignment with ApiBackend, the same way
+    # search's ceiling check is shared - a fake that let this through would
+    # pass a call the real backend rejects outright.
+    with pytest.raises(exc.EmptyWrite, match="assignee_id"):
+        FakeBackend(tickets={7: {"id": 7}}).assign_ticket(ticket_id=7)
+
+
+def test_api_backend_assign_ticket_uses_the_documented_path():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.assign_ticket(ticket_id=7, group_id=9)
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+
+
+def test_fake_backend_assign_ticket_sets_the_group_only():
+    fake = FakeBackend(tickets={7: {"id": 7}})
+    result = fake.assign_ticket(ticket_id=7, group_id=9)
+    assert result == {"ticket": {"id": 7, "group_id": 9}}
+
+
+def test_fake_backend_assign_ticket_sets_both_fields():
+    fake = FakeBackend(tickets={7: {"id": 7}})
+    result = fake.assign_ticket(ticket_id=7, assignee_id=42, group_id=9)
+    assert result == {"ticket": {"id": 7, "assignee_id": 42, "group_id": 9}}
+
+
+def test_fake_backend_assign_ticket_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().assign_ticket(ticket_id=999, assignee_id=42)
+
+
+# --- add_internal_note: same PUT, public forced by construction, never by input
+
+
+def test_api_backend_add_internal_note_sends_a_private_comment():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="internal note")
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+    assert seen["body"] == {"ticket": {"comment": {"body": "internal note", "public": False}}}
+
+
+def test_api_backend_add_internal_note_has_no_public_parameter_to_override():
+    # THE control this block exists to get right (API-SURFACE §5.4f): there is
+    # no `public` argument here at all for a caller - or an instruction
+    # injected from ticket content the model is reading - to set, so it
+    # cannot be flipped true by any well-formed call. TypeError, not
+    # PolicyError, proves the parameter is simply absent from the signature.
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(TypeError):
+        b.add_internal_note(ticket_id=7, body="hi", public=True)  # type: ignore[call-arg]
+
+
+def test_api_backend_add_internal_note_sends_uploads_when_given():
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="see attached", uploads=["tok1", "tok2"])
+    assert seen["body"] == {
+        "ticket": {"comment": {"body": "see attached", "public": False, "uploads": ["tok1", "tok2"]}}
+    }
+
+
+def test_api_backend_add_internal_note_treats_an_empty_list_and_none_uploads_identically():
+    # Task 3 brief: "An empty list and None must behave identically - neither
+    # should put an uploads key in the request body."
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="hi", uploads=None)
+    b.add_internal_note(ticket_id=7, body="hi", uploads=[])
+    assert bodies[0] == bodies[1] == {"ticket": {"comment": {"body": "hi", "public": False}}}
+    assert "uploads" not in bodies[0]["ticket"]["comment"]
+
+
+def test_api_backend_add_internal_note_returns_the_envelope_unshaped():
+    body = {"ticket": {"id": 7, "comment": {"id": 99, "public": False}}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).add_internal_note(ticket_id=7, body="hi") == body
+
+
+def test_api_backend_add_internal_note_refuses_an_empty_note_before_the_call():
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        b.add_internal_note(ticket_id=7, body="")
+    assert called["n"] == 0
+
+
+def test_api_backend_add_internal_note_refuses_a_whitespace_only_body_with_no_uploads():
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        ApiBackend(_client(handler)).add_internal_note(ticket_id=7, body="   ")
+
+
+def test_api_backend_add_internal_note_permits_an_empty_body_when_an_upload_is_attached():
+    # Task 4 attaches files by passing uploads=[token] here - a note that is
+    # "just the attachment" is legitimate, unlike a note that is nothing at all.
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    b = ApiBackend(_client(handler))
+    b.add_internal_note(ticket_id=7, body="", uploads=["tok1"])
+    assert seen["body"] == {"ticket": {"comment": {"body": "", "public": False, "uploads": ["tok1"]}}}
+
+
+def test_fake_backend_add_internal_note_returns_the_ticket_unchanged():
+    fake = FakeBackend(tickets={7: {"id": 7, "subject": "hello"}})
+    assert fake.add_internal_note(ticket_id=7, body="internal") == {"ticket": {"id": 7, "subject": "hello"}}
+
+
+def test_fake_backend_add_internal_note_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().add_internal_note(ticket_id=999, body="hi")
+
+
+def test_fake_backend_add_internal_note_refuses_an_empty_note_too():
+    # Shares _refuse_an_empty_note with ApiBackend - a fake that let this
+    # through would pass a call the real backend rejects outright.
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        FakeBackend(tickets={7: {"id": 7}}).add_internal_note(ticket_id=7, body="")
+
+
+def test_fake_backend_add_internal_note_checks_emptiness_before_the_existence_lookup():
+    # Matches update_ticket/assign_ticket: the refusal does not depend on
+    # whether ticket_id is real.
+    with pytest.raises(exc.EmptyWrite, match="body"):
+        FakeBackend().add_internal_note(ticket_id=999, body="")
+
+
+# --- solve_ticket: same PUT, status is the only thing this call can send -----
+
+
+def test_api_backend_solve_ticket_sends_status_solved_only():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ticket": {"id": 7, "status": "solved"}})
+
+    b = ApiBackend(_client(handler))
+    result = b.solve_ticket(ticket_id=7)
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v2/tickets/7"
+    assert seen["body"] == {"ticket": {"status": "solved"}}
+    assert result == {"ticket": {"id": 7, "status": "solved"}}
+
+
+def test_api_backend_solve_ticket_returns_the_envelope_unshaped():
+    body = {"ticket": {"id": 7, "status": "solved", "custom_fields": [{"id": 1, "value": None}]}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).solve_ticket(ticket_id=7) == body
+
+
+def test_fake_backend_solve_ticket_mutates_and_returns_the_ticket():
+    fake = FakeBackend(tickets={7: {"id": 7, "status": "open"}})
+    result = fake.solve_ticket(ticket_id=7)
+    assert result == {"ticket": {"id": 7, "status": "solved"}}
+    assert fake.get_ticket(ticket_id=7)["ticket"]["status"] == "solved"
+
+
+def test_fake_backend_solve_ticket_raises_not_found_for_an_unknown_ticket_id():
+    with pytest.raises(exc.NotFound):
+        FakeBackend().solve_ticket(ticket_id=999)
+
+
+# --- upload_file: the two-step upload's first half - a token, attached to nothing
+
+
+def test_upload_sends_the_filename_as_a_query_parameter_and_bytes_as_the_body():
+    # Path from analysis/operation-inventory.csv row: ticketing,Attachments,POST,
+    # /api/v2/uploads,UploadFiles,Upload Files,,,
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["content"] = request.content
+        seen["content_type"] = request.headers.get("content-type")
+        return httpx.Response(201, json={"upload": {"token": "abc123"}})
+
+    b = ApiBackend(_client(handler))
+    out = b.upload_file(filename="report.pdf", content=b"%PDF-1.7 fake", content_type="application/pdf")
+    assert "filename=report.pdf" in seen["url"]
+    assert seen["content"] == b"%PDF-1.7 fake"
+    assert seen["content_type"] == "application/pdf"
+    assert out == {"upload": {"token": "abc123"}}
+
+
+def test_upload_refuses_a_filename_with_no_extension():
+    # The spec requires the uploaded filename's extension to match the real
+    # file's; a filename with none cannot satisfy that, and the failure would
+    # surface as an unopenable attachment rather than an API error.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(201, json={})
+
+    with pytest.raises(exc.InvalidFilename, match="extension"):
+        ApiBackend(_client(handler)).upload_file(filename="report", content=b"x", content_type="application/pdf")
+    assert called["n"] == 0
+
+
+def test_upload_refuses_a_filename_that_is_only_a_trailing_dot():
+    # os.path.splitext("report.") == ("report", ".") - a dot with nothing
+    # after it to call an extension, the same defect as no dot at all.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(201, json={})
+
+    with pytest.raises(exc.InvalidFilename, match="extension"):
+        ApiBackend(_client(handler)).upload_file(filename="report.", content=b"x", content_type="application/pdf")
+    assert called["n"] == 0
+
+
+def test_upload_is_not_retried_on_503():
+    # Task 4 decision, carried forward from Task 1's review: a retried upload
+    # does not repeat a no-op the way a retried PUT does - it mints a SECOND
+    # token, a second orphaned file nothing in the ticket surface would ever
+    # show. Proven here at the Backend seam, not only at _http/_transport's
+    # own idempotent=False plumbing: exactly one request must reach the wire.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        ApiBackend(_client(handler)).upload_file(filename="report.pdf", content=b"x", content_type="application/pdf")
+    assert calls["n"] == 1
+
+
+def test_fake_backend_upload_file_returns_a_canned_token():
+    # Canned, like search_tickets/list_comments: no self.tickets-shaped store
+    # exists for an orphaned upload to be checked against.
+    assert FakeBackend().upload_file(filename="report.pdf", content=b"x", content_type="application/pdf") == {
+        "upload": {"token": "fake-upload-token"}
+    }
+
+
+def test_fake_backend_upload_file_refuses_a_filename_with_no_extension():
+    # The fake enforces the same pre-flight refusal ApiBackend does: a fake
+    # that let this through would pass tests the real API rejects.
+    with pytest.raises(exc.InvalidFilename, match="extension"):
+        FakeBackend().upload_file(filename="report", content=b"x", content_type="application/pdf")
+
+
+# --- delete_upload: cleanup for an upload that was never attached -------------
+
+
+def test_delete_upload_targets_the_token():
+    # Path from analysis/operation-inventory.csv row: ticketing,Attachments,
+    # DELETE,/api/v2/uploads/{token},DeleteUpload,Delete Upload,,,
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["method"] = request.method
+        return httpx.Response(204)
+
+    ApiBackend(_client(handler)).delete_upload(token="abc123")
+    assert seen["method"] == "DELETE"
+    assert seen["url"].endswith("/api/v2/uploads/abc123")
+
+
+def test_delete_upload_returns_the_envelope_unshaped():
+    # 204 No Content -> {} (ZD-2, _http._envelope): success with nothing to report.
+    assert ApiBackend(_client(lambda r: httpx.Response(204))).delete_upload(token="abc123") == {}
+
+
+def test_fake_backend_delete_upload_returns_an_empty_envelope():
+    # Canned: no per-upload store exists to remove `token` from.
+    assert FakeBackend().delete_upload(token="abc123") == {}
+
+
+# --- get_attachment: reading an already-attached file's metadata is a read ----
+
+
+def test_get_attachment_calls_the_documented_path():
+    # Path from analysis/operation-inventory.csv row: ticketing,Attachments,
+    # GET,/api/v2/attachments/{attachment_id},ShowAttachment,Show Attachment,,,
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        return httpx.Response(200, json={"attachment": {"id": 42}})
+
+    assert ApiBackend(_client(handler)).get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/api/v2/attachments/42"
+
+
+def test_fake_backend_get_attachment_returns_a_canned_envelope():
+    # Canned: no per-attachment store exists to look attachment_id up in.
+    assert FakeBackend().get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+
+
+def test_upload_refuses_empty_content_before_the_call():
+    # Not merely an empty write like its siblings: Zendesk ACCEPTS a zero-byte
+    # upload and returns a token, so the failure is silent - an attachment that
+    # downloads as nothing, and an orphan no other tool can list.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(201, json={})
+
+    with pytest.raises(exc.EmptyWrite, match="non-empty content"):
+        ApiBackend(_client(handler)).upload_file(filename="r.pdf", content=b"", content_type="application/pdf")
+    assert called["n"] == 0
+
+
+def test_the_fake_refuses_empty_content_too():
+    # A fake that accepted zero bytes would let the refusal pass every test
+    # while doing nothing in production - the same reason it enforces the
+    # extension rule.
+    with pytest.raises(exc.EmptyWrite, match="non-empty content"):
+        FakeBackend().upload_file(filename="r.pdf", content=b"", content_type="application/pdf")
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "../tickets/159143",  # the original finding
+        "%2e%2e/tickets/1",  # the same, percent-escaped
+        "..",
+        "a/b",
+        "",
+        "a b",
+        "<script>",
+    ],
+)
+def test_delete_upload_refuses_a_token_that_could_address_something_else(token):
+    # THIS TEST REPLACES ONE THAT ASSERTED THE BUG. The first fix quoted the
+    # token with safe="" and asserted the encoded form was SENT - but `quote`
+    # runs BEFORE `_http._validate_path`, and it encodes "/" to "%2F", so the
+    # dot-segment check had no separators left to split on. The encoding hid
+    # the traversal from the guard meant to catch it, and the test then pinned
+    # that as correct. The two were described as independent layers; they are
+    # in series, and the second blinded the first.
+    #
+    # The token is now validated as a VALUE, before anything encodes it.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath, match="upload token"):
+        ApiBackend(_client(handler)).delete_upload(token=token)
+    assert called["n"] == 0
+
+
+@pytest.mark.parametrize("token", [12345, None, ["a"], {"a": 1}])
+def test_delete_upload_refuses_a_token_that_is_not_a_string(token):
+    # MCP arguments arrive from JSON and the SDK does not validate inputSchema,
+    # so a non-string reaches here. Before this it raised a bare TypeError out
+    # of `quote`, escaping the error contract `_on_call_tool` relies on.
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath, match="upload token"):
+        ApiBackend(_client(handler)).delete_upload(token=token)
+
+
+def test_delete_upload_sends_an_ordinary_token_unchanged():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    ApiBackend(_client(handler)).delete_upload(token="abc-123_XYZ")
+    assert seen[0].endswith("/api/v2/uploads/abc-123_XYZ")
+
+
+def test_add_internal_note_is_not_retried_on_503():
+    # The one write here that APPENDS rather than setting a target state.
+    # Retrying update_ticket/assign_ticket/solve_ticket re-sends the same
+    # desired state and converges; retrying this adds a second identical note,
+    # and a fourth after three retries, each with its own audit entry.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        ApiBackend(_client(handler)).add_internal_note(ticket_id=1, body="hi", uploads=None)
+    assert calls["n"] == 1, "an appending write must not be replayed"
+
+
+def test_the_state_setting_writes_are_still_retried_on_503():
+    # The other half, so the change above is a decision about THIS method
+    # rather than a blanket switch nobody notices: a PUT that sets a target
+    # state converges on replay and should keep retrying.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    assert calls["n"] > 1, "a state-setting PUT should still be retried"
+
+
+@pytest.mark.parametrize(
+    "method,kwargs",
+    [
+        ("get_ticket", {"ticket_id": "../../users/5"}),
+        ("get_ticket", {"ticket_id": "%2e%2e/%2e%2e/users/5"}),
+        ("list_comments", {"ticket_id": "../x"}),
+        ("get_attachment", {"attachment_id": "%2e%2e/tickets/1"}),
+        ("solve_ticket", {"ticket_id": "%2e%2e/users/5"}),
+        ("update_ticket", {"ticket_id": "../x", "fields": {"priority": "high"}}),
+        ("assign_ticket", {"ticket_id": "../x", "assignee_id": 7, "group_id": None}),
+        ("add_internal_note", {"ticket_id": "../x", "body": "hi", "uploads": None}),
+    ],
+)
+def test_no_id_that_is_not_a_number_reaches_a_path(method, kwargs):
+    # `Backend` annotates these `int` and nothing enforced it: MCP arguments
+    # arrive from JSON, and mcp 2.2.0's low-level Server does NOT validate
+    # `inputSchema`, so `"type": "integer"` is documentation rather than a
+    # control. Enforced at the seam, not at the delivery layer, because the
+    # library is callable without going through the server at all.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath, match="whole number"):
+        getattr(ApiBackend(_client(handler)), method)(**kwargs)
+    assert called["n"] == 0

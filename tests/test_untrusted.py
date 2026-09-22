@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from csa_zendesk import _untrusted
@@ -380,3 +382,39 @@ def test_the_walk_recurses_into_a_list_nested_directly_in_a_list():
     out = _untrusted.wrap_ticket(env)
     assert _untrusted.MARKER_OPEN in out["ticket"]["odd_field"][0][0]
     assert out["ticket"]["odd_field"][0][1] == 5
+
+
+def test_wrap_upload_labels_its_source_as_an_upload_not_a_ticket():
+    # The defect this pair exists to prevent: an upload envelope put through
+    # `wrap_ticket` comes back marked `source=zendesk-ticket...`, because that
+    # function reads the absent `"ticket"` key and falls back to the ticket
+    # root. The markers would be right and the claim beside them false.
+    out = _untrusted.wrap_upload({"upload": {"token": "abc", "attachment": {"file_name": "r.pdf"}}})
+    text = json.dumps(out)
+    assert "zendesk-upload" in text
+    assert "zendesk-ticket" not in text
+
+
+def test_wrap_attachment_labels_its_source_as_an_attachment_not_a_ticket():
+    out = _untrusted.wrap_attachment({"attachment": {"id": 1, "file_name": "r.pdf"}})
+    text = json.dumps(out)
+    assert "zendesk-attachment" in text
+    assert "zendesk-ticket" not in text
+
+
+def test_every_wrapper_labels_a_distinct_source_root():
+    # A sibling added later that copied another's `path=` would silently
+    # mislabel exactly the way the reused `wrap_ticket` did. The names are the
+    # provenance mechanism, so they must not collide.
+    roots = set()
+    for fn, env in (
+        (_untrusted.wrap_ticket, {"ticket": {"subject": "s"}}),
+        (_untrusted.wrap_comments, {"comments": [{"body": "b"}]}),
+        (_untrusted.wrap_search, {"results": [{"subject": "s"}]}),
+        (_untrusted.wrap_upload, {"upload": {"file_name": "r.pdf"}}),
+        (_untrusted.wrap_attachment, {"attachment": {"file_name": "r.pdf"}}),
+    ):
+        text = json.dumps(fn(env))
+        root = text.split("source=")[1].split(".")[0]
+        roots.add(root)
+    assert len(roots) == 5, roots

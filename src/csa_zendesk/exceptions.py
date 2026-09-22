@@ -22,6 +22,8 @@ __all__ = [
     "PaginationError",
     "InvalidPath",
     "SearchLimitExceeded",
+    "EmptyWrite",
+    "InvalidFilename",
     "RateLimited",
     "ServiceUnavailable",
     "PolicyError",
@@ -111,6 +113,42 @@ class InvalidPath(ZendeskError):
 
 class SearchLimitExceeded(ZendeskError):
     """Search refuses past 1000 results, however large the reported `count`."""
+
+
+class EmptyWrite(ZendeskError):
+    """A write call refused before it reached the wire because, as given, it
+    would change nothing: `backend.assign_ticket` naming neither `assignee_id`
+    nor `group_id`, or `backend.update_ticket` with an empty `fields` mapping.
+
+    Raised by `backend.py`'s `_refuse_an_empty_assignment`,
+    `_refuse_an_empty_update`, `_refuse_an_empty_note` and
+    `_refuse_an_empty_upload` (one exception for all four - the same defect in
+    sibling methods, not four near-identical types), each building its message
+    from a
+    fixed sentence naming what the call needed - never text out of a Zendesk
+    response, since nothing has been sent yet. An empty-body write is not
+    free just because it changes nothing: it spends this tenant's write-rate
+    budget and lands in Zendesk's own audit log as an update that changed
+    nothing, undermining the very legibility agent writes are meant to have
+    there.
+    """
+
+
+class InvalidFilename(ZendeskError):
+    """An `upload_file` filename was refused before it reached the wire.
+
+    Zendesk's upload documentation requires the filename passed here to share
+    an extension with the real file's content: "While the two names can be
+    different, their file extensions must be the same. If they don't match,
+    the agent's browser or file reader could give an error when attempting to
+    open the attachment." A filename with no extension at all cannot satisfy
+    that, so it is refused here - own prose, nothing derived from a Zendesk
+    response, since nothing has been sent yet - rather than accepted and left
+    to surface later as an unopenable attachment instead of a clean error.
+
+    Raised by `backend._refuse_a_filename_without_extension`, shared by
+    `ApiBackend` and `FakeBackend` the same way `EmptyWrite`'s siblings are.
+    """
 
 
 class RateLimited(ZendeskError):

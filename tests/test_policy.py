@@ -40,6 +40,52 @@ def test_the_default_profile_can_list_comments():
     assert wrapped().list_comments(ticket_id=1) == {"comments": []}
 
 
+# --- Task 4: ticket.attach is its own capability, separate from ticket.write --
+
+
+def test_ticket_attach_is_its_own_capability_not_folded_into_ticket_write():
+    assert pol.TICKET_ATTACH == "ticket.attach"
+    assert pol.TICKET_ATTACH != pol.TICKET_WRITE
+
+
+def test_upload_file_is_gated_on_ticket_attach():
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_WRITE})))
+    with pytest.raises(exc.PolicyError, match="ticket.attach"):
+        pb.upload_file(filename="report.pdf", content=b"x", content_type="application/pdf")
+
+
+def test_a_policy_holding_only_ticket_attach_can_upload_and_delete_but_not_write():
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_ATTACH})))
+    assert pb.upload_file(filename="report.pdf", content=b"x", content_type="application/pdf") == {
+        "upload": {"token": "fake-upload-token"}
+    }
+    assert pb.delete_upload(token="abc123") == {}
+    with pytest.raises(exc.PolicyError, match="ticket.write"):
+        pb.update_ticket(ticket_id=1, fields={"priority": "high"})
+
+
+def test_get_attachment_is_gated_on_ticket_read_not_ticket_attach():
+    # Reading an attachment is a read - holding ticket.attach alone must not
+    # be enough, and holding ticket.read alone must be.
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_ATTACH})))
+    with pytest.raises(exc.PolicyError, match="ticket.read"):
+        pb.get_attachment(attachment_id=42)
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_READ})))
+    assert pb.get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+
+
+def test_the_default_and_agent_profiles_carry_ticket_attach():
+    # Practical consequence of ticket.attach being its own capability: the
+    # profiles that can already write an internal note (ticket.note) should
+    # also be able to upload something to attach to one.
+    assert pol.TICKET_ATTACH in pol.PROFILES["default"]
+    assert pol.TICKET_ATTACH in pol.PROFILES["agent"]
+
+
+def test_readonly_profile_does_not_carry_ticket_attach():
+    assert pol.TICKET_ATTACH not in pol.PROFILES["readonly"]
+
+
 def test_a_policy_without_ticket_read_refuses_list_comments_before_reaching_the_backend():
     class ExplodingComments(FakeBackend):
         def list_comments(self, **kwargs):  # pragma: no cover - must never run
@@ -110,7 +156,8 @@ def test_an_unknown_profile_is_a_loud_error_listing_the_real_ones():
 
 def test_a_callable_gates_kwargs_reach_it_through_the_wrapper(monkeypatch):
     # ADR-003: one PUT, several authorities - update_ticket itself arrives in
-    # Block 2, but the wiring this depends on must be proven now. A test that
+    # Block 1 (this task's own gate is a constant, not yet callable), but the
+    # wiring a future callable gate would depend on must be proven now. A test that
     # only calls `gate(...)` directly (as an earlier version of this test did)
     # asserts nothing about PolicyBackend: it would still pass with _dispatch
     # deleted, since nothing routes the call's actual kwargs through a gate.
@@ -589,3 +636,217 @@ def test_a_tools_check_is_enforced_by_dispatch_itself_not_only_unit_tested(monke
     assert pb.fake_constrained(subject="x") == {"ok": True, "subject": "x"}
     with pytest.raises(exc.PolicyError, match="priority"):
         pb.fake_constrained(priority="high")
+
+
+# --- update_ticket / assign_ticket: the first two writes, gated on ticket.write
+
+
+def test_a_policy_without_ticket_write_refuses_update_ticket_before_reaching_the_backend():
+    class ExplodingUpdate(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingUpdate(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.write"):
+        pb.update_ticket(ticket_id=1, fields={"priority": "high"})
+
+
+def test_a_policy_without_ticket_write_refuses_assign_ticket_before_reaching_the_backend():
+    class ExplodingAssign(FakeBackend):
+        def assign_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingAssign(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.write"):
+        pb.assign_ticket(ticket_id=1, assignee_id=7)
+
+
+def test_the_default_profile_can_update_a_ticket():
+    pb = wrapped(tickets={1: {"id": 1, "priority": "low"}})
+    assert pb.update_ticket(ticket_id=1, fields={"priority": "high"}) == {"ticket": {"id": 1, "priority": "high"}}
+
+
+def test_the_default_profile_can_assign_a_ticket():
+    pb = wrapped(tickets={1: {"id": 1}})
+    assert pb.assign_ticket(ticket_id=1, assignee_id=7) == {"ticket": {"id": 1, "assignee_id": 7}}
+
+
+def test_update_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    # Sibling of test_get_ticket_through_the_real_dispatch_is_refused_outside_
+    # the_read_allowlist, on the write allowlist this time - update_ticket is
+    # the first tool this repo has ever scoped by CSA_ZD_ALLOWLIST_WRITE.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.update_ticket(ticket_id=99999, fields={"priority": "high"})
+
+
+def test_update_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.update_ticket(ticket_id=44821, fields={"priority": "high"}) == {
+        "ticket": {"id": 44821, "priority": "high"}
+    }
+
+
+# --- CRITICAL regression: update_ticket must refuse a comment/status/reach-
+# --- side-door NESTED INSIDE `fields`, not only one passed as an extra
+# --- top-level kwarg. `policy._dispatch` calls `spec.run_check(kwargs)` with
+# --- `kwargs == {"ticket_id": ..., "fields": {...}}` - a check that only
+# --- looked at `kwargs` itself would see "comment" nested inside `fields` as
+# --- nothing at all, and this exact call would have reached Zendesk as a
+# --- public reply through a tool gated only on ticket.write, carrying no
+# --- reach=True.
+
+
+def test_update_ticket_through_the_real_dispatch_refuses_a_comment_nested_in_fields(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfCommented(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached - this would have emailed the requester")
+
+    pb = pol.PolicyBackend(ExplodingIfCommented(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match="comment"):
+        pb.update_ticket(ticket_id=44821, fields={"comment": {"body": "surprise!", "public": True}})
+
+
+def test_update_ticket_through_the_real_dispatch_refuses_a_status_nested_in_fields(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfSolved(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingIfSolved(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match="status"):
+        pb.update_ticket(ticket_id=44821, fields={"status": "solved"})
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("custom_status_id", 321),
+        ("additional_collaborators", ["a@example.com"]),
+        ("email_ccs", [{"user_email": "a@example.com", "action": "put"}]),
+        ("followers", [{"user_email": "a@example.com", "action": "put"}]),
+        ("collaborator_ids", [123]),
+    ],
+)
+def test_update_ticket_through_the_real_dispatch_refuses_each_reach_side_door_nested_in_fields(monkeypatch, key, value):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfSideDoored(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingIfSideDoored(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match=key):
+        pb.update_ticket(ticket_id=44821, fields={key: value})
+
+
+def test_update_ticket_through_the_real_dispatch_refuses_a_non_mapping_fields(monkeypatch):
+    # Re-review finding: a malformed `fields` (not a dict at all) must be
+    # refused at the seam with a clean PolicyError, not reach ApiBackend and
+    # fail however a string/list/int happens to fail three layers down.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+
+    class ExplodingIfReached(FakeBackend):
+        def update_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingIfReached(tickets={44821: {"id": 44821}}), pol.Policy.from_profile("default"))
+    with pytest.raises(exc.PolicyError, match="mapping"):
+        pb.update_ticket(ticket_id=44821, fields="oops")
+
+
+def test_assign_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.assign_ticket(ticket_id=99999, assignee_id=7)
+
+
+def test_assign_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.assign_ticket(ticket_id=44821, group_id=9) == {"ticket": {"id": 44821, "group_id": 9}}
+
+
+# --- add_internal_note / solve_ticket: THE control this block exists to get
+# right (public forced by construction, never by input) - see backend.py
+
+
+def test_a_policy_without_ticket_note_refuses_add_internal_note_before_reaching_the_backend():
+    class ExplodingNote(FakeBackend):
+        def add_internal_note(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingNote(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.note"):
+        pb.add_internal_note(ticket_id=1, body="hi")
+
+
+def test_a_policy_without_ticket_solve_refuses_solve_ticket_before_reaching_the_backend():
+    class ExplodingSolve(FakeBackend):
+        def solve_ticket(self, **kwargs):  # pragma: no cover - must never run
+            raise AssertionError("the backend must not be reached")
+
+    pb = pol.PolicyBackend(ExplodingSolve(), pol.Policy(frozenset()))
+    with pytest.raises(exc.PolicyError, match="ticket.solve"):
+        pb.solve_ticket(ticket_id=1)
+
+
+def test_the_default_profile_can_add_an_internal_note():
+    pb = wrapped(tickets={1: {"id": 1}})
+    assert pb.add_internal_note(ticket_id=1, body="internal") == {"ticket": {"id": 1}}
+
+
+def test_the_default_profile_cannot_solve_a_ticket():
+    # TICKET_SOLVE is not in the reversible-only default profile (it is an
+    # on-ramp to a terminal state) - "agent" is the profile that carries it.
+    pb = wrapped(tickets={1: {"id": 1}})
+    with pytest.raises(exc.PolicyError, match=pol.TICKET_SOLVE):
+        pb.solve_ticket(ticket_id=1)
+
+
+def test_the_agent_profile_can_solve_a_ticket():
+    pb = wrapped(profile="agent", tickets={1: {"id": 1, "status": "open"}})
+    assert pb.solve_ticket(ticket_id=1) == {"ticket": {"id": 1, "status": "solved"}}
+
+
+def test_add_internal_note_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.add_internal_note(ticket_id=99999, body="hi")
+
+
+def test_add_internal_note_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    assert pb.add_internal_note(ticket_id=44821, body="hi") == {"ticket": {"id": 44821}}
+
+
+def test_add_internal_note_through_the_real_dispatch_cannot_be_made_public(monkeypatch):
+    # The end-to-end proof of this block's central claim: even through the
+    # real seam, with an allowlisted subject and the capability granted, a
+    # caller attempting to pass public=True gets a clean PolicyError, not a
+    # public note.
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(tickets={44821: {"id": 44821}})
+    with pytest.raises(exc.PolicyError, match="public"):
+        pb.add_internal_note(ticket_id=44821, body="hi", public=True)
+
+
+def test_solve_ticket_through_the_real_dispatch_is_refused_outside_the_write_allowlist(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(profile="agent", tickets={99999: {"id": 99999}})
+    with pytest.raises(exc.PolicyError, match="99999"):
+        pb.solve_ticket(ticket_id=99999)
+
+
+def test_solve_ticket_through_the_real_dispatch_permits_an_allowlisted_subject(monkeypatch):
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "44821")
+    pb = wrapped(profile="agent", tickets={44821: {"id": 44821, "status": "open"}})
+    assert pb.solve_ticket(ticket_id=44821) == {"ticket": {"id": 44821, "status": "solved"}}

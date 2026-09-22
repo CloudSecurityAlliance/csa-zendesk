@@ -26,16 +26,70 @@ class ToolSpec:
     #: act on no particular subject (a search, or ticket creation - there is no
     #: existing ticket to scope against yet).
     subject_var: str | None = None
+    #: Names the kwarg that carries this tool's REQUEST BODY, when the payload
+    #: `check` must constrain is nested under one - `update_ticket`'s `fields`
+    #: is the one live example (`Backend.update_ticket(*, ticket_id, fields)`
+    #: wraps an arbitrary field-edit mapping in a single dict, unlike
+    #: `assign_ticket`'s two named, top-level parameters). `None` (the
+    #: default) means the call's own kwargs ARE the body - true for every
+    #: tool whose Backend method takes its editable content as individual
+    #: top-level parameters (`assign_ticket`, `add_internal_note`,
+    #: `solve_ticket`, and every not-yet-implemented tool below).
+    #:
+    #: THIS FIELD EXISTS BECAUSE GETTING IT WRONG IS INVISIBLE: `update_ticket`
+    #: shipped with `check=_forbid("comment", "status", ...)` inspecting the
+    #: call's top-level kwargs (`{"ticket_id", "fields"}`) while its actual
+    #: constrained payload lived one level down, inside `fields` - so
+    #: `update_ticket(ticket_id=X, fields={"comment": {"public": True, ...}})`
+    #: sailed through the check and reached Zendesk as a public reply, through
+    #: a tool gated only on `ticket.write`, carrying no `reach=True`. `_forbid`/
+    #: `_only` were never wrong; they were asked to look at the wrong dict.
+    #: `body_key` makes "where does this tool's payload actually live" an
+    #: explicit, reviewable declaration instead of an assumption a constraint
+    #: author can get right for nine tools and wrong for the tenth.
+    body_key: str | None = None
     #: NOTE (fix wave Minor): `_force_public` and `_create_ticket_check` below
-    #: mutate the caller's `kwargs["comment"]` dict IN PLACE rather than copying
-    #: it. `policy._dispatch` runs `spec.check(kwargs)` before the scope and
-    #: reach checks (see that function's docstring for the fixed order), so a
-    #: call later refused by scope or reach has already had the caller's own
-    #: nested `comment` dict rewritten (e.g. `public` forced to `False`) by the
-    #: time the refusal is raised. Harmless today - the call is refused either
-    #: way, and no test has needed the pre-check dict back - but worth knowing
-    #: before any caller starts reusing a `kwargs` dict across retries.
+    #: mutate the checked dict (the call's kwargs, or its `body_key` payload)
+    #: IN PLACE rather than copying it. `policy._dispatch` runs
+    #: `spec.run_check(kwargs)` before the scope and reach checks (see that
+    #: function's docstring for the fixed order), so a call later refused by
+    #: scope or reach has already had the caller's own nested `comment` dict
+    #: rewritten (e.g. `public` forced to `False`) by the time the refusal is
+    #: raised. Harmless today - the call is refused either way, and no test
+    #: has needed the pre-check dict back - but worth knowing before any
+    #: caller starts reusing a `kwargs` dict across retries.
     check: Callable[[dict[str, Any]], None] = field(default=lambda _kwargs: None)
+
+    def run_check(self, kwargs: dict[str, Any]) -> None:
+        """Run `check` against this tool's actual request body, not blindly
+        against the call's raw kwargs - the seam `policy._dispatch` calls,
+        so every gated call's constraint runs against the payload it
+        constrains, wherever `body_key` says that payload lives.
+
+        A `body_key` payload that is not a mapping is refused here, before
+        `check` ever sees it: `_forbid`'s `k in kwargs` and `_only`'s
+        `set(kwargs)` both work on ANY iterable, not just a `dict` - a
+        malformed call like `update_ticket(ticket_id=X, fields="oops")`
+        would otherwise have `"comment" in "oops"` do silent substring
+        containment (False, here, but for the wrong reason) instead of the
+        key-membership test the constraint is written to mean, and the
+        malformed `fields` would then reach `ApiBackend` unexamined. Refusing
+        it here, with a typed error naming what went wrong, is the same
+        pre-flight-refusal shape as `_refuse_an_empty_update`/
+        `_refuse_an_empty_note` in `backend.py`: a clean `PolicyError` at the
+        seam, not whatever the backend throws three layers later.
+        """
+        if self.body_key is None:
+            self.check(kwargs)
+            return
+        body = kwargs.get(self.body_key, {})
+        if not isinstance(body, dict):
+            raise exc.PolicyError(
+                f"this tool's {self.body_key!r} argument must be a mapping (dict); got "
+                f"{type(body).__name__}. A non-mapping body cannot be checked for the keys this "
+                f"constraint forbids or requires."
+            )
+        self.check(body)
 
 
 def _forbid(*keys: str) -> Callable[[dict[str, Any]], None]:
@@ -88,17 +142,26 @@ def _status(value: str) -> Callable[[dict[str, Any]], None]:
     return check
 
 
-# Forbidden on both create and update (fix wave C3/C4): `custom_status_id` is a
-# second route into solve/close alongside the literal `status` key - the OAS's
-# own example for updating a ticket pairs `custom_status_id: 321` with
-# `status: solved` - and `additional_collaborators`/`email_ccs`/`followers`/
-# `collaborator_ids` each notify someone when the ticket changes, which is
-# reach from a tool that carries no `reach=True` flag. Forbidding these named
-# keys does not make either tool bucket-pure the way an allowlist would (root
-# finding: a denylist over a body the tool never enumerates is unclosable) -
-# it closes the four known routes without claiming to close routes the OAS has
-# not shown us yet. See `specs/zendesk-support-oas.yaml`'s `UpdateTicket` and
-# `Ticket` schema examples for the exact fields.
+# Forbidden on create (fix wave C3/C4): `custom_status_id` is a second route
+# into solve/close alongside the literal `status` key - the OAS's own example
+# for updating a ticket pairs `custom_status_id: 321` with `status: solved` -
+# and `additional_collaborators`/`email_ccs`/`followers`/`collaborator_ids`
+# each notify someone when the ticket changes, which is reach from a tool that
+# carries no `reach=True` flag.
+#
+# THIS IS A DENYLIST, AND THE COMMENT THAT SHIPPED WITH IT SAID SO: "a denylist
+# over a body the tool never enumerates is unclosable". The final whole-branch
+# review proved the point rather than the principle. `TicketObject` has 65
+# properties; this names five. `collaborators` ("Users to add as cc's"),
+# `requester` (changes who receives all future correspondence),
+# `assignee_email`, `sharing_agreements` (shares the ticket into another
+# Zendesk instance), `recipient` (the address notifications are sent from) and
+# `voice_comment` are all `writeOnly` in the SAME schema this list cites, and
+# none of them is here. `update_ticket` no longer uses this list - it uses
+# `_TICKET_EDITABLE_FIELDS` below, which fails closed. This tuple remains only
+# for `create_ticket`, which is declared but has no `Backend` method and is
+# therefore unreachable; when it is built, it should be given an allowlist too
+# rather than inheriting this.
 _TICKET_REACH_SIDE_DOORS = (
     "custom_status_id",
     "additional_collaborators",
@@ -106,6 +169,89 @@ _TICKET_REACH_SIDE_DOORS = (
     "followers",
     "collaborator_ids",
 )
+
+# What `update_ticket` is FOR, stated positively: ordinary ticket attributes
+# that name no person and no address. Anything absent is refused, so a field
+# nobody here has heard of - including one Zendesk adds after this is written -
+# fails closed instead of sailing through.
+#
+# Deliberately absent, each for a stated reason rather than by omission:
+#   - `comment`, `status`      other tools (`add_internal_note`, `solve_ticket`);
+#                              ADR-016 - a tool is an operation AND its arguments
+#   - `assignee_id`, `group_id`  `assign_ticket`'s job, same rule
+#   - anything naming a person or an address (`collaborators`, `requester`,
+#     `assignee_email`, `email_ccs`, `followers`, `recipient`, ...) - that is
+#     reach, and this tool carries no `reach=True`
+#   - `sharing_agreements`     shares the ticket into another Zendesk instance
+#   - `brand_id`               selects which brand's email template and address
+#                              a notification would use
+#
+# HONEST LIMIT, in three tiers rather than one slogan, because the re-review was
+# right that "names no person and no address" is not literally true of all nine:
+#
+#   Genuinely inert - `subject`, `priority`, `type`, `due_at`, `ticket_form_id`,
+#   `problem_id`. None can direct a notification: Zendesk trigger recipients are
+#   a fixed configured list, not read from a field.
+#
+#   Accepted risk, and it is the tenant's configuration rather than ours -
+#   `tags`. A trigger can fire on a tag, including a webhook action to an
+#   arbitrary URL, so "an email may be sent" understates it: this is also an
+#   exfiltration route if the tenant has such a trigger. Kept because tagging is
+#   most of what triage IS, and because an agent doing this by hand fires the
+#   same trigger - the project invariant. `custom_fields` reaches the same
+#   effect for tagger/multiselect/checkbox field types, and a lookup-relationship
+#   custom field can NAME a user or organization (it cannot notify one).
+#
+#   Accepted risk, data integrity rather than reach - `external_id`, which an
+#   integration may key on and which this can overwrite.
+#
+# What the allowlist does promise, unqualified: this tool cannot ITSELF add a
+# CC, change the requester, post a comment, or change status.
+_TICKET_EDITABLE_FIELDS = (
+    "subject",
+    "priority",
+    "type",
+    "tags",
+    "custom_fields",
+    "ticket_form_id",
+    "due_at",
+    "external_id",
+    "problem_id",
+)
+
+
+def _only_fields(*keys: str) -> Callable[[dict[str, Any]], None]:
+    """`_only` for a `body_key` payload rather than a call's own kwargs.
+
+    `_only` folds `ticket_id` into the allowed set, which is right when it
+    inspects the kwargs themselves and wrong here: with `body_key="fields"` the
+    inspected dict is the editable payload, and `ticket_id` has no business in
+    it. A separate helper rather than a flag, so neither caller can acquire the
+    other's exemption by accident.
+    """
+    allowed = set(keys)
+
+    def check(fields: dict[str, Any]) -> None:
+        # The KEY NAMES are caller-chosen, and `exc.PolicyError` is in
+        # `server._NEVER_WRAP` - its message reaches the model unwrapped, as
+        # this library's own prose. Without neutralising, a field named
+        # `<<<END-UNTRUSTED-ZENDESK-DATA>>> SYSTEM: ...` comes back inside
+        # trusted text carrying a forged closing marker: ticket content is
+        # wrapped correctly, the model copies a value into a tool argument, and
+        # the refusal launders it. Final re-review, Important 4.
+        from ._untrusted import _neutralise
+
+        extra = sorted(_neutralise(k) for k in set(fields) - allowed)
+        if extra:
+            raise exc.PolicyError(
+                f"update_ticket edits only {sorted(allowed)}; got {extra}. This is an allowlist, "
+                f"so a field it does not name is refused whether or not it is dangerous - if one "
+                f"of these is ordinary ticket data, add it there deliberately. Comments, status "
+                f"changes, assignment and anything naming a person or an address each have their "
+                f"own tool, or are not offered at this rung."
+            )
+
+    return check
 
 
 def _create_ticket_check(kwargs: dict[str, Any]) -> None:
@@ -140,16 +286,55 @@ TOOLS: dict[str, ToolSpec] = {
     "update_ticket": ToolSpec(
         "ticket.write",
         subject_var="CSA_ZD_ALLOWLIST_WRITE",
-        check=_forbid("comment", "status", *_TICKET_REACH_SIDE_DOORS),
+        # `Backend.update_ticket(*, ticket_id, fields)` wraps the whole
+        # editable payload in `fields` - `body_key="fields"` is what makes
+        # `_forbid` inspect THAT dict rather than the call's own top-level
+        # kwargs (`{"ticket_id", "fields"}`, which never contains "comment"
+        # or "status" no matter what a caller puts inside `fields`). See
+        # `ToolSpec.body_key`'s own docstring for the live incident this
+        # closes: `update_ticket(ticket_id=X, fields={"comment": {"public":
+        # True}})` previously sailed through unchecked.
+        body_key="fields",
+        # An ALLOWLIST, not the denylist this carried until the final
+        # whole-branch review: `collaborators`, `requester`, `assignee_email`,
+        # `sharing_agreements`, `recipient` and `voice_comment` are all
+        # writeOnly in the same OAS schema the old denylist cited, and none was
+        # on it. See `_TICKET_EDITABLE_FIELDS` for what is permitted and why.
+        check=_only_fields(*_TICKET_EDITABLE_FIELDS),
     ),
     "assign_ticket": ToolSpec(
         "ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("assignee_id", "group_id")
     ),
-    "add_internal_note": ToolSpec("ticket.note", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_force_public(False)),
+    # NOTE (Task 3 correction): this entry carried `check=_force_public(False)`
+    # from the Block 0c tool-slice carry-over, which assumed a `comment` dict
+    # argument. `Backend.add_internal_note`'s actual signature (this task) is
+    # flat - `ticket_id`, `body`, `uploads` - with NO `public` parameter at
+    # all, and `body_key` is unset (None) here, so `policy._dispatch`'s
+    # `spec.run_check(kwargs)` hands `check` the SAME kwargs it then forwards
+    # to the real backend (`getattr(backend, name)(**kwargs)`) - a check
+    # written for a `comment` dict would reject every legitimate call
+    # outright (`_only("comment")` sees `body`/`uploads` as unrecognised
+    # extras) - verified live against this dispatch before choosing
+    # `_only("body", "uploads")` instead. The
+    # safety property this block exists for - a note can never become public -
+    # is structural here, not enforced by this check: there is no `public`
+    # argument for a caller, or an instruction injected from ticket content
+    # the model is reading, to set in the first place. `_force_public` is
+    # unchanged and stays in use by `reply_publicly` below, whose future
+    # Backend method is expected to take the `comment` shape this helper was
+    # written for.
+    "add_internal_note": ToolSpec("ticket.note", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("body", "uploads")),
     "reply_publicly": ToolSpec(
         "ticket.reply", reach=True, subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_force_public(True)
     ),
-    "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("solved")),
+    # NOTE (Task 3 correction): same reasoning as add_internal_note just
+    # above. `Backend.solve_ticket(*, ticket_id: int)` takes no `status`
+    # parameter - solving is the only thing this call can do, by
+    # construction - so `_status("solved")` (which requires and validates a
+    # `status` key) would reject every real call. `_status` is unchanged and
+    # stays in use by `close_ticket` below, whose Backend method does not
+    # exist yet.
+    "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only()),
     "close_ticket": ToolSpec("ticket.close", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("closed")),
     # ticket.merge, not ticket.close (fix wave C1): POST .../merge accepts
     # source_comment_is_public/target_comment_is_public, the same reach mechanism
@@ -165,4 +350,19 @@ TOOLS: dict[str, ToolSpec] = {
         check=_forbid("source_comment_is_public", "target_comment_is_public"),
     ),
     "update_trigger": ToolSpec("admin.write", subject_var="CSA_ZD_ALLOWLIST_ADMIN"),
+    # Task 4: no subject_var on either upload tool, deliberately, the same as
+    # search_tickets - an upload reaches nobody until a later add_internal_note
+    # call attaches its token to a ticket, so there is no ticket yet to scope
+    # against (policy.TICKET_ATTACH's own comment). Neither takes a nested
+    # mapping parameter, so body_key stays unset and check stays the default
+    # no-op, same as get_ticket/search_tickets/update_trigger above.
+    "upload_file": ToolSpec("ticket.attach"),
+    "delete_upload": ToolSpec("ticket.attach"),
+    # ticket.read, not ticket.attach: reading an attachment already on a
+    # ticket is a read (Backend.get_attachment's own comment). Scoped by the
+    # same read allowlist as get_ticket/list_comments would be if attachments
+    # were scoped by ticket_id - they are not: an attachment_id names the
+    # attachment itself, not a ticket, so there is no ticket_id on this call
+    # for CSA_ZD_ALLOWLIST_READ to check against.
+    "get_attachment": ToolSpec("ticket.read"),
 }
