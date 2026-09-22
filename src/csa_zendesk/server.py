@@ -777,18 +777,23 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
     see that mistake, not a connection failure that has nothing to do with
     what they asked for.
 
-    Every branch below wraps its envelope with `_untrusted.wrap_ticket`,
-    including `upload_file`/`delete_upload`/`get_attachment`, whose envelopes
-    are `{"upload": {...}}`/`{}`/`{"attachment": {...}}` rather than
-    `{"ticket": {...}}`: `wrap_ticket` only uses a `"ticket"` key, when
-    present, to label the wrap's `source` more specifically - it walks and
-    wraps the WHOLE envelope regardless of shape and is explicitly proven to
-    tolerate one with no `"ticket"` key at all
-    (`test_wrap_ticket_tolerates_an_envelope_with_no_ticket_key`, in
-    `test_untrusted.py`) - so it is the right generic wrapper to reach for
-    here rather than adding three narrowly-named siblings
-    (`wrap_upload`/`wrap_attachment`/...) that would do the exact same walk
-    under a different name. `upload_file`'s `content_base64` argument is
+    Every branch below wraps its envelope with the `_untrusted` wrapper named
+    for that envelope's OWN kind: `wrap_ticket` for the four writes that
+    return `{"ticket": {...}}`, `wrap_comments`, `wrap_search`, and
+    `wrap_upload`/`wrap_attachment` for the attachment family.
+
+    Reaching for `wrap_ticket` generically WOULD work in the sense that
+    matters least - it walks and wraps the whole envelope regardless of shape,
+    and is proven to tolerate one with no `"ticket"` key
+    (`test_wrap_ticket_tolerates_an_envelope_with_no_ticket_key`). But the
+    `"ticket"` key is what it uses to LABEL the wrap's `source`, so an upload
+    or attachment put through it comes back marked `source=zendesk-ticket...`,
+    which is false. The markers would still delimit the data correctly and the
+    claim beside them would be wrong - and the whole value of a provenance
+    marker is that the model can believe it. Naming a sibling per envelope
+    kind is not duplication to be avoided here; it is how this module encodes
+    provenance at all, which is why `wrap_comments` and `wrap_search` are each
+    a single line. `upload_file`'s `content_base64` argument is
     decoded before the call: MCP tool arguments are JSON, which has no binary
     type, so the file's bytes travel as base64 text - decoded with
     `validate=True` so that a malformed value raises `binascii.Error` (a
@@ -834,7 +839,7 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         return text
     if name == "get_attachment":
         envelope = client.get_attachment(attachment_id=arguments["attachment_id"])
-        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+        return json.dumps(_untrusted.wrap_attachment(envelope), indent=2)
     if name == "update_ticket":
         envelope = client.update_ticket(ticket_id=arguments["ticket_id"], fields=arguments["fields"])
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
@@ -869,10 +874,10 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         envelope = client.upload_file(
             filename=arguments["filename"], content=content, content_type=arguments["content_type"]
         )
-        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+        return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
     # The only name the membership check above still lets through here.
     envelope = client.delete_upload(token=arguments["token"])
-    return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+    return json.dumps(_untrusted.wrap_upload(envelope), indent=2)
 
 
 async def _on_list_tools(

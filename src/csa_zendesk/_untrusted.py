@@ -309,6 +309,30 @@ def wrap_comments(envelope: Envelope) -> Envelope:
     return _walk_dict(envelope, path="zendesk-comments")
 
 
+def wrap_upload(envelope: Envelope) -> Envelope:
+    """Wrap an `{"upload": {...}}` envelope - `upload_file` and `delete_upload`.
+
+    A sibling rather than a reuse of `wrap_ticket`, for the same reason
+    `wrap_comments` and `wrap_search` are siblings: the function name IS the
+    provenance root, so reusing `wrap_ticket` here would not save a sibling,
+    it would label an upload response `source=zendesk-ticket...` and state
+    something false about where the bytes came from. The markers would still
+    delimit the data correctly; the claim beside them would be wrong, and a
+    marker whose provenance cannot be trusted is worth less than one whose can.
+    """
+    return _walk_dict(envelope, path="zendesk-upload")
+
+
+def wrap_attachment(envelope: Envelope) -> Envelope:
+    """Wrap an `{"attachment": {...}}` envelope - `get_attachment`.
+
+    `wrap_upload`'s sibling, for the reason given there. An attachment carries
+    a requester-authored `file_name` and `content_url`, so this is not a
+    formality.
+    """
+    return _walk_dict(envelope, path="zendesk-attachment")
+
+
 def wrap_search(envelope: Envelope) -> Envelope:
     """Wrap every requester-authored string anywhere in a `{"results": [...]}` envelope.
 

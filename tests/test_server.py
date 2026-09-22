@@ -1182,3 +1182,37 @@ def test_upload_file_accepts_well_formed_base64(monkeypatch):
     result = asyncio.run(srv._on_call_tool(None, params))
     assert result.is_error is False
     assert seen["content"] == b"Hello"
+
+
+def test_the_attachment_family_is_labelled_with_its_own_provenance_not_a_ticket(monkeypatch):
+    # The `_untrusted` tests pin what each wrapper LABELS; this pins which one
+    # `call_tool_sync` reaches for, which is where the defect actually was -
+    # all three of these were put through `wrap_ticket` and came back claiming
+    # `source=zendesk-ticket...` for data that never came from a ticket. No
+    # existing test failed when that was fixed, so this is the one that would
+    # have caught it.
+    class _Client:
+        def upload_file(self, *, filename, content, content_type):
+            return {"upload": {"token": "t", "attachment": {"file_name": "r.pdf"}}}
+
+        def delete_upload(self, *, token):
+            return {"upload": {"file_name": "r.pdf"}}
+
+        def get_attachment(self, *, attachment_id):
+            return {"attachment": {"id": 1, "file_name": "r.pdf"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    expected = {
+        "upload_file": (
+            "zendesk-upload",
+            {"filename": "r.pdf", "content_base64": "SGk=", "content_type": "text/plain"},
+        ),
+        "delete_upload": ("zendesk-upload", {"token": "t"}),
+        "get_attachment": ("zendesk-attachment", {"attachment_id": 1}),
+    }
+    registered = {t.name for t in srv.READ_TOOLS + srv.WRITE_TOOLS}
+    assert set(expected) <= registered, "a tool was renamed without updating this test"
+    for name, (root, args) in expected.items():
+        text = srv.call_tool_sync(name, args)
+        assert f"source={root}" in text, name
+        assert "zendesk-ticket" not in text, name
