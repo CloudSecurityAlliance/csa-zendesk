@@ -102,6 +102,12 @@ share their architecture.
    (`source_comment_is_public` / `target_comment_is_public`) the way `ticket.reply` does — it is the
    one capability that combines both properties, so it is also, with `ticket.reply`, in
    `REACH_CAPABILITIES` and requires `CSA_ZD_ALLOW_REACH` in addition to being granted.
+   `ticket.attach` (Task 4) sits off this chain entirely rather than slotting in below `ticket.note`:
+   `upload_file` reaches nobody and touches no existing ticket at all — it stages bytes on Zendesk's
+   side, invisible until a later `ticket.note`/`ticket.write` call carries the token onto one — so it
+   is not comparable to the others by reversibility the way they are to each other. It carries no
+   `subject_var`, the same as `ticket.read`'s `search_tickets`, for the same reason: there is no
+   ticket yet to scope against.
 
 ## Invariants that fail silently — check these when editing
 

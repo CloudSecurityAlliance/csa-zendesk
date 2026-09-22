@@ -60,6 +60,15 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
         def solve_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
+        def upload_file(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def delete_upload(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def get_attachment(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
     assert isinstance(NameOnlyImpostor(), Backend)
 
 
@@ -723,3 +732,129 @@ def test_fake_backend_solve_ticket_mutates_and_returns_the_ticket():
 def test_fake_backend_solve_ticket_raises_not_found_for_an_unknown_ticket_id():
     with pytest.raises(exc.NotFound):
         FakeBackend().solve_ticket(ticket_id=999)
+
+
+# --- upload_file: the two-step upload's first half - a token, attached to nothing
+
+
+def test_upload_sends_the_filename_as_a_query_parameter_and_bytes_as_the_body():
+    # Path from analysis/operation-inventory.csv row: ticketing,Attachments,POST,
+    # /api/v2/uploads,UploadFiles,Upload Files,,,
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["content"] = request.content
+        seen["content_type"] = request.headers.get("content-type")
+        return httpx.Response(201, json={"upload": {"token": "abc123"}})
+
+    b = ApiBackend(_client(handler))
+    out = b.upload_file(filename="report.pdf", content=b"%PDF-1.7 fake", content_type="application/pdf")
+    assert "filename=report.pdf" in seen["url"]
+    assert seen["content"] == b"%PDF-1.7 fake"
+    assert seen["content_type"] == "application/pdf"
+    assert out == {"upload": {"token": "abc123"}}
+
+
+def test_upload_refuses_a_filename_with_no_extension():
+    # The spec requires the uploaded filename's extension to match the real
+    # file's; a filename with none cannot satisfy that, and the failure would
+    # surface as an unopenable attachment rather than an API error.
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(201, json={})
+
+    with pytest.raises(exc.ZendeskError, match="extension"):
+        ApiBackend(_client(handler)).upload_file(filename="report", content=b"x", content_type="application/pdf")
+
+
+def test_upload_refuses_a_filename_that_is_only_a_trailing_dot():
+    # os.path.splitext("report.") == ("report", ".") - a dot with nothing
+    # after it to call an extension, the same defect as no dot at all.
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(201, json={})
+
+    with pytest.raises(exc.InvalidFilename, match="extension"):
+        ApiBackend(_client(handler)).upload_file(filename="report.", content=b"x", content_type="application/pdf")
+
+
+def test_upload_is_not_retried_on_503():
+    # Task 4 decision, carried forward from Task 1's review: a retried upload
+    # does not repeat a no-op the way a retried PUT does - it mints a SECOND
+    # token, a second orphaned file nothing in the ticket surface would ever
+    # show. Proven here at the Backend seam, not only at _http/_transport's
+    # own idempotent=False plumbing: exactly one request must reach the wire.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        ApiBackend(_client(handler)).upload_file(filename="report.pdf", content=b"x", content_type="application/pdf")
+    assert calls["n"] == 1
+
+
+def test_fake_backend_upload_file_returns_a_canned_token():
+    # Canned, like search_tickets/list_comments: no self.tickets-shaped store
+    # exists for an orphaned upload to be checked against.
+    assert FakeBackend().upload_file(filename="report.pdf", content=b"x", content_type="application/pdf") == {
+        "upload": {"token": "fake-upload-token"}
+    }
+
+
+def test_fake_backend_upload_file_refuses_a_filename_with_no_extension():
+    # The fake enforces the same pre-flight refusal ApiBackend does: a fake
+    # that let this through would pass tests the real API rejects.
+    with pytest.raises(exc.InvalidFilename, match="extension"):
+        FakeBackend().upload_file(filename="report", content=b"x", content_type="application/pdf")
+
+
+# --- delete_upload: cleanup for an upload that was never attached -------------
+
+
+def test_delete_upload_targets_the_token():
+    # Path from analysis/operation-inventory.csv row: ticketing,Attachments,
+    # DELETE,/api/v2/uploads/{token},DeleteUpload,Delete Upload,,,
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["method"] = request.method
+        return httpx.Response(204)
+
+    ApiBackend(_client(handler)).delete_upload(token="abc123")
+    assert seen["method"] == "DELETE"
+    assert seen["url"].endswith("/api/v2/uploads/abc123")
+
+
+def test_delete_upload_returns_the_envelope_unshaped():
+    # 204 No Content -> {} (ZD-2, _http._envelope): success with nothing to report.
+    assert ApiBackend(_client(lambda r: httpx.Response(204))).delete_upload(token="abc123") == {}
+
+
+def test_fake_backend_delete_upload_returns_an_empty_envelope():
+    # Canned: no per-upload store exists to remove `token` from.
+    assert FakeBackend().delete_upload(token="abc123") == {}
+
+
+# --- get_attachment: reading an already-attached file's metadata is a read ----
+
+
+def test_get_attachment_calls_the_documented_path():
+    # Path from analysis/operation-inventory.csv row: ticketing,Attachments,
+    # GET,/api/v2/attachments/{attachment_id},ShowAttachment,Show Attachment,,,
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        return httpx.Response(200, json={"attachment": {"id": 42}})
+
+    assert ApiBackend(_client(handler)).get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/api/v2/attachments/42"
+
+
+def test_fake_backend_get_attachment_returns_a_canned_envelope():
+    # Canned: no per-attachment store exists to look attachment_id up in.
+    assert FakeBackend().get_attachment(attachment_id=42) == {"attachment": {"id": 42}}

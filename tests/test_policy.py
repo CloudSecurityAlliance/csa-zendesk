@@ -40,6 +40,52 @@ def test_the_default_profile_can_list_comments():
     assert wrapped().list_comments(ticket_id=1) == {"comments": []}
 
 
+# --- Task 4: ticket.attach is its own capability, separate from ticket.write --
+
+
+def test_ticket_attach_is_its_own_capability_not_folded_into_ticket_write():
+    assert pol.TICKET_ATTACH == "ticket.attach"
+    assert pol.TICKET_ATTACH != pol.TICKET_WRITE
+
+
+def test_upload_file_is_gated_on_ticket_attach():
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_WRITE})))
+    with pytest.raises(exc.PolicyError, match="ticket.attach"):
+        pb.upload_file(filename="report.pdf", content=b"x", content_type="application/pdf")
+
+
+def test_a_policy_holding_only_ticket_attach_can_upload_and_delete_but_not_write():
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_ATTACH})))
+    assert pb.upload_file(filename="report.pdf", content=b"x", content_type="application/pdf") == {
+        "upload": {"token": "fake-upload-token"}
+    }
+    assert pb.delete_upload(token="abc123") == {}
+    with pytest.raises(exc.PolicyError, match="ticket.write"):
+        pb.update_ticket(ticket_id=1, fields={"priority": "high"})
+
+
+def test_get_attachment_is_gated_on_ticket_read_not_ticket_attach():
+    # Reading an attachment is a read - holding ticket.attach alone must not
+    # be enough, and holding ticket.read alone must be.
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_ATTACH})))
+    with pytest.raises(exc.PolicyError, match="ticket.read"):
+        pb.get_attachment(attachment_id=42)
+    pb = pol.PolicyBackend(FakeBackend(), pol.Policy(frozenset({pol.TICKET_READ})))
+    assert pb.get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+
+
+def test_the_default_and_agent_profiles_carry_ticket_attach():
+    # Practical consequence of ticket.attach being its own capability: the
+    # profiles that can already write an internal note (ticket.note) should
+    # also be able to upload something to attach to one.
+    assert pol.TICKET_ATTACH in pol.PROFILES["default"]
+    assert pol.TICKET_ATTACH in pol.PROFILES["agent"]
+
+
+def test_readonly_profile_does_not_carry_ticket_attach():
+    assert pol.TICKET_ATTACH not in pol.PROFILES["readonly"]
+
+
 def test_a_policy_without_ticket_read_refuses_list_comments_before_reaching_the_backend():
     class ExplodingComments(FakeBackend):
         def list_comments(self, **kwargs):  # pragma: no cover - must never run

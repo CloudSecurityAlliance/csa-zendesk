@@ -13,6 +13,7 @@ so `tests/test_backend.py` compares their signatures.
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any, Protocol, runtime_checkable
 
 from . import exceptions as exc
@@ -108,6 +109,42 @@ def _refuse_an_empty_note(*, body: str, uploads: list[str] | None) -> None:
         )
 
 
+def _refuse_a_filename_without_extension(*, filename: str) -> None:
+    """Refuse an `upload_file` call whose `filename` carries no extension,
+    before it reaches the wire.
+
+    Zendesk's upload documentation requires the filename passed here to share
+    an extension with the real file's content - a mismatch, or an absence,
+    "could give an error when attempting to open the attachment." A filename
+    with no extension at all cannot satisfy that, so it is refused here
+    rather than left to surface later as an unopenable attachment instead of
+    a clean, pre-flight error. Shared by `ApiBackend` and `FakeBackend`, the
+    same way `_refuse_an_empty_update` and its siblings above are, and for
+    the same reason: the two backends must refuse identically.
+
+    Deliberately does not attempt to compare `content_type` against the
+    extension: an "obvious" mismatch (e.g. `content_type="image/png"` with
+    `filename="report.pdf"`) is not reliably detectable - a caller may
+    legitimately upload a PDF under a generic `content_type`, or a filename
+    whose extension is technically valid but unusual for its content - and a
+    check that is right most of the time but wrong sometimes would refuse a
+    legitimate upload with no way to override it. Presence of an extension is
+    the one property this can check without guessing at the caller's intent.
+    """
+    # os.path.splitext treats a name with no extension - and a dotfile like
+    # ".bashrc", whose leading dot is not a separator - as ("<name>", ""), so
+    # a falsy `ext` covers both "no dot at all" and "a leading dot with
+    # nothing after it to call an extension."
+    _, ext = os.path.splitext(filename)
+    if not ext or ext == ".":
+        raise exc.InvalidFilename(
+            f"upload_file needs a filename with an extension; got {filename!r}. Zendesk requires "
+            f"the uploaded filename's extension to match the real file's, or the agent's browser "
+            f"or file reader could fail to open the attachment - a filename with no extension at "
+            f"all cannot satisfy that."
+        )
+
+
 @runtime_checkable
 class Backend(Protocol):
     """Every Zendesk operation this library reaches, unshaped.
@@ -139,6 +176,12 @@ class Backend(Protocol):
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope: ...
 
     def solve_ticket(self, *, ticket_id: int) -> Envelope: ...
+
+    def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope: ...
+
+    def delete_upload(self, *, token: str) -> Envelope: ...
+
+    def get_attachment(self, *, attachment_id: int) -> Envelope: ...
 
 
 class ApiBackend:
@@ -307,6 +350,61 @@ class ApiBackend:
         # TypeError.
         return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": {"status": "solved"}})
 
+    def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
+        # analysis/operation-inventory.csv row: ticketing,Attachments,POST,
+        # /api/v2/uploads,UploadFiles,Upload Files,,,
+        #
+        # UPLOADING IS TWO STEPS, AND THIS IS ONLY THE FIRST (task brief): the
+        # token this returns names bytes that exist on Zendesk's side attached
+        # to NOTHING - it becomes visible on a ticket only once a later
+        # `add_internal_note(uploads=[token])` call carries it there. This
+        # call therefore reaches nobody, which is why it is gated on
+        # `policy.TICKET_ATTACH` rather than `TICKET_WRITE` (see that
+        # constant's own comment) and why neither this method nor its
+        # `tools.TOOLS` entry names a `subject_var`: there is no ticket yet
+        # to scope against, exactly like `search_tickets`.
+        #
+        # `filename` must carry an extension (Zendesk's own requirement -
+        # see `_refuse_a_filename_without_extension`'s docstring) - refused
+        # before this reaches the wire, the same pre-flight shape as every
+        # other refusal in this module.
+        _refuse_a_filename_without_extension(filename=filename)
+        # idempotent=False, EXPLICITLY, though it is also `post_binary`'s own
+        # default: a retried upload does not repeat a no-op the way a retried
+        # PUT does - it mints a SECOND token, a second orphaned file, that
+        # nothing in the ticket surface will ever show (Task 1 review;
+        # Task 4's decision - see `_http.HttpClient.post_binary`'s docstring
+        # for the full reasoning). Written out here so the decision is
+        # visible at the call site that matters, not only at the default.
+        return self._http.post_binary(
+            "/api/v2/uploads",
+            content=content,
+            content_type=content_type,
+            params={"filename": filename},
+            idempotent=False,
+        )
+
+    def delete_upload(self, *, token: str) -> Envelope:
+        # analysis/operation-inventory.csv row: ticketing,Attachments,DELETE,
+        # /api/v2/uploads/{token},DeleteUpload,Delete Upload,,,
+        #
+        # Ships in this same task, not a later one: an upload that is never
+        # attached to a comment is invisible everywhere else in the ticket
+        # surface (task brief) - without this method, a failed or abandoned
+        # `upload_file` call (or a retried one under the decision above)
+        # leaves litter nobody can find.
+        return self._http.request("DELETE", f"/api/v2/uploads/{token}")
+
+    def get_attachment(self, *, attachment_id: int) -> Envelope:
+        # analysis/operation-inventory.csv row: ticketing,Attachments,GET,
+        # /api/v2/attachments/{attachment_id},ShowAttachment,Show Attachment,,,
+        #
+        # Gated on ticket.read, not ticket.attach (policy._GATES) - reading an
+        # attachment already on a ticket is a read like any other; ticket.attach
+        # governs creating a new, as-yet-unattached upload, not reading one that
+        # already reached somewhere.
+        return self._http.get(f"/api/v2/attachments/{attachment_id}")
+
 
 class FakeBackend:
     """In-memory double, faithful to the shapes observed live.
@@ -412,3 +510,27 @@ class FakeBackend:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
         ticket["status"] = "solved"
         return {"ticket": copy.deepcopy(ticket)}
+
+    def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
+        # Canned, like search_tickets/list_comments: an upload is not scoped
+        # to any ticket while it is orphaned (that is the whole point of
+        # this method - see ApiBackend.upload_file's comment), so there is no
+        # self.tickets-shaped store to check it against or record it in.
+        # `content`/`content_type` are accepted, unused, only to keep this
+        # signature identical to ApiBackend's (test_the_two_backends_have_
+        # identical_signatures).
+        #
+        # Still enforces the same extension refusal ApiBackend does: a fake
+        # that let this through would pass tests the real API would refuse.
+        _refuse_a_filename_without_extension(filename=filename)
+        return {"upload": {"token": "fake-upload-token"}}
+
+    def delete_upload(self, *, token: str) -> Envelope:
+        # Canned: no per-upload store exists to check `token` against or
+        # remove it from, same reasoning as upload_file above.
+        return {}
+
+    def get_attachment(self, *, attachment_id: int) -> Envelope:
+        # Canned: no per-attachment store exists to look `attachment_id` up
+        # in, same reasoning as upload_file/delete_upload above.
+        return {"attachment": {"id": attachment_id}}

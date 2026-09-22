@@ -23,6 +23,7 @@ __all__ = [
     "InvalidPath",
     "SearchLimitExceeded",
     "EmptyWrite",
+    "InvalidFilename",
     "RateLimited",
     "ServiceUnavailable",
     "PolicyError",
@@ -128,6 +129,23 @@ class EmptyWrite(ZendeskError):
     budget and lands in Zendesk's own audit log as an update that changed
     nothing, undermining the very legibility agent writes are meant to have
     there.
+    """
+
+
+class InvalidFilename(ZendeskError):
+    """An `upload_file` filename was refused before it reached the wire.
+
+    Zendesk's upload documentation requires the filename passed here to share
+    an extension with the real file's content: "While the two names can be
+    different, their file extensions must be the same. If they don't match,
+    the agent's browser or file reader could give an error when attempting to
+    open the attachment." A filename with no extension at all cannot satisfy
+    that, so it is refused here - own prose, nothing derived from a Zendesk
+    response, since nothing has been sent yet - rather than accepted and left
+    to surface later as an unopenable attachment instead of a clean error.
+
+    Raised by `backend._refuse_a_filename_without_extension`, shared by
+    `ApiBackend` and `FakeBackend` the same way `EmptyWrite`'s siblings are.
     """
 
 

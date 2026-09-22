@@ -500,6 +500,23 @@ def test_assert_subject_permitted_is_a_no_op_when_the_tool_names_no_allowlist():
     policy.assert_subject_permitted("search_tickets", {})
 
 
+# --- Task 4: upload_file/delete_upload/get_attachment tool specs --------------
+
+
+def test_upload_file_and_delete_upload_have_no_subject_var():
+    # No ticket to scope against yet - an upload reaches nobody until a later
+    # add_internal_note call attaches its token, exactly like search_tickets.
+    assert tools.TOOLS["upload_file"].subject_var is None
+    assert tools.TOOLS["delete_upload"].subject_var is None
+    assert tools.TOOLS["upload_file"].capability == "ticket.attach"
+    assert tools.TOOLS["delete_upload"].capability == "ticket.attach"
+
+
+def test_get_attachment_is_a_read_not_an_attach():
+    assert tools.TOOLS["get_attachment"].capability == "ticket.read"
+    assert tools.TOOLS["get_attachment"].subject_var is None
+
+
 def test_assert_subject_permitted_refuses_a_scoped_tool_with_no_subject_id():
     # update_trigger is scoped by CSA_ZD_ALLOWLIST_ADMIN but this call carries no
     # `ticket_id` - a programming error, not a configuration problem.

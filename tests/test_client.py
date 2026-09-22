@@ -105,3 +105,26 @@ def test_a_solve_ticket_not_found_reaches_the_caller_through_the_client():
     c = ZendeskClient(FakeBackend())
     with pytest.raises(exc.NotFound):
         c.solve_ticket(ticket_id=999)
+
+
+def test_the_client_passes_upload_file_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.upload_file(filename="report.pdf", content=b"x", content_type="application/pdf") == {
+        "upload": {"token": "fake-upload-token"}
+    }
+
+
+def test_an_upload_file_extension_refusal_reaches_the_caller_through_the_client():
+    c = ZendeskClient(FakeBackend())
+    with pytest.raises(exc.InvalidFilename):
+        c.upload_file(filename="report", content=b"x", content_type="application/pdf")
+
+
+def test_the_client_passes_delete_upload_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.delete_upload(token="abc123") == {}
+
+
+def test_the_client_passes_get_attachment_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.get_attachment(attachment_id=42) == {"attachment": {"id": 42}}

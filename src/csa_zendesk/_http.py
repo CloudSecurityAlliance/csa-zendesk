@@ -120,11 +120,29 @@ class HttpClient:
         return self._envelope(response)
 
     def post_binary(
-        self, path: str, *, content: bytes, content_type: str, params: Mapping[str, Any] | None = None
+        self,
+        path: str,
+        *,
+        content: bytes,
+        content_type: str,
+        params: Mapping[str, Any] | None = None,
+        idempotent: bool = False,
     ) -> dict[str, Any]:
         """POST raw bytes. Zendesk's upload endpoint takes a binary body and a
         `filename` query parameter - it is the only call in this library that is
-        not JSON, which is why `Transport.send` grew `content`/`content_type`."""
+        not JSON, which is why `Transport.send` grew `content`/`content_type`.
+
+        `idempotent` defaults to `False`, unlike `request`'s default of `True` -
+        deliberately the opposite way round (Task 4 decision, carried forward
+        from Task 1's review). `request`'s callers are all `PUT`s that edit a
+        ticket to a target state, so replaying one on a 503 reproduces the same
+        state. This client's one binary POST creates a new upload each time it
+        is sent: a retried upload does not repeat a no-op, it MINTS A SECOND
+        TOKEN - a second file on Zendesk's side, attached to nothing, that
+        nothing in the ticket surface will ever show. That is a worse outcome
+        than the caller waiting out the 503 and retrying by hand, so this
+        method does not retry it automatically.
+        """
         self._validate_path(path)
         response = self._transport.send(
             "POST",
@@ -134,6 +152,7 @@ class HttpClient:
             params=params,
             content=content,
             content_type=content_type,
+            idempotent=idempotent,
         )
         return self._envelope(response)
 

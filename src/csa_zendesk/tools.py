@@ -253,4 +253,19 @@ TOOLS: dict[str, ToolSpec] = {
         check=_forbid("source_comment_is_public", "target_comment_is_public"),
     ),
     "update_trigger": ToolSpec("admin.write", subject_var="CSA_ZD_ALLOWLIST_ADMIN"),
+    # Task 4: no subject_var on either upload tool, deliberately, the same as
+    # search_tickets - an upload reaches nobody until a later add_internal_note
+    # call attaches its token to a ticket, so there is no ticket yet to scope
+    # against (policy.TICKET_ATTACH's own comment). Neither takes a nested
+    # mapping parameter, so body_key stays unset and check stays the default
+    # no-op, same as get_ticket/search_tickets/update_trigger above.
+    "upload_file": ToolSpec("ticket.attach"),
+    "delete_upload": ToolSpec("ticket.attach"),
+    # ticket.read, not ticket.attach: reading an attachment already on a
+    # ticket is a read (Backend.get_attachment's own comment). Scoped by the
+    # same read allowlist as get_ticket/list_comments would be if attachments
+    # were scoped by ticket_id - they are not: an attachment_id names the
+    # attachment itself, not a ticket, so there is no ticket_id on this call
+    # for CSA_ZD_ALLOWLIST_READ to check against.
+    "get_attachment": ToolSpec("ticket.read"),
 }

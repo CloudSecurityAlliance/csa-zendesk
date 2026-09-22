@@ -650,6 +650,7 @@ _NEVER_WRAP: tuple[type[exc.ZendeskError], ...] = (
     exc.InvalidPath,
     exc.SearchLimitExceeded,
     exc.EmptyWrite,
+    exc.InvalidFilename,
     exc.RateLimited,
     exc.ServiceUnavailable,
     auth.NotAuthorised,

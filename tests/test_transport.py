@@ -3,6 +3,7 @@ import pathlib
 import httpx
 import pytest
 
+from csa_zendesk import exceptions as exc
 from csa_zendesk._http import HttpClient
 from csa_zendesk._transport import Transport
 
@@ -40,6 +41,41 @@ def test_post_binary_without_params_omits_the_query_string():
         return httpx.Response(204)
 
     assert client(handler).post_binary("/api/v2/uploads.json", content=b"x", content_type="text/plain") == {}
+
+
+def test_post_binary_defaults_to_non_idempotent_so_a_503_is_not_retried():
+    # Task 4 decision: unlike request()'s idempotent=True default, post_binary
+    # defaults the OTHER way. A retried upload does not repeat a no-op the way
+    # a retried PUT does - it mints a second token, a second orphaned file
+    # nothing in the ticket surface would ever show - so this must not retry
+    # automatically just because the caller didn't think to pass idempotent=False.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+
+    with pytest.raises(exc.ServiceUnavailable):
+        client(handler).post_binary("/api/v2/uploads.json", content=b"x", content_type="text/plain")
+    assert calls["n"] == 1
+
+
+def test_post_binary_can_still_be_told_to_retry_when_a_caller_opts_in():
+    # idempotent is a real, honoured parameter here, not decoration - proven
+    # by making the opposite choice work too.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(503, json={}, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"upload": {"token": "abc"}})
+
+    result = client(handler).post_binary(
+        "/api/v2/uploads.json", content=b"x", content_type="text/plain", idempotent=True
+    )
+    assert result == {"upload": {"token": "abc"}}
+    assert calls["n"] == 2
 
 
 def test_send_refuses_json_and_content_together():

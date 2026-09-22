@@ -11,3 +11,6 @@ solve_ticket,PUT,/api/v2/tickets/{ticket_id},status only; solved,solve,reversibl
 close_ticket,PUT,/api/v2/tickets/{ticket_id},status only; closed,close,irreversible,internal,ticket.close
 merge_tickets,POST,/api/v2/tickets/{ticket_id}/merge,forbid source_comment_is_public and target_comment_is_public,close,irreversible,contacts-a-person,ticket.merge
 update_trigger,PUT,/api/v2/triggers/{trigger_id},none,write,reversible,internal,admin.write
+upload_file,POST,/api/v2/uploads,none,attach,reversible,internal,ticket.attach
+delete_upload,DELETE,/api/v2/uploads/{token},none,delete,recoverable-with-effort,internal,ticket.attach
+get_attachment,GET,/api/v2/attachments/{attachment_id},none,read,n/a,internal,ticket.read

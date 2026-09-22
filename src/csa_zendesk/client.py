@@ -126,3 +126,38 @@ class ZendeskClient:
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.solve_ticket(ticket_id=ticket_id))
+
+    def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
+        """Upload a file's bytes, as the raw upstream envelope: `{"upload": {"token": ...}}`.
+
+        This is not itself an attachment: the returned token names bytes that
+        exist on Zendesk's side attached to nothing at all, and become
+        visible on a ticket only once passed to `add_internal_note(uploads=
+        [token])`. `filename` must carry an extension - Zendesk requires it
+        to match the real file's, or a reader may fail to open the result -
+        and a call omitting one is refused before it reaches the wire.
+
+        An unattached upload is invisible everywhere else in this library's
+        surface; use `delete_upload` to clean one up rather than leaving it
+        as litter nobody can find.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.upload_file(filename=filename, content=content, content_type=content_type))
+
+    def delete_upload(self, *, token: str) -> Envelope:
+        """Delete an unattached upload by its token, as the raw upstream envelope.
+
+        The cleanup counterpart to `upload_file`: an upload that is never
+        attached to a comment is otherwise invisible litter.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.delete_upload(token=token))
+
+    def get_attachment(self, *, attachment_id: int) -> Envelope:
+        """Read one attachment's metadata, as the raw upstream envelope: `{"attachment": {...}}`.
+
+        A read, not an attach operation - it does not create or delete
+        anything, so it needs only `ticket.read`.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.get_attachment(attachment_id=attachment_id))
