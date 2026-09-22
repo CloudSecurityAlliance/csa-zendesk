@@ -23,10 +23,16 @@ Everything runs from a venv; CI gates four things and so should you:
 
 ```bash
 .venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing   # 100% required
-.venv/bin/ruff check src tests scripts        # T20 included: no `print` in src/ or tests/
+.venv/bin/ruff check .                        # `.`, not a directory list - see below
 .venv/bin/ruff format --check src tests       # scripts/ is exempt from format, not from lint
 .venv/bin/mypy                                # strict, over src
 ```
+
+**Lint the whole tree, not a directory list.** `ruff check src tests scripts` once left
+tracked-but-unnamed `experiments/` unlinted, hiding a `NameError` in all three scripts that
+write to a live ticket (Block 1, Task 4/CI fix). CI runs `ruff check .`; anything that needs
+to be skipped is an exclusion in `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`, where
+it is reviewable, not an absence from the command line.
 
 The coverage gate is **100%, not 90%** — a gate below the measured state cannot fail.
 `# pragma: no cover` is the explicit hatch, and using it is a decision to write down.

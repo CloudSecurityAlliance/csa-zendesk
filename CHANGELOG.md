@@ -15,6 +15,67 @@ a PATCH bump means a fix with no surface change.
 
 ## [Unreleased]
 
+**Block 1 — the write surface and attachments.** `csa-zendesk-mcp` moves from rung E1
+(read-only) to rung **E2** — "work tickets for real: + note, write." Ten tools now, not
+three: `get_ticket`, `search_tickets`, `list_comments`, `get_attachment` (all reads) and
+`update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`,
+`delete_upload` (all writes), plus the three unchanged auth-lifecycle tools.
+
+**Said plainly, because this is the claim most likely to be misread: nothing in this block
+has run against live Zendesk.** Every write tool below was built and reviewed entirely
+against `FakeBackend` and mocked transports. The one thing that *has* been verified live —
+separately, from an untouched `0.1.0` clone, on 2026-09-21 — is the **read** path: OAuth,
+transport, the allowlist failing closed against an unlisted id, and `_untrusted` wrapping,
+all confirmed end to end against the real tenant. That is not a claim about the write
+surface. The live write walkthrough is `TODO.md` F1 and happens after this branch merges,
+with a human present.
+
+### Added
+- **Four new write tools** — `update_ticket`, `assign_ticket`, `add_internal_note`,
+  `solve_ticket` — each a narrow, bucket-pure constraint over `PUT /api/v2/tickets/{id}`
+  (ADR-016): `update_ticket` cannot touch `comment`/`status`/the collaborator-notification
+  fields; `assign_ticket` can change only `assignee_id`/`group_id`; `add_internal_note`'s
+  comment is structurally always private (there is no `public` parameter for a caller, or
+  injected instruction, to set); `solve_ticket` can only set `status=solved`.
+- **Attachments**: `upload_file` (send bytes, get back a token naming an upload attached to
+  nothing yet), `delete_upload` (clean up an unattached token), and `get_attachment` (read
+  one already on a ticket — gated as a read, `TICKET_READ`, not as an attach). A file
+  becomes visible on a ticket only when a later `add_internal_note(uploads=[token])` call
+  carries the token there — `upload_file` alone does not attach anything.
+- **New capability `ticket.attach`**, gating `upload_file`/`delete_upload`. Deliberately its
+  own capability rather than folded into `ticket.write` or `ticket.note`: an upload reaches
+  no existing ticket and stages bytes Zendesk holds attached to nothing, which is not
+  comparable by reversibility to any capability already on the `read < note < write < reply
+  < solve < close < merge` chain.
+- `HttpClient.post_binary`, for the one binary-body request this surface makes. Defaults to
+  `idempotent=False` — the opposite of `request()`'s default — because retrying an upload on
+  a transient 503 does not repeat a no-op, it mints a *second* orphaned upload token.
+- `_untrusted.wrap_upload` / `wrap_attachment`, so an upload's or attachment's provenance
+  marker reads `source=zendesk-upload...` / `source=zendesk-attachment...` rather than
+  borrowing `wrap_ticket`'s `zendesk-ticket...` label for data that never came from a ticket.
+
+### Changed
+- **`_http.py` split**: the retry/auth/wire half moved to a new `_transport.py`
+  (`Transport`); `_http.py` keeps path safety, the envelope rule, and the public
+  `get`/`request`/`post_binary` surface as a thin dispatcher onto it. No behaviour change —
+  a characterisation test pins the invalid-token-retry path that this refactor touches most.
+- **CI now runs `ruff check .`**, not `ruff check src tests scripts`. The old form left
+  tracked `experiments/` unlinted, which was hiding a `NameError` in all three scripts that
+  write to a live ticket. Exclusions now live in `pyproject.toml`, where they are reviewable.
+
+### Fixed
+- **`analysis/API-SURFACE.md` §7.2b recorded the OAuth client's registered scope ceiling
+  wrong.** It named four scopes; a live screenshot taken 2026-09-21 shows the client also
+  carries `triggers:write`, unused by anything this block ships. No credential or code
+  changed — the client's actual ceiling didn't move, the record of it was corrected to match.
+
+### Not verified
+Restated because it is the fact most likely to drift into an overclaim later: **no write
+tool, and no read/write combination, has been exercised against live Zendesk in this block.**
+The write-scoped OAuth token and the live fixture ticket created for this purpose
+(`progress.md`) exist for the human-supervised walkthrough at `TODO.md` F1, not for anything
+that ran during Block 1's build or review.
+
 ## [0.1.0] — 2026-09-19
 
 First release. **Read-only ticket triage against a live Zendesk tenant (rung E1), with
