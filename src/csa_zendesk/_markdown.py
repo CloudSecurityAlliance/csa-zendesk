@@ -52,11 +52,29 @@ _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 #: emoji (Scotland's flag becomes a plain black flag without them). None of
 #: that is stripped now.
 #:
+#: Corrected again 2026-09-22 (round 2): WORD JOINER (0x2060) was added to
+#: this set without being checked against a legitimacy corpus either - the
+#: same defect reproduced at small scale. It is the functional complement of
+#: ZWSP (ZWSP permits a break where none would otherwise occur; WJ suppresses
+#: one that otherwise would happen), so the same reasoning that got ZWSP
+#: dropped applies to WJ: it binds a number to its unit, holds an
+#: abbreviation together, and prevents a mid-token break in technical or
+#: legal text. Also not stripped now.
+#:
+#: The rest of the original threat list stays off for reasons of its own,
+#: not just "it was on the list": bidi ISOLATES (0x2066-0x2069, LRI/RLI/FSI/
+#: PDI) are the modern, recommended replacement for the 0x202A-0x202C
+#: embedding controls - they scope directionality without the leakage
+#: embeddings suffer, and are ordinary in mixed-direction text. Soft hyphen
+#: (0x00AD) is a legitimate hyphenation hint, invisible unless the renderer
+#: actually breaks there, and ubiquitous in justified text produced by word
+#: processors. The Mongolian vowel separator (0x180E) is legitimate in
+#: Mongolian script.
+#:
 #: What remains: the Trojan Source bidi-OVERRIDE pair (LRO/RLO reorder how
 #: text renders without reordering the source, which is how `invoice[RLO]
 #: fdp.exe` displays as `invoice.exe`, with no legitimate prose use), a
-#: mid-document BOM, the presentation-only word joiner (a no-break hint that
-#: carries no meaning of its own), and C0 controls other than tab/LF/CR.
+#: mid-document BOM, and C0 controls other than tab/LF/CR.
 #:
 #: Consequence, not an oversight: this no longer defangs the observed
 #: zero-width-signature attack (U+200C interleaved through a name), because
@@ -66,7 +84,7 @@ _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 #: `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
 _STRIP = (
     {0x202D, 0x202E}  # LEFT-TO-RIGHT OVERRIDE, RIGHT-TO-LEFT OVERRIDE - Trojan Source
-    | {0x2060, 0xFEFF}  # word joiner (no meaning, presentation only), BOM
+    | {0xFEFF}  # BOM - no legitimate mid-document use
     | frozenset(c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D))  # controls
 )
 
@@ -75,21 +93,28 @@ def strip_suspicious(text: str) -> str:
     """Remove codepoints that have no legitimate use in prose.
 
     Strips: the Trojan Source bidi-override pair (LRO/RLO), a mid-document
-    BOM, the presentation-only word joiner, and C0 controls other than
-    tab/LF/CR.
+    BOM, and C0 controls other than tab/LF/CR.
 
     Deliberately NOT stripped, because each has a real, meaning-bearing use
     somewhere in ordinary text: ZWSP (Thai/Khmer word segmentation), ZWNJ
     (semantic in Persian and Indic scripts), ZWJ (Arabic letter shaping,
     Indic conjuncts, emoji ZWJ sequences), LRM/RLM (legitimate directional
     marks), bidi EMBEDDING codepoints (ordinary right-to-left text, as
-    opposed to override), bidi isolates, tag characters (subdivision-flag
-    emoji), soft hyphen, and the Mongolian vowel separator. A broader first
-    version of this set stripped all of those and was measured to damage
-    seven languages/scripts; this is what survived checking it against a
-    legitimacy list, not just a threat list. One consequence of that: this
-    function does NOT defang the zero-width-signature attack (U+200C
-    interleaved through a name) - see
+    opposed to override), bidi ISOLATES (the modern, recommended replacement
+    for embedding - they scope directionality without embedding's leakage),
+    tag characters (subdivision-flag emoji), soft hyphen (a hyphenation
+    hint, invisible unless the renderer actually breaks there), the
+    Mongolian vowel separator (legitimate in Mongolian script), and the WORD
+    JOINER (the functional complement of ZWSP - it suppresses a break rather
+    than permitting one, e.g. binding a number to its unit or holding an
+    abbreviation together). A broader first version of this set stripped
+    ZWSP, ZWNJ, ZWJ, LRM/RLM, bidi EMBEDDING, tag characters, bidi isolates,
+    soft hyphen and the Mongolian vowel separator, and was measured to
+    damage seven languages/scripts; a second pass added WORD JOINER without
+    the same check and had to be corrected again. This is what survived
+    checking against a legitimacy list, not just a threat list. One
+    consequence of that: this function does NOT defang the
+    zero-width-signature attack (U+200C interleaved through a name) - see
     `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
 
     NOT a homoglyph check. A rule that flags mixed scripts within a word also

@@ -136,8 +136,11 @@ def test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping():
         "\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",  # Scotland flag - tag chars
         "‫שלום‬",  # Hebrew wrapped in bidi EMBEDDING (not override)
         "100‎$",  # LRM - a legitimate directional mark
+        "מחיר 100‏",  # RLM - a legitimate directional mark
         "क्‍ष",  # Hindi conjunct control - ZWJ changes the rendered glyph
         "أحب‍ك",  # Arabic ZWJ - letter shaping
+        "5⁠km",  # word joiner - binds a number to its unit
+        "ISO⁠9001",  # word joiner - holds a technical token together
     ],
 )
 def test_legitimate_text_is_untouched(text):
