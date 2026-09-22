@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Action pins are commit SHAs, which do not float - so without this they silently rot
+  # at whatever was current the day they were written, including past a security fix.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,139 +1,170 @@
 # Releasing
 
-Two parts: what this repo actually does today (a GitHub release, nothing more), and what
-PyPI publishing will require whenever that decision is made. See `TODO.md` for the open
-question of whether this package belongs on PyPI at all — it has not been decided, and
-this document is not the place that decides it.
+**Decision, 2026-09-21: yes, this goes on PyPI.** The previous version of this document
+deliberately left that open — "a CSA-internal tool with a public repo, not (yet) something
+outside consumers are asking to `pip install`" — and said the infrastructure below should
+not be built before the question was answered deliberately. It has been: the fleet is
+shipping several of these servers, both siblings (`csa-google-workspace`, `csa-skilljar`)
+are published, and an operator installing one of them and not this one is the odd case. The
+name was also unclaimed on PyPI, which is its own argument for claiming it.
 
-## What we do today
+Publishing is **CI-only, off a published GitHub Release, via PyPI Trusted Publishing
+(OIDC)**. No long-lived API token exists to leak. Nothing is ever published from a laptop.
 
-There is no PyPI package and no release-automation workflow yet. A release is: bump,
-changelog, branch, PR, merge, tag, GitHub release. Nothing is uploaded anywhere.
-
-1. **Bump the version** in `src/csa_zendesk/__init__.py` (`__version__`) — the single
-   source of truth; `pyproject.toml` reads it dynamically via
-   `version = { attr = "csa_zendesk.__version__" }`. There is exactly one place to change.
-
-2. **Add a dated `CHANGELOG.md` entry** under a new `## [X.Y.Z] — YYYY-MM-DD` heading,
-   above the entries it supersedes. Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
-   section headings (`Added` / `Changed` / `Fixed` / `Removed` / etc.). Say plainly what
-   was **not** verified, not only what was added — an oversold changelog is worse than a
-   terse one, because the next reader calibrates against it.
-
-3. **Branch and PR** — never commit the bump directly to `main`:
-   ```bash
-   git checkout -b release/X.Y.Z
-   git add src/csa_zendesk/__init__.py CHANGELOG.md
-   git commit -m "chore: release X.Y.Z"
-   git push -u origin release/X.Y.Z
-   gh pr create --title "release: X.Y.Z" --body "..."
-   ```
-
-4. **Get CI green, then merge.** `main` is protected: PRs required, admins enforced, no
-   force-push. Required checks: lint (`ruff check` / `ruff format --check`), `mypy --strict`,
-   the 3.10–3.13 test matrix, the 100% coverage floor, and `scripts/check_public_safe.py`
-   (see `.github/workflows/tests.yml`).
-
-5. **Tag the merge commit and cut a GitHub release:**
-   ```bash
-   git checkout main && git pull
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <(sed -n '/## \[X.Y.Z\]/,/## \[/p' CHANGELOG.md | sed '$d')
-   ```
-   Or paste the changelog entry into `gh release create --notes` by hand — the changelog
-   is the source of release notes (`PUBLIC-GITHUB-REPO-STANDARDS.md` §1).
-
-6. **Verify the tag matches what merged.** `git checkout vX.Y.Z` should reproduce the
-   commit whose CI you just watched pass — there is no build step between merge and tag
-   today, so this is mostly a sanity check that the tag landed on the right commit.
-
-That is the entire procedure. No package is built, nothing is uploaded, and no credential
-is used beyond ordinary `git`/`gh` push access.
-
-## What PyPI publishing will require (plan, not yet implemented)
-
-**Nothing below exists in this repo yet.** No `release.yml` workflow, no PyPI project, no
-Trusted Publisher, no protected `pypi` environment. This section exists so whoever picks
-this up knows the shape of the work and the one-time steps that need a human, per
-`PUBLIC-GITHUB-REPO-STANDARDS.md` §6 — read that section in full before building any of
-this; it is the source of every requirement named here, including the reasoning for each.
-
-**Before any of this is built**, decide the question this document deliberately leaves
-open: should `csa-zendesk` be on PyPI at all? It is a CSA-internal tool with a public repo,
-not (yet) something outside consumers are asking to `pip install`. See the TODO entry this
-release adds — the infrastructure below is real work, and building it before that decision
-is made is effort spent on the wrong branch of the question.
-
-If the answer is yes, the release path becomes:
+The chain each release preserves, per `PUBLIC-GITHUB-REPO-STANDARDS.md` §6:
 
 ```
-PR → protected main → tag → CI build → attested OIDC publish
+PR → protected main → GitHub Release → CI build → approved, attested OIDC publish
 ```
 
-**In the CI workflow:**
-- Publishing runs **only from CI, triggered by a pushed tag** — never `twine upload` from a
-  developer machine. The point of the whole chain is that the artifact's provenance
-  (which commit, built by what, published how) is answerable without trusting anyone's
-  laptop.
-- **Trusted Publishing / OIDC**, not a stored API token. The publish job requests a
-  short-lived token per run via `id-token: write`; no long-lived PyPI token ever exists in
-  a GitHub secret to leak or rotate.
-- **Every action pinned to a full commit SHA**, with the version in a trailing comment
-  (matching the style already in `.github/workflows/tests.yml`) — a mutable tag like `@v4`
-  on the job holding `id-token: write` is exactly the seam an attacker uses to exfiltrate
-  the publish token and ship as this project.
-- **Least-privilege `permissions`** on every job — default read-only, `id-token: write`
-  granted only to the one job that publishes.
-- The release job runs the **full test suite plus a security scan** (`pip-audit` and a
-  static analyzer) again, not just what ran on the PR — a CVE disclosed after the last
-  merge should not ship silently.
-- **Build attestations (PEP 740)** are emitted, and the workflow (or a manual post-publish
-  check) verifies they actually landed on the index — "on by default" is not verification.
-- **A dist-contents guard**: fail the build if anything credential-shaped, or `analysis/`,
-  `tenant-config/`, or research/experiment material, reached the sdist or wheel.
-- **`tag == packaged version`**, checked explicitly and failing the release if they
-  disagree.
+Every link is only as strong as branch protection.
 
-**One-time setup a human does, once, before the first PyPI release:**
-1. ~~Ship a `py.typed` marker (PEP 561) and confirm the built wheel actually contains it~~
-   — **done as of 0.1.0**: `src/csa_zendesk/py.typed` exists, `pyproject.toml`'s
-   `[tool.setuptools.package-data]` ships it, and `python -m build --wheel` was run and
-   the resulting wheel's contents inspected (`unzip -l`) to confirm `csa_zendesk/py.typed`
-   actually lands inside it — not assumed. Without this, a fully `mypy --strict` library
-   would type-check as `Any` for every consumer.
-2. **On PyPI:** register the project name, then add a **Trusted Publisher** naming this
-   exact repo (`CloudSecurityAlliance/csa-zendesk`), the workflow filename (e.g.
-   `release.yml`), and — critically — the **environment** (`pypi`). A blank environment
-   field means the index accepts a token from *any* environment in this repo, which
-   defeats the environment-gate below; PyPI emails a "can be made more secure" warning on
-   every publish until this is fixed. Add the constrained publisher, confirm it works, then
-   (if one was ever added unconstrained) remove the unconstrained entry — in that order, so
-   publishing never breaks in between.
-3. **On GitHub:** create a `pypi` environment (Settings → Environments) with a **required
-   reviewer**. This makes a release **pause** for an explicit approval before anything
-   uploads, and gives an **audit record** of who approved and when — real properties, worth
-   having. It is **not** separation of duties unless the reviewer is a genuinely different
-   authenticated principal from whoever opened the PR and cut the tag; do not describe it
-   as two-person control unless that is actually true. Scope any branch/tag protection
-   rule on this environment to the release tags, not `main` — a tag-triggered release
-   deploys against the tag ref, and a `main`-scoped rule would block the publish outright.
-4. **Verify the controls, not just their presence.** `PUBLIC-GITHUB-REPO-STANDARDS.md` §10
-   describes a `scripts/check_controls.py` pattern (run, not forked, from
-   `csa-google-workspace`) that checks the Trusted Publisher's environment binding, the
-   reviewer requirement, and branch protection independently of what the workflow file
-   claims — because none of those three live in the repo tree, so no diff and no green CI
-   run shows whether they are still on.
+## One-time setup
 
-**Explicitly out of scope for now:** none of the above is built. This section is a plan to
-execute later, not a checklist partially done. Revisit it only after the PyPI-or-not
-decision above is made deliberately, not by default.
+Do these once, in this order. Until all three are done, a release run will fail at the
+publish step — which is the correct failure, not a bug.
 
-## Invariants (once PyPI publishing exists)
+### 1. PyPI pending publisher
+
+`csa-zendesk` does not exist on PyPI yet, so there is no project to attach a publisher to.
+PyPI calls this a **pending publisher**: you configure it first and the project is created
+by the first successful upload. At <https://pypi.org/manage/account/publishing/>:
+
+| Field | Value |
+|---|---|
+| PyPI Project Name | `csa-zendesk` |
+| Owner | `CloudSecurityAlliance` |
+| Repository name | `csa-zendesk` |
+| Workflow name | `release.yml` |
+| Environment name | `pypi` |
+
+**The environment name is not optional, and this is the one people leave blank.** If it is
+blank, PyPI accepts an OIDC token from *any* environment in that repo+workflow. The
+workflow still says `environment: pypi`, the approval gate still looks configured — and it
+is enforced only by a line of YAML inside the repository being published, which anyone able
+to edit the workflow can delete. PyPI notices and emails *"Trusted Publisher … can be made
+more secure"* on every publish.
+
+If you ever need to change the binding: **add the constrained publisher first, confirm it,
+then remove the unconstrained one** — so there is never a window with no working publisher.
+
+### 2. GitHub Environment `pypi`
+
+Settings → Environments → `pypi` → **Required reviewers**. This makes a release pause for an
+explicit approval before anything is uploaded.
+
+Be precise about what this buys, because the honest description is narrower than "required
+reviewer" sounds. It gives a **pause**, an **audit record** of who approved and when, and
+**decoupling** of publishing from merging. It does *not* give separation of duties if the
+approver is the same principal that opened the PR, merged it and cut the release — that is
+one principal agreeing with itself. Claim the first three; do not claim the fourth.
+
+### 3. Branch protection on `main`
+
+Required status checks: `lint`, `test (3.10)`, `test (3.11)`, `test (3.12)`, `test (3.13)`,
+`gates`, `security`.
+
+`scripts/check_controls.py` asserts all three of the above and reports `OK` / `VIOLATED` /
+`UNVERIFIABLE`, never collapsing the third into the first. It runs on the release path
+(non-strict, so an outage cannot redden a release) and weekly via `controls.yml`
+(`--strict`, because nobody is watching that run). Run it by hand any time:
+
+```bash
+python scripts/check_controls.py
+```
+
+---
+
+## Cutting a release
+
+1. **Land everything through a PR** and let `main` go green.
+
+2. **Bump the version in one place** — `src/csa_zendesk/__init__.py`'s `__version__`.
+   `pyproject.toml` reads it from there by static AST parse, so there is no second place to
+   forget. Land the bump and the CHANGELOG entry as an ordinary PR.
+
+3. **Promote `[Unreleased]` in `CHANGELOG.md`** to the version and date.
+
+4. **Check locally before tagging:**
+   ```bash
+   .venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing
+   .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check src tests
+   .venv/bin/python -m mypy
+   .venv/bin/python scripts/check_public_safe.py
+   .venv/bin/python scripts/check_boundaries.py
+   .venv/bin/python scripts/check_controls.py
+   ```
+
+5. **Create the GitHub Release.** This creates the tag *and* fires `release.yml`:
+   ```bash
+   gh release create v0.2.0 --title v0.2.0 --notes-file <(sed -n '/## \[0.2.0\]/,/^## /p' CHANGELOG.md | head -n -1)
+   ```
+   **Tag == version.** `v0.2.0` must equal `__version__`. The tag is the provenance anchor:
+   `git checkout v0.2.0` must reproduce exactly what shipped.
+
+6. **Approve the pending deployment.** The `publish` job waits on the `pypi` environment:
+   ```bash
+   RUN=$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')
+   ENV_ID=$(gh api repos/CloudSecurityAlliance/csa-zendesk/environments/pypi --jq .id)
+   gh api --method POST "repos/CloudSecurityAlliance/csa-zendesk/actions/runs/$RUN/pending_deployments" --input - <<JSON
+   {"environment_ids":[$ENV_ID],"state":"approved","comment":"why this is safe to ship"}
+   JSON
+   ```
+   Use `--input -`. `gh api -f 'environment_ids[]=…'` breaks under zsh, which glob-expands
+   the brackets.
+
+7. **Verify the publish actually landed, and that it is attested.**
+   ```bash
+   # PEP 740 provenance lives at the integrity endpoint. The project JSON endpoint has NO
+   # `provenance` key whether or not the release is attested, so checking there proves
+   # nothing either way.
+   WHEEL=$(curl -s https://pypi.org/pypi/csa-zendesk/0.2.0/json | python3 -c \
+     "import json,sys; print([u['filename'] for u in json.load(sys.stdin)['urls'] if u['filename'].endswith('.whl')][0])")
+   curl -s "https://pypi.org/integrity/csa-zendesk/0.2.0/$WHEEL/provenance" | head -c 400
+
+   # --no-cache-dir always: pip caches the index OUTSIDE any venv, so a fresh venv is not
+   # a fresh view. PyPI's CDN edges also lag independently, so retry rather than concluding
+   # the publish failed.
+   python -m pip download --no-cache-dir --no-deps -d /tmp/verify csa-zendesk==0.2.0
+   ```
+
+
+---
+
+## Invariants
 
 - **The tag must equal the version.** The tag is the provenance anchor — `git checkout
   vX.Y.Z` must reproduce exactly what shipped.
 - **A PyPI version is permanent.** It can be yanked, never re-uploaded. Fix forward.
 - **The published README is frozen per release.** A documentation-only fix reaches PyPI
-  only on the next version bump.
+  only on the next version bump — if a published page is wrong, that is a patch release.
 - **Pre-1.0, only the latest release is supported.** No backports.
+- **Never publish from a developer machine.**
+- **Do not weaken a gate to get a release out.** The gates run *before* upload precisely
+  because upload is the irreversible step.
+
+## Already done, recorded so nobody redoes it
+
+- **`py.typed` (PEP 561) ships and was verified inside the built wheel**, not assumed —
+  `python -m build --wheel` was run at 0.1.0 and `unzip -l` confirmed `csa_zendesk/py.typed`
+  lands in it. Without this a `mypy --strict` library type-checks as `Any` for consumers.
+- **The sdist was inspected** and contains only `LICENSE`, `PKG-INFO`, `pyproject.toml`,
+  `README.md`, `setup.cfg`, `src` and `tests` — no `analysis/`, `experiments/`, `specs/` or
+  `docs/`. That was incidental to setuptools' defaults with nothing declaring the intent,
+  which is why `release.yml` now greps the tarball rather than trusting it.
+
+## Changelog discipline
+
+Say plainly what was **not** verified, not only what was added. An oversold changelog is
+worse than a terse one, because the next reader calibrates against it. Follow
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) headings; the changelog is the
+source of the GitHub release notes (`PUBLIC-GITHUB-REPO-STANDARDS.md` §1).
+
+## Known gaps
+
+- **No hash-pinned lockfiles.** The sibling `csa-google-workspace` installs from
+  `requirements/*.txt` with `--require-hashes` and sets `PIP_CONSTRAINT` so even the build
+  backend resolves from a recorded closure. csa-zendesk does not, so the suite and the build
+  backend resolve from PyPI at release time. This is a **reproducibility** gap, not a
+  credential gap — the build/publish job split is what protects the publishing credential.
+  Do not describe this pipeline as reproducible until lockfiles exist. Tracked in `TODO.md`.
