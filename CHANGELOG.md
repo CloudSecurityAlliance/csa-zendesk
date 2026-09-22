@@ -33,8 +33,10 @@ with a human present.
 ### Added
 - **Four new write tools** — `update_ticket`, `assign_ticket`, `add_internal_note`,
   `solve_ticket` — each a narrow, bucket-pure constraint over `PUT /api/v2/tickets/{id}`
-  (ADR-016): `update_ticket` cannot touch `comment`/`status`/the collaborator-notification
-  fields; `assign_ticket` can change only `assignee_id`/`group_id`; `add_internal_note`'s
+  (ADR-016): `update_ticket` edits only an **allowlist** of nine ordinary ticket attributes
+  (`subject`, `priority`, `type`, `tags`, `custom_fields`, `ticket_form_id`, `due_at`,
+  `external_id`, `problem_id`) — anything else, including a field Zendesk adds later, is
+  refused; `assign_ticket` can change only `assignee_id`/`group_id`; `add_internal_note`'s
   comment is structurally always private (there is no `public` parameter for a caller, or
   injected instruction, to set); `solve_ticket` can only set `status=solved`.
 - **Attachments**: `upload_file` (send bytes, get back a token naming an upload attached to
@@ -64,6 +66,36 @@ with a human present.
   write to a live ticket. Exclusions now live in `pyproject.toml`, where they are reviewable.
 
 ### Fixed
+- **A path-traversal in `delete_upload`, found at whole-branch review and never released.**
+  `token="../tickets/159143"` issued `DELETE /api/v2/tickets/159143` — a tool gated on
+  `ticket.attach` deleting a ticket, outside `CSA_ZD_ALLOWLIST_WRITE`, with the host
+  unchanged so the transport's host check stayed silent. httpx normalises dot segments when
+  it builds the URL. The **first fix was wrong**: it quoted the token with `safe=""`, which
+  encodes `/` before `_validate_path` splits on it, so the encoding hid the traversal from
+  the check meant to catch it — two guards described as independent that were in series,
+  the second blinding the first. Now the token is validated as a value, against an anchored
+  alphanumeric pattern, before anything encodes it; percent-escapes are refused outright at
+  the choke point; and ids are coerced to decimal at the seam, since `Backend` annotates
+  them `int` and mcp 2.2.0's low-level `Server` does not validate `inputSchema`.
+- **`update_ticket`'s field constraint was a denylist naming five of `TicketObject`'s 65
+  properties.** `collaborators` ("Users to add as cc's"), `requester`, `assignee_email`,
+  `sharing_agreements`, `recipient` and `voice_comment` are all `writeOnly` in the same OAS
+  schema the denylist cited, and none was on it — so a CC or a requester change reached the
+  wire. Replaced with an allowlist rather than extended, because the comment shipped beside
+  that denylist already said a denylist over a body the tool never enumerates is unclosable.
+- **Refusal messages could hand the model a forged untrusted-data marker.** `exc.InvalidPath`
+  and `exc.PolicyError` are in `server._NEVER_WRAP`, so their text reaches the model
+  unwrapped as this library's own prose — and both interpolated caller-chosen strings. Ticket
+  content is wrapped correctly, but a model copying a value into a tool argument would have
+  the refusal launder it back as trusted. Interpolated fragments are now neutralised.
+- **`add_internal_note` was retried on 503 into duplicate notes.** It appends rather than
+  setting a target state, unlike its three PUT siblings; now `idempotent=False`.
+- **`upload_file` accepted base64 that silently decoded to nothing.** `b64decode` discards
+  non-alphabet characters before checking padding, so `b64decode("!!!!")` is `b""` with no
+  error: an empty file uploaded successfully and returned a token for a zero-byte
+  attachment. Now `validate=True`, plus an empty-content refusal at the backend seam.
+- **Upload and attachment responses were labelled `source=zendesk-ticket…`** by a reused
+  `wrap_ticket`. The markers were right; the claim beside them was false.
 - **`analysis/API-SURFACE.md` §7.2b recorded the OAuth client's registered scope ceiling
   wrong.** It named four scopes; a live screenshot taken 2026-09-21 shows the client also
   carries `triggers:write`, unused by anything this block ships. No credential or code

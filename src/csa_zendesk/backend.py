@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote
 
@@ -107,6 +108,60 @@ def _refuse_an_empty_note(*, body: str, uploads: list[str] | None) -> None:
             "with neither would send an empty write to Zendesk: no content added, but it still "
             "spends this tenant's write-rate budget and still lands in the ticket's audit log as "
             "an update that changed nothing."
+        )
+
+
+def _path_id(value: object, *, name: str) -> str:
+    """Coerce an id to its decimal form before it is interpolated into a path.
+
+    `Backend`'s signatures annotate these `int`, and nothing enforced the
+    annotation: MCP tool arguments arrive from JSON, and mcp 2.2.0's low-level
+    `Server` does NOT validate `inputSchema`, so `"type": "integer"` is
+    documentation rather than a control. A string therefore reached an f-string
+    path unchecked, which is what made the traversal findings reachable at all.
+
+    This restores the property `_http._validate_path`'s docstring relies on -
+    "every caller interpolates an int" - at the seam rather than at the
+    delivery layer, because the library is callable without going through the
+    server. `int(value)` accepts a bool, which is harmless here (it stringifies
+    to 0/1 and addresses nothing), and refuses everything else.
+    """
+    try:
+        return str(int(value))  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        raise exc.InvalidPath(
+            f"{name} must be a whole number, not {value!r} - it is interpolated into the request "
+            f"path, so a value that is not a number could change which endpoint is addressed."
+        ) from None
+
+
+# A Zendesk upload token is an opaque alphanumeric string. Anchored and
+# whole-value, NOT a scan for bad characters: a denylist over a value that
+# becomes part of a URL is the same unclosable shape as the field denylist this
+# branch already replaced with an allowlist.
+_UPLOAD_TOKEN = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+
+def _refuse_an_unsafe_upload_token(*, token: object) -> None:
+    """Refuse a `delete_upload` token that could address something other than an upload.
+
+    THE ORDER HERE IS THE WHOLE POINT, and getting it wrong is how the first fix
+    for this failed. `quote(token, safe="")` encodes `/` to `%2F`, so a token
+    quoted BEFORE reaching `_http._validate_path` has no separators left for
+    that function's `split("/")` to find - the encoding hid the traversal from
+    the choke point meant to catch it. The two were described as independent
+    layers; they are in series, and the second blinded the first.
+
+    So the value is validated here, as a value, before anything encodes it.
+    `quote` stays as the belt: with this check the traversal never arrives, and
+    if this check is ever loosened the encoding still stops the path resolving
+    client-side.
+    """
+    if not isinstance(token, str) or not _UPLOAD_TOKEN.match(token):
+        raise exc.InvalidPath(
+            f"refusing upload token {token!r}: an upload token is alphanumeric (with - and _). "
+            f"This value is interpolated into the request path, so one containing a separator, a "
+            f"percent-escape or a dot segment could address a different endpoint entirely."
         )
 
 
@@ -226,7 +281,7 @@ class ApiBackend:
         # ShowTicket), whose own response example's `url` field also omits it.
         # Only the unrelated Countries family carries a .json suffix anywhere in
         # the inventory; it is not a general convention to imitate here.
-        return self._http.get(f"/api/v2/tickets/{ticket_id}")
+        return self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}")
 
     def search_tickets(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Search,GET,/api/v2/search,
@@ -268,7 +323,7 @@ class ApiBackend:
         # than 100 comments silently omits its newest ones here. This method
         # does not add a paging parameter the brief did not ask for; a caller
         # reading a long ticket must not assume the result is complete.
-        return self._http.get(f"/api/v2/tickets/{ticket_id}/comments")
+        return self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}/comments")
 
     def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
@@ -283,7 +338,7 @@ class ApiBackend:
         # impact levels in one call (field edit, internal note, public reply,
         # solve, close), decided entirely by the request body. What keeps
         # THIS call inside the field-edit bucket is tools.TOOLS["update_ticket"]'s
-        # `_forbid("comment", "status", ...)` constraint, enforced at the
+        # `_only_fields(*_TICKET_EDITABLE_FIELDS)` constraint, enforced at the
         # policy/tool seam (policy._dispatch) before this method is ever
         # reached - this method itself sends whatever `fields` it is given,
         # unshaped, per ADR-002.
@@ -298,13 +353,16 @@ class ApiBackend:
         # makes `policy._dispatch` extract `fields` before calling `check` -
         # see that field's docstring for the full incident.
         #
-        # An EMPTY `fields`, though, is refused here rather than sent:
-        # `_forbid(...)` says nothing about `fields` being empty (a denylist
-        # only names keys it excludes), and a bare-Backend caller never
+        # An EMPTY `fields`, though, is refused here rather than sent: the
+        # tool's constraint is an allowlist over key NAMES, and an empty dict
+        # trivially satisfies it (no key is outside the allowed set), and a
+        # bare-Backend caller never
         # passes through tools.TOOLS at all (ADR-002's public seam). See
         # exc.EmptyWrite's docstring for why a no-op write is not free.
         _refuse_an_empty_update(fields=fields)
-        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": fields})
+        return self._http.request(
+            "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
+        )
 
     def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
         # Same operation and path as update_ticket - analysis/operation-inventory.csv
@@ -314,7 +372,7 @@ class ApiBackend:
         # `_only("assignee_id", "group_id")` is an allowlist, so this method
         # only ever needs to build a body from those two keys - there is no
         # forbidden-key surface here that could fall behind as the OAS grows,
-        # unlike update_ticket's denylist.
+        # unlike update_ticket's allowlist.
         #
         # Refused here, at the Backend seam, rather than trusted to the tool
         # layer alone: `_only("assignee_id", "group_id")` permits any SUBSET
@@ -328,7 +386,9 @@ class ApiBackend:
             fields["assignee_id"] = assignee_id
         if group_id is not None:
             fields["group_id"] = group_id
-        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": fields})
+        return self._http.request(
+            "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
+        )
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
         # Same operation and path as update_ticket/assign_ticket -
@@ -374,7 +434,7 @@ class ApiBackend:
         # that wrote it; the claim is corrected there.)
         return self._http.request(
             "PUT",
-            f"/api/v2/tickets/{ticket_id}",
+            f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
             json={"ticket": {"comment": comment}},
             idempotent=False,
         )
@@ -384,7 +444,7 @@ class ApiBackend:
         # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
         # /api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes.
         #
-        # No `status` parameter, unlike update_ticket's denylist or
+        # No `status` parameter, unlike update_ticket's allowlist or
         # assign_ticket's allowlist over two optional fields: solving is the
         # only thing this call can do, by construction - there is nothing
         # here for a caller to choose, so there is nothing to force or
@@ -392,7 +452,11 @@ class ApiBackend:
         # alone (tools.py) still refuses an extra kwarg with a clean
         # PolicyError before it would otherwise reach this method as a raw
         # TypeError.
-        return self._http.request("PUT", f"/api/v2/tickets/{ticket_id}", json={"ticket": {"status": "solved"}})
+        return self._http.request(
+            "PUT",
+            f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
+            json={"ticket": {"status": "solved"}},
+        )
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Attachments,POST,
@@ -446,6 +510,7 @@ class ApiBackend:
         # (non-existent) upload rather than a ticket. Both are kept: the choke
         # point cannot know that this particular value is model-supplied, and
         # this line cannot protect the other callers.
+        _refuse_an_unsafe_upload_token(token=token)
         return self._http.request("DELETE", f"/api/v2/uploads/{quote(token, safe='')}")
 
     def get_attachment(self, *, attachment_id: int) -> Envelope:
@@ -456,7 +521,7 @@ class ApiBackend:
         # attachment already on a ticket is a read like any other; ticket.attach
         # governs creating a new, as-yet-unattached upload, not reading one that
         # already reached somewhere.
-        return self._http.get(f"/api/v2/attachments/{attachment_id}")
+        return self._http.get(f"/api/v2/attachments/{_path_id(attachment_id, name='attachment_id')}")
 
 
 class FakeBackend:

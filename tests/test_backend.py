@@ -891,31 +891,60 @@ def test_the_fake_refuses_empty_content_too():
         FakeBackend().upload_file(filename="r.pdf", content=b"", content_type="application/pdf")
 
 
-def test_delete_upload_encodes_the_token_so_it_cannot_become_a_path():
-    # The second guard, at the interpolation site. `_validate_path` refuses a
-    # dot segment for every caller; this makes the narrower claim that a token
-    # is one path SEGMENT. safe="" encodes "/" too, so a token shaped like a
-    # path addresses a non-existent upload instead of a ticket.
+@pytest.mark.parametrize(
+    "token",
+    [
+        "../tickets/159143",  # the original finding
+        "%2e%2e/tickets/1",  # the same, percent-escaped
+        "..",
+        "a/b",
+        "",
+        "a b",
+        "<script>",
+    ],
+)
+def test_delete_upload_refuses_a_token_that_could_address_something_else(token):
+    # THIS TEST REPLACES ONE THAT ASSERTED THE BUG. The first fix quoted the
+    # token with safe="" and asserted the encoded form was SENT - but `quote`
+    # runs BEFORE `_http._validate_path`, and it encodes "/" to "%2F", so the
+    # dot-segment check had no separators left to split on. The encoding hid
+    # the traversal from the guard meant to catch it, and the test then pinned
+    # that as correct. The two were described as independent layers; they are
+    # in series, and the second blinded the first.
+    #
+    # The token is now validated as a VALUE, before anything encodes it.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath, match="upload token"):
+        ApiBackend(_client(handler)).delete_upload(token=token)
+    assert called["n"] == 0
+
+
+@pytest.mark.parametrize("token", [12345, None, ["a"], {"a": 1}])
+def test_delete_upload_refuses_a_token_that_is_not_a_string(token):
+    # MCP arguments arrive from JSON and the SDK does not validate inputSchema,
+    # so a non-string reaches here. Before this it raised a bare TypeError out
+    # of `quote`, escaping the error contract `_on_call_tool` relies on.
+    def handler(request):  # pragma: no cover - must never run
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath, match="upload token"):
+        ApiBackend(_client(handler)).delete_upload(token=token)
+
+
+def test_delete_upload_sends_an_ordinary_token_unchanged():
     seen = []
 
     def handler(request):
         seen.append(str(request.url))
         return httpx.Response(200, json={})
 
-    ApiBackend(_client(handler)).delete_upload(token="../tickets/159143")
-    assert seen[0].endswith("/api/v2/uploads/..%2Ftickets%2F159143")
-    assert "/api/v2/tickets/" not in seen[0]
-
-
-def test_delete_upload_leaves_an_ordinary_token_alone():
-    seen = []
-
-    def handler(request):
-        seen.append(str(request.url))
-        return httpx.Response(200, json={})
-
-    ApiBackend(_client(handler)).delete_upload(token="abc123")
-    assert seen[0].endswith("/api/v2/uploads/abc123")
+    ApiBackend(_client(handler)).delete_upload(token="abc-123_XYZ")
+    assert seen[0].endswith("/api/v2/uploads/abc-123_XYZ")
 
 
 def test_add_internal_note_is_not_retried_on_503():
@@ -947,3 +976,33 @@ def test_the_state_setting_writes_are_still_retried_on_503():
     with pytest.raises(exc.ServiceUnavailable):
         ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
     assert calls["n"] > 1, "a state-setting PUT should still be retried"
+
+
+@pytest.mark.parametrize(
+    "method,kwargs",
+    [
+        ("get_ticket", {"ticket_id": "../../users/5"}),
+        ("get_ticket", {"ticket_id": "%2e%2e/%2e%2e/users/5"}),
+        ("list_comments", {"ticket_id": "../x"}),
+        ("get_attachment", {"attachment_id": "%2e%2e/tickets/1"}),
+        ("solve_ticket", {"ticket_id": "%2e%2e/users/5"}),
+        ("update_ticket", {"ticket_id": "../x", "fields": {"priority": "high"}}),
+        ("assign_ticket", {"ticket_id": "../x", "assignee_id": 7, "group_id": None}),
+        ("add_internal_note", {"ticket_id": "../x", "body": "hi", "uploads": None}),
+    ],
+)
+def test_no_id_that_is_not_a_number_reaches_a_path(method, kwargs):
+    # `Backend` annotates these `int` and nothing enforced it: MCP arguments
+    # arrive from JSON, and mcp 2.2.0's low-level Server does NOT validate
+    # `inputSchema`, so `"type": "integer"` is documentation rather than a
+    # control. Enforced at the seam, not at the delivery layer, because the
+    # library is callable without going through the server at all.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    with pytest.raises(exc.InvalidPath, match="whole number"):
+        getattr(ApiBackend(_client(handler)), method)(**kwargs)
+    assert called["n"] == 0

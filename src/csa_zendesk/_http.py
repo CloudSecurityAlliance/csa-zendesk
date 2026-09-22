@@ -34,6 +34,25 @@ from ._transport import (  # noqa: F401
 )
 
 
+def _safe_for_a_message(text: str) -> str:
+    """Neutralise a caller-supplied fragment before an exception message quotes it.
+
+    Imported inside the function, not at module scope: `_untrusted` imports
+    `Envelope` from `backend`, and `backend` imports this module, so a top-level
+    import here closes a real cycle. One definition of the neutraliser is worth
+    the lazy import - a second copy is a second thing to forget to update.
+
+    Why any of this: `exc.InvalidPath` is in `server._NEVER_WRAP`, the set whose
+    messages reach the model UNWRAPPED because they are this library's own
+    prose. A message that interpolates a caller-chosen string is no longer purely
+    our prose - the caller can put a forged `<<<END-UNTRUSTED-ZENDESK-DATA>>>`
+    in it and have it handed back inside trusted text.
+    """
+    from ._untrusted import _neutralise
+
+    return _neutralise(text)
+
+
 class HttpClient:
     """A thin, synchronous Zendesk HTTP client.
 
@@ -190,19 +209,19 @@ class HttpClient:
         """
         if not path.startswith("/") or path.startswith("//"):
             raise exc.InvalidPath(
-                f"refusing path {path!r}: it must start with exactly one '/'. A path with "
+                f"refusing path {_safe_for_a_message(path)!r}: it must start with exactly one '/'. A path with "
                 f"no leading slash, or a leading '//', can resolve to a host other than the "
                 f"tenant's - pass an absolute, single-origin path instead."
             )
         if "@" in path:
             raise exc.InvalidPath(
-                f"refusing path {path!r}: it contains '@', which can move the tenant host "
+                f"refusing path {_safe_for_a_message(path)!r}: it contains '@', which can move the tenant host "
                 f"into the URL's userinfo and hand this request's credential to whatever "
                 f"host follows it instead."
             )
         if "?" in path or "#" in path:
             raise exc.InvalidPath(
-                f"refusing path {path!r}: it contains '?' or '#'. A query string or "
+                f"refusing path {_safe_for_a_message(path)!r}: it contains '?' or '#'. A query string or "
                 f"fragment embedded in `path` is silently dropped rather than sent - pass "
                 f"query parameters via params= instead, so they can be checked."
             )
@@ -216,9 +235,24 @@ class HttpClient:
         # ticket deletion, which no profile grants. The host never changes, so
         # `Transport._send`'s host check sees nothing wrong. Refused here
         # because this is the one function every caller already passes through.
+        # A percent-escape defeats the dot-segment check below: `%2e%2e` is not
+        # `..` to `split("/")`, and an edge that decodes before resolving dot
+        # segments (nginx-family front ends routinely do) would then see the
+        # traversal we thought we had refused. No caller in this library
+        # produces a `%` - ids are decimal and the one opaque value, an upload
+        # token, is validated as alphanumeric before it is encoded - so
+        # refusing the character outright costs nothing and removes a whole
+        # class rather than one spelling of it.
+        if "%" in path:
+            raise exc.InvalidPath(
+                f"refusing path {_safe_for_a_message(path)!r}: it contains a percent-escape. Paths here "
+                f"are built from decimal ids and validated tokens, so a '%' means something has "
+                f"been encoded before it reached this check - which is how an encoded dot segment "
+                f"would slip past the one below."
+            )
         if any(segment in {".", ".."} for segment in path.split("/")):
             raise exc.InvalidPath(
-                f"refusing path {path!r}: it contains a '.' or '..' segment, which is "
+                f"refusing path {_safe_for_a_message(path)!r}: it contains a '.' or '..' segment, which is "
                 f"normalised away when the URL is built and can redirect this request to a "
                 f"different endpoint on the tenant - a value interpolated into a path must "
                 f"not be able to change which operation is performed."

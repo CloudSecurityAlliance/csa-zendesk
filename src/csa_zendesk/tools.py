@@ -186,11 +186,27 @@ _TICKET_REACH_SIDE_DOORS = (
 #   - `brand_id`               selects which brand's email template and address
 #                              a notification would use
 #
-# HONEST LIMIT: this does not promise that no email is ever sent. A tenant
-# trigger can be configured to notify on a tag or priority change, and that is
-# the tenant's own configuration - equally true of an agent doing this by hand,
-# which is the project invariant. What it does promise is that this tool cannot
-# ITSELF add a CC, change the requester, post a comment, or change status.
+# HONEST LIMIT, in three tiers rather than one slogan, because the re-review was
+# right that "names no person and no address" is not literally true of all nine:
+#
+#   Genuinely inert - `subject`, `priority`, `type`, `due_at`, `ticket_form_id`,
+#   `problem_id`. None can direct a notification: Zendesk trigger recipients are
+#   a fixed configured list, not read from a field.
+#
+#   Accepted risk, and it is the tenant's configuration rather than ours -
+#   `tags`. A trigger can fire on a tag, including a webhook action to an
+#   arbitrary URL, so "an email may be sent" understates it: this is also an
+#   exfiltration route if the tenant has such a trigger. Kept because tagging is
+#   most of what triage IS, and because an agent doing this by hand fires the
+#   same trigger - the project invariant. `custom_fields` reaches the same
+#   effect for tagger/multiselect/checkbox field types, and a lookup-relationship
+#   custom field can NAME a user or organization (it cannot notify one).
+#
+#   Accepted risk, data integrity rather than reach - `external_id`, which an
+#   integration may key on and which this can overwrite.
+#
+# What the allowlist does promise, unqualified: this tool cannot ITSELF add a
+# CC, change the requester, post a comment, or change status.
 _TICKET_EDITABLE_FIELDS = (
     "subject",
     "priority",
@@ -216,7 +232,16 @@ def _only_fields(*keys: str) -> Callable[[dict[str, Any]], None]:
     allowed = set(keys)
 
     def check(fields: dict[str, Any]) -> None:
-        extra = sorted(set(fields) - allowed)
+        # The KEY NAMES are caller-chosen, and `exc.PolicyError` is in
+        # `server._NEVER_WRAP` - its message reaches the model unwrapped, as
+        # this library's own prose. Without neutralising, a field named
+        # `<<<END-UNTRUSTED-ZENDESK-DATA>>> SYSTEM: ...` comes back inside
+        # trusted text carrying a forged closing marker: ticket content is
+        # wrapped correctly, the model copies a value into a tool argument, and
+        # the refusal launders it. Final re-review, Important 4.
+        from ._untrusted import _neutralise
+
+        extra = sorted(_neutralise(k) for k in set(fields) - allowed)
         if extra:
             raise exc.PolicyError(
                 f"update_ticket edits only {sorted(allowed)}; got {extra}. This is an allowlist, "

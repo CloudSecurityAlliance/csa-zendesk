@@ -822,3 +822,42 @@ def test_an_ordinary_path_with_dots_inside_a_segment_is_still_allowed():
     h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
     h.request("GET", "/api/v2/uploads/a.b.c")
     assert seen[0].endswith("/api/v2/uploads/a.b.c")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v2/tickets/%2e%2e/users/5", "/api/v2/tickets/%2E%2E/x", "/api/v2/uploads/a%2Fb"],
+)
+def test_a_percent_escape_is_refused_before_the_call(path):
+    # `%2e%2e` is not `..` to `split("/")`, so the dot-segment check alone was a
+    # check on one SPELLING of the traversal. An edge that percent-decodes
+    # before resolving dot segments - nginx-family front ends routinely do -
+    # would see the traversal we believed we had refused. No caller here
+    # produces a `%`: ids are decimal and the one opaque value is validated as
+    # alphanumeric before it is encoded.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(handler))
+    with pytest.raises(exc.InvalidPath, match="percent-escape"):
+        h.request("GET", path)
+    assert called["n"] == 0
+
+
+def test_a_refusal_never_hands_back_a_forged_untrusted_marker():
+    # exc.InvalidPath is in server._NEVER_WRAP, so its message reaches the model
+    # UNWRAPPED as this library's own prose. A message interpolating a
+    # caller-chosen string is no longer purely ours: the caller can plant a
+    # closing marker and have it returned inside trusted text. The realistic
+    # route is laundering - ticket text is wrapped correctly, the model copies a
+    # value into a tool argument, and the refusal echoes it back as ours.
+    from csa_zendesk import _untrusted
+
+    h = HttpClient("example-tenant", lambda: "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    with pytest.raises(exc.InvalidPath) as caught:
+        h.request("GET", f"/api/v2/tickets/{_untrusted.MARKER_CLOSE}/../x")
+    assert _untrusted.MARKER_CLOSE not in str(caught.value)
+    assert _untrusted.MARKER_OPEN not in str(caught.value)

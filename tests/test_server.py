@@ -95,7 +95,15 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
         # requester-authored string, because an envelope of pure machine keys
         # would let this test pass without proving anything.
         def _ticket(self):
-            return {"ticket": {"id": 1, "status": "open", "subject": "help", "description": "from a requester"}}
+            return {
+                "ticket": {
+                    "id": 1,
+                    "status": "open",
+                    "subject": "help",
+                    "description": "from a requester",
+                    "tags": ["requester-chosen-tag"],
+                }
+            }
 
         def update_ticket(self, *, ticket_id, fields):
             return self._ticket()
@@ -132,7 +140,16 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
                     _assert_wrapped_or_machine_set(value, path=child)
         elif isinstance(node, list):
             for index, item in enumerate(node):
-                _assert_wrapped_or_machine_set(item, path=f"{path}[{index}]")
+                child = f"{path}[{index}]"
+                if isinstance(item, str):
+                    # A bare string INSIDE a list - `ticket.tags` is exactly this
+                    # shape - fell through both branches and was asserted on by
+                    # nothing. `_walk_list` does wrap them in production, so this
+                    # was a weaker-than-advertised test rather than a live hole;
+                    # the fixture below now contains one so the claim is real.
+                    assert _untrusted.MARKER_OPEN in item, f"{child} is unwrapped: {item!r}"
+                else:
+                    _assert_wrapped_or_machine_set(item, path=child)
 
     cases = {
         "get_ticket": {"ticket_id": 1},
