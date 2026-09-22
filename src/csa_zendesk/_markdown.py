@@ -12,6 +12,8 @@ the payload and destroys the evidence, so it is strictly worse than the HTML.
 
 from __future__ import annotations
 
+import re
+
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 
@@ -20,18 +22,56 @@ from markdownify import MarkdownConverter
 # markdownify anyway; naming them here means the removal does not depend on that.
 _NEVER_RENDERED = ("script", "style", "template", "noscript", "head")
 
+#: Inline-style declarations that mean "a reader will not see this".
+#: INLINE STYLES ONLY, deliberately: a `<style>` block's selectors need a
+#: cascade to resolve, which is the open problem this does not pretend to
+#: solve. Under-reporting is the honest failure direction.
+HIDING_RULES: tuple[str, ...] = (
+    r"display\s*:\s*none",
+    r"visibility\s*:\s*hidden",
+    r"font-size\s*:\s*0(?![.\d])",
+    r"(?:max-)?height\s*:\s*0(?![.\d])",
+    r"opacity\s*:\s*0(?![.\d])",
+    r"(?:left|top|text-indent)\s*:\s*-\d{3,}",
+)
+_HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
+
 
 def _soup(html: str) -> BeautifulSoup:
     return BeautifulSoup(html or "", "html.parser")
 
 
 def to_markdown(html: str) -> tuple[str, list[str]]:
-    """Convert `html` to Markdown. Returns `(markdown, hidden_texts)`.
+    """Convert `html` to Markdown, separating text a reader would not see.
 
-    `hidden_texts` is always empty here; Task 2 fills it.
+    Returns `(markdown, hidden_texts)`. Hidden text is REMOVED from the Markdown
+    and returned alongside it - never silently dropped, never emitted as
+    ordinary prose. Concealment is the signal; the caller decides what to do
+    with it.
+
+    KNOWN GAP: white-on-white is not detected. Whether text matches its
+    background needs the ancestor's background - the cascade - and a rule on the
+    element's own `style` cannot see it. Measured: a naive pre-pass closes
+    display:none and zero-size and misses this one.
     """
     soup = _soup(html)
     for element in soup.find_all(_NEVER_RENDERED):
         element.decompose()
+
+    # Collect first, THEN decompose. Decomposing inside find_all() invalidates
+    # elements the iterator has not reached, which comes back as attrs=None
+    # several elements later.
+    concealed = [
+        element
+        for element in soup.find_all(style=True)
+        if element.attrs and _HIDDEN.search(str(element.attrs.get("style") or ""))
+    ]
+    hidden_texts = []
+    for element in concealed:
+        text = element.get_text(" ", strip=True)
+        if text:
+            hidden_texts.append(text)
+        element.decompose()
+
     markdown = MarkdownConverter().convert_soup(soup)
-    return markdown.strip(), []
+    return markdown.strip(), hidden_texts
