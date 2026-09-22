@@ -1,7 +1,92 @@
+import collections.abc
+import types
+import typing
+
 import pytest
 
 from csa_zendesk import exceptions as exc
 from csa_zendesk import tools
+
+
+def _hint_is_nested_mapping(hint: object) -> bool:
+    """Whether a resolved type hint denotes a nested-mapping payload (a
+    Backend method's `fields`-style parameter), however it is spelled -
+    `dict[str, Any]`, `dict[str, Any] | None`, `Mapping[str, Any]`,
+    `MutableMapping[str, Any]`, ... - as opposed to a scalar (`int`, `str`,
+    `list[str] | None`, ...).
+
+    Test-only classifier for `test_body_key_matches_the_real_backend_
+    signature_for_every_live_constrained_tool` below - not production code,
+    since nothing at runtime needs to classify a type hint; `ToolSpec.
+    body_key` is a plain declared string, and this function exists only to
+    check that declaration against a Backend method's real signature.
+
+    STRUCTURAL, not an enumerated name list: a union is unwrapped by
+    stripping `NoneType` and recursing on what remains (an Optional nested
+    mapping is still a nested mapping) - more than one non-None arm is
+    ambiguous and RAISES, the same "a human must decide" posture the caller
+    takes for two nested parameters on one method, rather than guessing
+    which arm is the real payload. Once unwrapped, the test is
+    `issubclass(origin, collections.abc.Mapping)` - not
+    `origin in (dict, Mapping, MutableMapping, ...)` - because `dict` is
+    already a registered subclass of `collections.abc.Mapping` (verified:
+    `typing.get_origin(dict[str, Any])` is `dict` itself, and
+    `issubclass(dict, collections.abc.Mapping)` is `True`), and
+    `typing.Mapping[...]`/`typing.MutableMapping[...]` both normalise their
+    origin to the `collections.abc` class of the same name at runtime
+    (verified live) - so one subclass check recognises the whole
+    Mapping/MutableMapping family, including one this codebase does not use
+    yet, without this function needing to learn a new name first.
+
+    Found empirically, and the reason this function exists rather than the
+    one-line `typing.get_origin(hint) is dict` the first version of this
+    guard used: that one-liner silently classifies `dict[str, Any] | None`
+    and `Mapping[str, Any]` as NOT nested (`get_origin` returns
+    `types.UnionType`/`collections.abc.Mapping`, neither of which `is dict`),
+    so `expected` falls back to `None` - and an author who correctly sets
+    `body_key="fields"` on such a method gets a FAILING guard (safe: it
+    forces a human look), while an author who leaves `body_key=None` (the
+    update_ticket defect, exactly) gets a PASSING one, because `None ==
+    None`. The miss failed in the unsafe direction for the one spelling
+    (`X | None`) a real public-reply body is likely to use, and for the one
+    spelling (`Mapping[...]`) that is the MORE correct annotation for a
+    parameter a method only reads.
+    """
+    origin = typing.get_origin(hint)
+    if origin is typing.Union or origin is types.UnionType:
+        non_none = [arg for arg in typing.get_args(hint) if arg is not type(None)]
+        if len(non_none) != 1:
+            raise ValueError(
+                f"{hint!r} is a union with more than one non-None arm - which arm (if any) is the "
+                f"nested body is not something this classifier can decide; a human must."
+            )
+        return _hint_is_nested_mapping(non_none[0])
+    return isinstance(origin, type) and issubclass(origin, collections.abc.Mapping)
+
+
+@pytest.mark.parametrize(
+    "hint,expected",
+    [
+        (dict[str, typing.Any], True),
+        (dict[str, typing.Any] | None, True),
+        (typing.Mapping[str, typing.Any], True),
+        (typing.MutableMapping[str, typing.Any], True),
+        (int, False),
+        (str, False),
+        (int | None, False),
+        (list[str] | None, False),
+    ],
+)
+def test_hint_is_nested_mapping_classifies_every_spelling_this_codebase_uses(hint, expected):
+    # The failure is in classification, not in the loop that uses it - so
+    # this proves the classifier itself is right for each spelling, rather
+    # than only proving the guard test below happens to pass today.
+    assert _hint_is_nested_mapping(hint) is expected
+
+
+def test_hint_is_nested_mapping_refuses_to_guess_at_a_genuinely_ambiguous_union():
+    with pytest.raises(ValueError, match="human"):
+        _hint_is_nested_mapping(int | str)
 
 
 def test_every_tool_in_the_table_exists_in_code():
@@ -59,8 +144,15 @@ def test_body_key_matches_the_real_backend_signature_for_every_live_constrained_
     # start working for it. `hasattr(Backend, name)` is the absence test:
     # true for every name the Protocol actually declares, false for a
     # tools.TOOLS entry that is still speculative.
-    import typing
-
+    #
+    # Nested-ness is classified by `_hint_is_nested_mapping` (module-level,
+    # above), not a bare `typing.get_origin(hint) is dict` check - that
+    # one-liner was the guard's own first version, and it silently missed
+    # `dict[str, Any] | None` and `Mapping[str, Any]` (see that function's
+    # docstring for the live-verified failure mode: an author who correctly
+    # set `body_key` on such a method would have FAILED this guard; one who
+    # left `body_key=None` - the update_ticket defect itself - would have
+    # PASSED it).
     from csa_zendesk.backend import Backend
 
     default_check = tools.ToolSpec.__dataclass_fields__["check"].default
@@ -75,7 +167,7 @@ def test_body_key_matches_the_real_backend_signature_for_every_live_constrained_
         nested = [
             pname
             for pname, hint in hints.items()
-            if pname not in ("ticket_id", "return") and typing.get_origin(hint) is dict
+            if pname not in ("ticket_id", "return") and _hint_is_nested_mapping(hint)
         ]
         assert len(nested) <= 1, (
             f"{name}: Backend.{name} takes more than one nested-mapping parameter {nested} - "
