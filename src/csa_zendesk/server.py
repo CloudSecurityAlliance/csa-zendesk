@@ -790,10 +790,11 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
     (`wrap_upload`/`wrap_attachment`/...) that would do the exact same walk
     under a different name. `upload_file`'s `content_base64` argument is
     decoded before the call: MCP tool arguments are JSON, which has no binary
-    type, so the file's bytes travel as base64 text - a malformed value
-    raises `binascii.Error` (a `ValueError` subclass), which reaches
-    `_on_call_tool`'s existing `except ValueError` branch exactly like an
-    unknown tool name does, rather than needing a new exception branch.
+    type, so the file's bytes travel as base64 text - decoded with
+    `validate=True` so that a malformed value raises `binascii.Error` (a
+    `ValueError` subclass) rather than silently decoding to `b""`, which
+    reaches `_on_call_tool`'s existing `except ValueError` branch exactly
+    like an unknown tool name does, rather than needing a new branch.
     """
     if name == "authenticate":
         return _cmd_authenticate()
@@ -855,7 +856,16 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         envelope = client.solve_ticket(ticket_id=arguments["ticket_id"])
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
     if name == "upload_file":
-        content = base64.b64decode(arguments["content_base64"])
+        # validate=True, NOT the default: `b64decode` discards non-alphabet
+        # characters BEFORE checking padding, so `b64decode("!!!!")` returns
+        # b"" rather than raising - garbage whose junk-character count happens
+        # to land on a multiple of 4 would decode to an empty file, upload
+        # successfully, and hand back a token for a zero-byte attachment. The
+        # docstring above once claimed malformed input always raises
+        # `binascii.Error`; that is true only of the cases this flag makes
+        # true of all of them. `backend._refuse_an_empty_upload` is the second
+        # guard, at the seam, since the library is callable without this path.
+        content = base64.b64decode(arguments["content_base64"], validate=True)
         envelope = client.upload_file(
             filename=arguments["filename"], content=content, content_type=arguments["content_type"]
         )

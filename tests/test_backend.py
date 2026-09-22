@@ -866,3 +866,26 @@ def test_get_attachment_calls_the_documented_path():
 def test_fake_backend_get_attachment_returns_a_canned_envelope():
     # Canned: no per-attachment store exists to look attachment_id up in.
     assert FakeBackend().get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+
+
+def test_upload_refuses_empty_content_before_the_call():
+    # Not merely an empty write like its siblings: Zendesk ACCEPTS a zero-byte
+    # upload and returns a token, so the failure is silent - an attachment that
+    # downloads as nothing, and an orphan no other tool can list.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(201, json={})
+
+    with pytest.raises(exc.EmptyWrite, match="non-empty content"):
+        ApiBackend(_client(handler)).upload_file(filename="r.pdf", content=b"", content_type="application/pdf")
+    assert called["n"] == 0
+
+
+def test_the_fake_refuses_empty_content_too():
+    # A fake that accepted zero bytes would let the refusal pass every test
+    # while doing nothing in production - the same reason it enforces the
+    # extension rule.
+    with pytest.raises(exc.EmptyWrite, match="non-empty content"):
+        FakeBackend().upload_file(filename="r.pdf", content=b"", content_type="application/pdf")

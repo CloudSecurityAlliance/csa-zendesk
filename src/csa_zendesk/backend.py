@@ -109,6 +109,34 @@ def _refuse_an_empty_note(*, body: str, uploads: list[str] | None) -> None:
         )
 
 
+def _refuse_an_empty_upload(*, content: bytes) -> None:
+    """Refuse an `upload_file` call carrying no bytes, before it reaches the wire.
+
+    `_refuse_an_empty_note`'s sibling, and shared by `ApiBackend` and `FakeBackend`
+    for the same reason. An empty upload is worse than the empty writes those
+    siblings refuse, not merely equivalent: Zendesk accepts it, so the call
+    *succeeds* and mints a real token naming zero bytes. Nothing in the ticket
+    surface lists an unattached upload, so the only way that token is ever seen
+    again is if a later `add_internal_note` attaches it - at which point a reader
+    gets an attachment that downloads as nothing, with no error anywhere to
+    explain it.
+
+    This became reachable the moment `server.py` began accepting the bytes as
+    base64 text: `base64.b64decode` discards non-alphabet characters by default,
+    so some malformed input decodes to `b""` rather than raising. That call site
+    now passes `validate=True`, which is the better fix; this is the second one,
+    at the seam, because the library is callable without going through the
+    server at all.
+    """
+    if not content:
+        raise exc.EmptyWrite(
+            "upload_file needs a non-empty content - Zendesk accepts a zero-byte upload and "
+            "returns a token for it, so this does not fail loudly: it produces an attachment "
+            "that downloads as nothing, and an orphaned token that no other tool in this "
+            "surface can list."
+        )
+
+
 def _refuse_a_filename_without_extension(*, filename: str) -> None:
     """Refuse an `upload_file` call whose `filename` carries no extension,
     before it reaches the wire.
@@ -369,6 +397,7 @@ class ApiBackend:
         # before this reaches the wire, the same pre-flight shape as every
         # other refusal in this module.
         _refuse_a_filename_without_extension(filename=filename)
+        _refuse_an_empty_upload(content=content)
         # idempotent=False, EXPLICITLY, though it is also `post_binary`'s own
         # default: a retried upload does not repeat a no-op the way a retried
         # PUT does - it mints a SECOND token, a second orphaned file, that
@@ -516,13 +545,16 @@ class FakeBackend:
         # to any ticket while it is orphaned (that is the whole point of
         # this method - see ApiBackend.upload_file's comment), so there is no
         # self.tickets-shaped store to check it against or record it in.
-        # `content`/`content_type` are accepted, unused, only to keep this
-        # signature identical to ApiBackend's (test_the_two_backends_have_
-        # identical_signatures).
+        # `content_type` is accepted and unused, only to keep this signature
+        # identical to ApiBackend's (test_the_two_backends_have_identical_
+        # signatures). `content` IS used - it is checked for emptiness below,
+        # because a fake that accepted zero bytes would make the empty-upload
+        # refusal pass every test while doing nothing in production.
         #
         # Still enforces the same extension refusal ApiBackend does: a fake
         # that let this through would pass tests the real API would refuse.
         _refuse_a_filename_without_extension(filename=filename)
+        _refuse_an_empty_upload(content=content)
         return {"upload": {"token": "fake-upload-token"}}
 
     def delete_upload(self, *, token: str) -> Envelope:

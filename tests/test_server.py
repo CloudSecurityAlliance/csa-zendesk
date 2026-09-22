@@ -1139,3 +1139,46 @@ def test_a_write_tool_response_reaches_on_call_tool_fully_wrapped(monkeypatch):
     result = asyncio.run(srv._on_call_tool(None, params))
     assert result.is_error is False
     assert _untrusted.MARKER_OPEN in result.content[0].text
+
+
+def test_upload_file_refuses_base64_that_would_silently_decode_to_nothing(monkeypatch):
+    # `base64.b64decode` DISCARDS non-alphabet characters before checking
+    # padding, so b64decode("!!!!") == b"" with no error. Without
+    # validate=True this argument would decode to an empty file, upload
+    # successfully, and return a token for a zero-byte attachment - silent
+    # corruption, not a refusal. The call must never reach the client.
+    from mcp import types as mcp_types
+
+    class _Client:
+        def upload_file(self, *, filename, content, content_type):  # pragma: no cover - must never run
+            raise AssertionError("upload_file was reached with silently-emptied content")
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(
+        name="upload_file",
+        arguments={"filename": "r.pdf", "content_base64": "!!!!", "content_type": "application/pdf"},
+    )
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    assert "base64" in result.content[0].text.lower()
+
+
+def test_upload_file_accepts_well_formed_base64(monkeypatch):
+    # The other half of the pair: validate=True must not reject valid input.
+    from mcp import types as mcp_types
+
+    seen = {}
+
+    class _Client:
+        def upload_file(self, *, filename, content, content_type):
+            seen["content"] = content
+            return {"upload": {"token": "t"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(
+        name="upload_file",
+        arguments={"filename": "r.pdf", "content_base64": "SGVsbG8=", "content_type": "application/pdf"},
+    )
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is False
+    assert seen["content"] == b"Hello"
