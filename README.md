@@ -299,6 +299,16 @@ none of the three takes a `ticket_id` (an upload is not yet attached to any tick
 attachment is named by its own id) — so `CSA_ZD_ALLOWLIST_WRITE` governs exactly the other four
 write tools, the ones that act on a named ticket.
 
+**Know what that means for `get_attachment` before you rely on the allowlist.** An install
+pinned to one ticket can still read the content of *any* attachment in the tenant, because an
+`attachment_id` does not say which ticket it belongs to and this server does not go looking.
+Attachments are where the sensitive material usually is, so this is the one place the allowlist
+does not deliver what it otherwise does. It is not a hole in a security boundary — the real
+boundary is the OAuth token's own scope, and anyone holding this credential could open the same
+attachment in the Zendesk UI by hand — but it *is* a hole in the blast-radius narrowing that is
+the whole reason to set an allowlist. If that matters for your install, drop `ticket.read` and
+run the write tools only, or do not grant this server the credential at all.
+
 **`CSA_ZD_ALLOWLIST_READ` is still not optional** (unchanged from E1): unset means nothing is
 permitted for `get_ticket`/`list_comments`, even though `search_tickets` and `get_attachment`
 (neither carries a `subject_var`) work regardless. Set both allowlists explicitly rather than
