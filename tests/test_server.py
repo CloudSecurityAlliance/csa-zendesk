@@ -5,15 +5,25 @@ import pytest
 from csa_zendesk import server as srv
 
 
-def test_the_read_tools_are_exactly_the_three_read_tools():
-    # Asserts on READ_TOOLS, not TOOLS - TOOLS grows in Task 6 to include the
-    # auth-lifecycle tools, and this property must stay true regardless. (The
-    # `TOOLS == READ_TOOLS` equality this test originally also asserted held
-    # only because Task 6 had not yet landed; Task 6's own
-    # `test_tools_is_read_tools_plus_auth_tools`, below, is the corrected
-    # version of that check - `TOOLS == READ_TOOLS + AUTH_TOOLS`.)
+def test_the_read_tools_are_exactly_the_four_read_tools():
+    # Asserts on READ_TOOLS, not TOOLS - TOOLS grows to include the
+    # auth-lifecycle tools and (this task) the write tools, and this property
+    # must stay true regardless. (The `TOOLS == READ_TOOLS` equality this
+    # test originally also asserted held only because neither had yet
+    # landed; `test_tools_is_read_tools_plus_write_tools_plus_auth_tools`,
+    # below, is the corrected version of that check.)
+    #
+    # Four, not three: `get_attachment` joined READ_TOOLS in the same task
+    # that added the six WRITE_TOOLS (orchestrator amendment to that task's
+    # brief) - it gates on TICKET_READ, the same capability the other three
+    # need, so its annotation (read_only_hint=True) and its gate agree, and
+    # it belongs in this set rather than among the tools that actually
+    # write. A three-element pin here would go stale the moment
+    # get_attachment was registered; the fourth element is the set
+    # genuinely changing, not the test going vacuous (CLAUDE.md's own
+    # distinction, and the amendment's).
     names = {t.name for t in srv.READ_TOOLS}
-    assert names == {"search_tickets", "get_ticket", "list_comments"}
+    assert names == {"search_tickets", "get_ticket", "list_comments", "get_attachment"}
 
 
 def test_every_read_tool_is_annotated_read_only_and_non_destructive():
@@ -158,13 +168,17 @@ def test_nothing_in_the_server_module_writes_to_stdout(capsys):
 # --- coverage for behaviour the brief's five tests above do not reach ------
 
 
-def test_client_connects_with_the_e1_capabilities(monkeypatch):
+def test_client_connects_with_the_e2_capabilities(monkeypatch):
     # The one call every other test in this file replaces via
     # `monkeypatch.setattr(srv, "_client", ...)`, so it is exercised on its
-    # own here instead: `_client()` must ask `connect()` for `E1_CAPABILITIES`
-    # explicitly (Task 7), not a named profile - see `test_the_server_
-    # requests_only_read_capabilities`, below, for why the explicit set is
-    # narrower than `policy.PROFILES["readonly"]` was.
+    # own here instead: `_client()` must ask `connect()` for
+    # `E2_CAPABILITIES` explicitly, not `E1_CAPABILITIES` and not a named
+    # profile - this task moves the server from rung E1 to rung E2 (module
+    # docstring), and `_client()` requesting E1's narrower set would leave
+    # every WRITE_TOOLS call refused by policy despite being registered and
+    # annotated. See `test_the_server_requests_only_read_capabilities` for
+    # why E1_CAPABILITIES itself (unrelated to what _client() asks for) is
+    # narrower than `policy.PROFILES["readonly"]`.
     seen = {}
 
     def fake_connect(*, profile=None, capabilities=None, transport=None):
@@ -173,7 +187,7 @@ def test_client_connects_with_the_e1_capabilities(monkeypatch):
 
     monkeypatch.setattr(srv, "connect", fake_connect)
     assert srv._client() == "a-client"
-    assert seen == {"profile": None, "capabilities": srv.E1_CAPABILITIES}
+    assert seen == {"profile": None, "capabilities": srv.E2_CAPABILITIES}
 
 
 def test_search_tickets_honours_explicit_page_and_per_page(monkeypatch):
@@ -350,8 +364,8 @@ def test_the_auth_tools_are_exactly_authenticate_auth_status_and_logout():
     assert {t.name for t in srv.AUTH_TOOLS} == {"authenticate", "auth_status", "logout"}
 
 
-def test_tools_is_read_tools_plus_auth_tools():
-    assert srv.TOOLS == srv.READ_TOOLS + srv.AUTH_TOOLS
+def test_tools_is_read_tools_plus_write_tools_plus_auth_tools():
+    assert srv.TOOLS == srv.READ_TOOLS + srv.WRITE_TOOLS + srv.AUTH_TOOLS
 
 
 def test_logout_is_annotated_as_a_destructive_idempotent_open_world_write():
@@ -825,30 +839,106 @@ def test_the_server_requests_only_read_capabilities():
     assert not any("write" in c or "reply" in c or "close" in c or "solve" in c for c in caps)
 
 
-def test_no_registered_tool_maps_to_a_write_operation():
-    # AUTH_TOOLS (authenticate/auth_status/logout) are auth-lifecycle tools, not
-    # Support API operations, and sit outside policy._GATES by design (ADR-017)
-    # - reachable at every rung, not just the ones that hold a write capability.
-    # Skipping via AUTH_TOOLS rather than a literal name set means a fourth
-    # auth tool is covered automatically instead of silently falling through.
+def test_every_registered_tool_gates_on_the_capability_its_annotation_implies():
+    # Replaces test_no_registered_tool_maps_to_a_write_operation (which
+    # asserted every non-auth tool gates on TICKET_READ - true only while
+    # this server had no write tools at all). Task 5's amendment calls for a
+    # replacement "that still has teeth - assert the exact name -> capability
+    # mapping for every registered tool, so a tool that silently changes gate
+    # fails the build." This does that: every entry is spelled out, so a
+    # tool's gate changing (or a new tool arriving with no entry here) fails
+    # loudly rather than the test going vacuous.
     from csa_zendesk import policy
 
     auth_names = {t.name for t in srv.AUTH_TOOLS}
+    expected_gate = {
+        "get_ticket": policy.TICKET_READ,
+        "search_tickets": policy.TICKET_READ,
+        "list_comments": policy.TICKET_READ,
+        "get_attachment": policy.TICKET_READ,
+        "update_ticket": policy.TICKET_WRITE,
+        "assign_ticket": policy.TICKET_WRITE,
+        "add_internal_note": policy.TICKET_NOTE,
+        "solve_ticket": policy.TICKET_SOLVE,
+        "upload_file": policy.TICKET_ATTACH,
+        "delete_upload": policy.TICKET_ATTACH,
+    }
+    # Every non-auth tool this server registers is accounted for above - a
+    # tool added to TOOLS with no matching entry here would otherwise be
+    # silently skipped by the loop below, the exact failure shape this
+    # task's brief calls out repeatedly.
+    assert {t.name for t in srv.TOOLS if t.name not in auth_names} == set(expected_gate)
     for t in srv.TOOLS:
         if t.name in auth_names:
             continue
-        assert policy._GATES[t.name] == policy.TICKET_READ, t.name
+        assert policy._GATES[t.name] == expected_gate[t.name], t.name
+
+
+def test_write_tools_are_registered_and_annotated_as_writes():
+    # Per the orchestrator amendment: WRITE_TOOLS is exactly the six tools
+    # that write, get_attachment is NOT among them (it lives in READ_TOOLS),
+    # and every member is read_only_hint=False with no special case.
+    names = {t.name for t in srv.WRITE_TOOLS}
+    assert names == {
+        "update_ticket",
+        "assign_ticket",
+        "add_internal_note",
+        "solve_ticket",
+        "upload_file",
+        "delete_upload",
+    }
+    for t in srv.WRITE_TOOLS:
+        assert t.annotations.read_only_hint is False, t.name
+
+
+def test_only_delete_upload_is_destructive():
+    destructive = {t.name for t in srv.WRITE_TOOLS if t.annotations.destructive_hint}
+    assert destructive == {"delete_upload"}
+
+
+def test_solve_ticket_is_annotated_non_destructive_and_idempotent():
+    (t,) = [t for t in srv.WRITE_TOOLS if t.name == "solve_ticket"]
+    assert t.annotations.destructive_hint is False
+    assert t.annotations.idempotent_hint is True
+
+
+def test_reply_publicly_and_merge_and_close_are_not_registered():
+    # Reach (E5) and irreversibility are separate rungs from E2. A tool a
+    # model can see but must not use is worse than an absent one (task brief).
+    names = {t.name for t in srv.TOOLS}
+    assert "reply_publicly" not in names
+    assert "merge_tickets" not in names
+    assert "close_ticket" not in names
+
+
+def test_e2_capabilities_is_e1_plus_the_four_write_capabilities():
+    from csa_zendesk import policy
+
+    assert srv.E2_CAPABILITIES == srv.E1_CAPABILITIES | {
+        policy.TICKET_WRITE,
+        policy.TICKET_NOTE,
+        policy.TICKET_SOLVE,
+        policy.TICKET_ATTACH,
+    }
+    # E1's own grant is not lost moving to E2 - get_attachment (gated on
+    # TICKET_READ) keeps working at E2 exactly as it does at E1.
+    assert policy.TICKET_READ in srv.E2_CAPABILITIES
 
 
 def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
     # The block's security property, asserted over every registered data
-    # tool rather than the three we happened to think of - and actually
+    # tool rather than the ones we happened to think of - and actually
     # enforced as such: the assertion just below fails the build the moment
-    # `args` and `READ_TOOLS` diverge, rather than the loop silently skipping
-    # a data tool that has no matching `args` entry. Auth tools are excluded
-    # by name (`AUTH_TOOLS`), not by omission - the same discipline
-    # `test_no_registered_tool_maps_to_a_write_operation` uses - so the
-    # exclusion is stated rather than accidental.
+    # `args` and `READ_TOOLS | WRITE_TOOLS` diverge, rather than the loop
+    # silently skipping a data tool that has no matching `args` entry. Auth
+    # tools are excluded by name (`AUTH_TOOLS`), not by omission - the same
+    # discipline `test_every_registered_tool_gates_on_the_capability_its_
+    # annotation_implies` uses - so the exclusion is stated rather than
+    # accidental. Extended (this task) to cover the six WRITE_TOOLS and
+    # get_attachment: a write tool returns the updated ticket, which carries
+    # the requester's own text just as much as a read does, and that is
+    # exactly the property this test exists to hold onto as the tool
+    # surface grows.
     from csa_zendesk import _untrusted
 
     class _Client:
@@ -861,11 +951,191 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
         def list_comments(self, *, ticket_id):
             return {"comments": [{"id": 1, "body": "b", "public": True}]}
 
+        def get_attachment(self, *, attachment_id):
+            return {"attachment": {"id": attachment_id, "file_name": "evidence.log"}}
+
+        def update_ticket(self, *, ticket_id, fields):
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None):
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+        def add_internal_note(self, *, ticket_id, body, uploads=None):
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+        def solve_ticket(self, *, ticket_id):
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+        def upload_file(self, *, filename, content, content_type):
+            return {"upload": {"token": "tok", "attachment": {"file_name": filename}}}
+
+        def delete_upload(self, *, token):
+            return {"deleted": {"token": token}}
+
     monkeypatch.setattr(srv, "_client", lambda: _Client())
-    args = {"get_ticket": {"ticket_id": 1}, "search_tickets": {"query": "x"}, "list_comments": {"ticket_id": 1}}
-    assert {t.name for t in srv.READ_TOOLS} == set(args), "a read tool was added without a matching `args` entry"
+    args = {
+        "get_ticket": {"ticket_id": 1},
+        "search_tickets": {"query": "x"},
+        "list_comments": {"ticket_id": 1},
+        "get_attachment": {"attachment_id": 1},
+        "update_ticket": {"ticket_id": 1, "fields": {"subject": "new"}},
+        "assign_ticket": {"ticket_id": 1, "assignee_id": 2},
+        "add_internal_note": {"ticket_id": 1, "body": "note"},
+        "solve_ticket": {"ticket_id": 1},
+        "upload_file": {"filename": "a.pdf", "content_base64": "eA==", "content_type": "application/pdf"},
+        "delete_upload": {"token": "tok"},
+    }
+    data_tool_names = {t.name for t in srv.READ_TOOLS} | {t.name for t in srv.WRITE_TOOLS}
+    assert data_tool_names == set(args), "a data tool was added without a matching `args` entry"
     auth_names = {t.name for t in srv.AUTH_TOOLS}
     for t in srv.TOOLS:
         if t.name in auth_names:
             continue
         assert _untrusted.MARKER_OPEN in srv.call_tool_sync(t.name, args[t.name]), t.name
+
+
+# --- Task 5 (SDD): the write tools, rung E2 ---------------------------------
+
+
+def test_get_attachment_forwards_attachment_id(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def get_attachment(self, *, attachment_id):
+            seen["attachment_id"] = attachment_id
+            return {"attachment": {"id": attachment_id, "file_name": "log.txt"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    out = srv.call_tool_sync("get_attachment", {"attachment_id": 42})
+    assert seen == {"attachment_id": 42}
+    assert "42" in out
+
+
+def test_update_ticket_forwards_ticket_id_and_fields(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def update_ticket(self, *, ticket_id, fields):
+            seen["ticket_id"], seen["fields"] = ticket_id, fields
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    out = srv.call_tool_sync("update_ticket", {"ticket_id": 7, "fields": {"priority": "high"}})
+    assert seen == {"ticket_id": 7, "fields": {"priority": "high"}}
+    assert out
+
+
+def test_assign_ticket_forwards_optional_assignee_and_group(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None):
+            seen["ticket_id"], seen["assignee_id"], seen["group_id"] = ticket_id, assignee_id, group_id
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    srv.call_tool_sync("assign_ticket", {"ticket_id": 7, "group_id": 99})
+    assert seen == {"ticket_id": 7, "assignee_id": None, "group_id": 99}
+
+
+def test_add_internal_note_forwards_body_and_uploads(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def add_internal_note(self, *, ticket_id, body, uploads=None):
+            seen["ticket_id"], seen["body"], seen["uploads"] = ticket_id, body, uploads
+            return {"ticket": {"id": ticket_id, "subject": "s"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    srv.call_tool_sync("add_internal_note", {"ticket_id": 7, "body": "internal note", "uploads": ["tok1"]})
+    assert seen == {"ticket_id": 7, "body": "internal note", "uploads": ["tok1"]}
+
+
+def test_solve_ticket_forwards_ticket_id(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def solve_ticket(self, *, ticket_id):
+            seen["ticket_id"] = ticket_id
+            return {"ticket": {"id": ticket_id, "status": "solved", "subject": "s"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    out = srv.call_tool_sync("solve_ticket", {"ticket_id": 7})
+    assert seen == {"ticket_id": 7}
+    assert "solved" in out
+
+
+def test_upload_file_decodes_base64_content_before_calling_the_client(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def upload_file(self, *, filename, content, content_type):
+            seen["filename"], seen["content"], seen["content_type"] = filename, content, content_type
+            return {"upload": {"token": "tok-1"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    import base64
+
+    encoded = base64.b64encode(b"hello world").decode()
+    out = srv.call_tool_sync(
+        "upload_file", {"filename": "report.pdf", "content_base64": encoded, "content_type": "application/pdf"}
+    )
+    assert seen == {"filename": "report.pdf", "content": b"hello world", "content_type": "application/pdf"}
+    assert out
+
+
+def test_upload_file_with_malformed_base64_is_an_error_not_a_crash(monkeypatch):
+    # binascii.Error is a ValueError subclass, so `_on_call_tool`'s existing
+    # `except ValueError` branch (written for an unknown tool name) already
+    # covers a malformed content_base64 with no new exception branch needed -
+    # this is the end-to-end check that it actually does.
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    class _Client:
+        def upload_file(self, *, filename, content, content_type):
+            raise AssertionError("should never be reached with malformed base64")
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(
+        name="upload_file",
+        arguments={"filename": "a.pdf", "content_base64": "not-valid-base64!!!", "content_type": "application/pdf"},
+    )
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is True
+    text = result.content[0].text
+    # Ours (a stdlib diagnostic about the argument this process was handed),
+    # not wrapped - the same provenance rule as an unknown tool name.
+    assert _untrusted.MARKER_OPEN not in text
+
+
+def test_delete_upload_forwards_token(monkeypatch):
+    seen = {}
+
+    class _Client:
+        def delete_upload(self, *, token):
+            seen["token"] = token
+            return {"deleted": {"token": token}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    srv.call_tool_sync("delete_upload", {"token": "tok-abc"})
+    assert seen == {"token": "tok-abc"}
+
+
+def test_a_write_tool_response_reaches_on_call_tool_fully_wrapped(monkeypatch):
+    from mcp import types as mcp_types
+
+    from csa_zendesk import _untrusted
+
+    class _Client:
+        def update_ticket(self, *, ticket_id, fields):
+            return {"ticket": {"id": ticket_id, "subject": "requester wrote this"}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    params = mcp_types.CallToolRequestParams(
+        name="update_ticket", arguments={"ticket_id": 1, "fields": {"priority": "high"}}
+    )
+    result = asyncio.run(srv._on_call_tool(None, params))
+    assert result.is_error is False
+    assert _untrusted.MARKER_OPEN in result.content[0].text
