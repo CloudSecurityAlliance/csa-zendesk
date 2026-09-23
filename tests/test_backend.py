@@ -1006,3 +1006,164 @@ def test_no_id_that_is_not_a_number_reaches_a_path(method, kwargs):
     with pytest.raises(exc.InvalidPath, match="whole number"):
         getattr(ApiBackend(_client(handler)), method)(**kwargs)
     assert called["n"] == 0
+
+
+#: A BOM, not a ZWSP: `_markdown._STRIP` deliberately does NOT strip U+200B
+#: (Thai/Khmer word segmentation - see `_markdown.strip_suspicious`'s
+#: docstring), so a ZWSP fixture here would assert stripping that Task 3's
+#: corrected `_STRIP` set no longer performs. A mid-document BOM IS in
+#: `_STRIP` (same codepoint `tests/test_markdown.py`'s own
+#: `test_codepoints_with_no_communicative_purpose_are_removed` and
+#: `test_to_markdown_strips_in_both_the_visible_and_hidden_output` fixtures
+#: use), so this still proves what the test is for: that `to_markdown`'s
+#: codepoint stripping flows through the Backend seam, not just the
+#: conversion.
+BOM = "﻿"
+
+
+def _comment_html(html):
+    return {"comments": [{"id": 1, "public": True, "body": "plain", "html_body": html}]}
+
+
+def test_list_comments_returns_markdown_not_html():
+    def handler(request):
+        return httpx.Response(200, json=_comment_html("<p>Hello <strong>world</strong></p>"))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "**world**" in cm["html_body"]
+    assert "<p>" not in cm["html_body"]
+
+
+def test_hidden_text_arrives_in_its_own_key_and_not_in_the_body():
+    def handler(request):
+        return httpx.Response(200, json=_comment_html('<p>Refund please.</p><div style="display:none">SECRET</div>'))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "SECRET" not in cm["html_body"]
+    assert cm["hidden_text"] == ["SECRET"]
+
+
+def test_no_hidden_key_when_there_is_no_hidden_text():
+    # A key present on every comment with an empty list is noise on ~96% of them.
+    def handler(request):
+        return httpx.Response(200, json=_comment_html("<p>ordinary</p>"))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "hidden_text" not in cm
+
+
+def test_plain_body_is_left_alone():
+    # `body` is Zendesk's own tag strip and is NOT the source of truth here,
+    # but it is also not ours to rewrite - callers may rely on it verbatim.
+    #
+    # Minor 4 (final whole-branch review): the name promised `plain_body`
+    # coverage, but the fixture (`_comment_html`) never carried a `plain_body`
+    # key at all and the assertion below was on `body` - `body` IS the more
+    # important field (it is what a caller actually reads when it is not
+    # converting `html_body` itself), so the coverage was right and the name
+    # was wrong. Building the envelope directly here, rather than adding
+    # `plain_body` to the shared `_comment_html` helper every other test in
+    # this file also uses, keeps this fix scoped to the one test it names.
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "comments": [
+                    {"id": 1, "public": True, "body": "plain", "plain_body": "plain too", "html_body": "<p>x</p>"}
+                ]
+            },
+        )
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert cm["body"] == "plain"
+    assert cm["plain_body"] == "plain too"
+
+
+def test_a_ticket_description_is_converted_too():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "ticket": {
+                    "id": 1,
+                    "subject": "s",
+                    "description": "d",
+                    "html_body": f"<p>tick{BOM}et</p>",
+                }
+            },
+        )
+
+    t = ApiBackend(_client(handler)).get_ticket(ticket_id=1)["ticket"]
+    assert BOM not in t["html_body"]
+    assert "<p>" not in t["html_body"]
+
+
+def test_the_fake_converts_too():
+    # A fake that returned raw HTML would let every markdown assertion pass
+    # while doing nothing in production - the reason the fake enforces the
+    # extension and empty-upload rules too.
+    fake = FakeBackend()
+    fake.tickets[1] = {"id": 1, "html_body": "<p>hi <em>there</em></p>"}
+    out = fake.get_ticket(ticket_id=1)["ticket"]
+    assert "*there*" in out["html_body"] and "<em>" not in out["html_body"]
+
+
+# --- Important 1 (final whole-branch review): the write tools were not wired ---
+# `update_ticket`/`assign_ticket`/`add_internal_note`/`solve_ticket` all return
+# a `TicketUpdateResponse` (`{audit, ticket}` - specs/zendesk-support-oas.yaml),
+# and an audit Comment event can carry a FRESH `html_body` authored by a
+# trigger or automation firing on this very update - not just this call's own
+# note. Before this fix only get_ticket/search_tickets/list_comments converted,
+# so raw HTML from a trigger-authored comment reached the model through these
+# four tools.
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda b: b.update_ticket(ticket_id=7, fields={"priority": "high"}),
+        lambda b: b.assign_ticket(ticket_id=7, assignee_id=42),
+        lambda b: b.add_internal_note(ticket_id=7, body="hi"),
+        lambda b: b.solve_ticket(ticket_id=7),
+    ],
+    ids=["update_ticket", "assign_ticket", "add_internal_note", "solve_ticket"],
+)
+def test_every_write_tool_converts_html_body_in_its_audit_event(call):
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "audit": {
+                    "events": [{"id": 1, "type": "Comment", "html_body": "<p>hi <em>there</em></p>"}],
+                },
+                "ticket": {"id": 7},
+            },
+        )
+
+    result = call(ApiBackend(_client(handler)))
+    converted = result["audit"]["events"][0]["html_body"]
+    assert "*there*" in converted
+    assert "<em>" not in converted
+
+
+# --- Important 3 (final whole-branch review): RecursionError must not escape ---
+
+
+def test_deeply_nested_html_is_left_unconverted_rather_than_raising():
+    # `to_markdown` recurses through BeautifulSoup's parsed tree; nesting past
+    # ~495 <div>s overflows Python's recursion limit and raises RecursionError
+    # - which IS a RuntimeError, so it matches no branch in server.py's
+    # _on_call_tool except-chain and would otherwise escape this library as a
+    # bare, untyped exception. Caught at the seam so ONE field fails rather
+    # than the whole envelope/call.
+    nested = "<div>" * 1000 + "hi" + "</div>" * 1000
+
+    def handler(request):
+        return httpx.Response(200, json=_comment_html(nested))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert cm["html_body"] == nested  # left unconverted, not blanked
+    assert cm["body"] == "plain"  # untouched - the agent can still read the comment
+    assert cm["hidden_text"] == [
+        "csa-zendesk: html_body could not be converted to Markdown (nested too deeply) - left as raw, unconverted HTML."
+    ]

@@ -160,6 +160,22 @@ what is still owed before any of it is trusted live.
 
 ---
 
+## H. Block 2 debts — owed before or during Block 3
+
+Block 2 (2026-09-22, plan `docs/superpowers/plans/2026-09-22-block-2-markdown-and-codepoints.md`)
+converts `html_body` to Markdown at the `Backend` seam and surfaces concealed text as a sibling
+`hidden_text` key. `_markdown.py` is pure and exhaustively tested offline; nothing here has been
+checked against a live tenant's real HTML shapes.
+
+| | Item | Status | Notes |
+|---|---|---|---|
+| H1 | **White-on-white hidden text is not detected.** Deciding whether text visually matches its own background needs the resolved background of the ancestor chain — the CSS cascade — and `to_markdown`'s hidden-element pass only inspects one element's own `style` attribute, which cannot see that. Pinned by `test_white_on_white_is_a_KNOWN_GAP_and_still_leaks` in `tests/test_markdown.py` so this stays a visible, tracked absence rather than a silent one. | open | Filed by Block 2 Task 2/5. Closing it needs a real cascade resolver, which is a materially bigger piece of work than the inline-style regex this block ships. |
+| H2 | **Only inline `style` attributes are inspected for hiding rules — a `<style>` block's selectors are invisible to `to_markdown`.** A comment that hides text via a `<style>` rule (`.x { display: none }`) rather than an inline `style=""` attribute is not caught, for the same underlying reason as H1: resolving a selector against the document needs a cascade this module does not build. Under-reporting is the deliberate failure direction. | open | Filed by Block 2 Task 5, from `_markdown.py`'s own `HIDING_RULES` comment ("INLINE STYLES ONLY, deliberately"). Likely closes alongside H1 if a cascade resolver is ever built, rather than needing its own separate fix. |
+| H3 | **The observed zero-width-signature attack (`U+200C` interleaved through a name) is not defanged by `strip_suspicious`, and catching it needs a density-based detector — not yet designed.** `U+200C` (ZWNJ) is semantic in Persian and required for Indic conjuncts and Arabic letter shaping, so it cannot be stripped unconditionally; a detector would instead need to flag an anomalous *rate* of the character relative to its legitimate use, which is a different kind of check than anything `_markdown.py` does today. | open | Filed by Block 2 Task 3/5. Deliberately out of scope for this block — see `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping` in `tests/test_markdown.py` and the corresponding `README.md`/`CHANGELOG.md` entries. |
+| H4 | **Bidi isolates (`U+2066`–`U+2069`) and embeddings (`U+202A`–`U+202C`) are part of the Trojan Source family too, and `strip_suspicious` deliberately does not strip either — only the LRO/RLO override pair is stripped.** They produce run-level visual reordering rather than character-level reversal, so excluding them was correct on legitimacy grounds (embeddings are ordinary right-to-left text; isolates are the modern, recommended replacement for embeddings). Unlike the `U+200C` limit (H3), which got a pinning test, a README paragraph and a CHANGELOG line, this residual had none of those until now. | open | Filed at the final whole-branch review (Minor 5). No pinning test, README paragraph or CHANGELOG line added — recording the residual, not treating it as a bug: this row and `strip_suspicious`'s own docstring are the record. |
+
+---
+
 ## Consideration pile — deliberately not committed to
 
 Recorded so they are not re-proposed as oversights.
@@ -175,6 +191,12 @@ Recorded so they are not re-proposed as oversights.
 - **A local attachment cache.** One surveyed server has nine tools for it. A local cache of
   customer attachments is a data-retention decision, not a convenience.
 - **Naming with a `zendesk_` prefix.** Settled: bare `verb_noun`. The client namespaces already.
+- **Homoglyph / mixed-script detection in `strip_suspicious`.** A rule that flags mixed scripts
+  within a word also flags Indigenous orthographies (Musqueam contains a Greek theta, because
+  IPA-derived characters are its standard written form) and IPA transcriptions — measured at
+  6-of-8 false positives against legitimate fixtures. Already in README/CHANGELOG (Block 2); filed
+  here too (Minor 6, final whole-branch review) so it is not re-proposed as an oversight the next
+  time someone reviews `_markdown.py`'s codepoint handling.
 
 - **The Zendesk MCP server written by a CSA colleague.** Asked for during the 2026-09-12 design
   session and **deliberately dropped 2026-09-17**: the prior-art survey exists to learn from servers

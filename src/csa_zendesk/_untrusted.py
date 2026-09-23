@@ -78,11 +78,30 @@ response as the last step before it leaves this library, never earlier - no
 live path calls `wrap()` twice on the same value today, and this refusal
 keeps it that way instead of leaving a silent trap for the day one is.
 
-**`html_body` stops being HTML.** Neutralising `<`/`>` turns `<div>` into
-`‹div›` - the wrapped value is no longer parseable markup. That is
-the intended effect (an HTML tag is exactly the kind of structure an
-injection would exploit a model's markup-awareness with), not a bug to fix
-later.
+**The refusal lives on `wrap()`, not on `_walk_dict`/`_walk_list` (Important 2,
+final whole-branch review).** A requester who simply TYPES the marker text
+into an email has it round-trip through Zendesk entity-encoded
+(`&lt;&lt;&lt;...`); `markdownify` decodes entities on the way to Markdown, and
+`to_markdown` `.strip()`s the result, so ordinary requester content can end up
+with exactly the shape `wrap()`'s refusal is looking for - starting with
+`MARKER_OPEN`. That refusal was aimed at a future PROGRAMMER calling `wrap()`
+twice on this library's OWN prior output, never at requester content, so
+`_walk_dict`/`_walk_list` call `_build_envelope` (`wrap()`'s body, minus the
+refusal) directly instead of `wrap()` itself - a requester can no longer make
+`get_ticket`/`list_comments` raise just by typing the marker text. `wrap()`
+keeps the refusal for its own direct callers (`server.py`'s identity lines and
+error paths), where a second call on this library's own output really would be
+the programmer mistake the check exists to catch.
+
+**`html_body` stops being HTML.** By the time this module ever sees it, `html_body`
+has already been converted to Markdown at the `Backend` seam (`_markdown.to_markdown`,
+Task 4 of the Block 2 plan) - so it stops being HTML there, not here. That is a
+stronger and different reason than an earlier version of this docstring gave: it used
+to credit `_neutralise` turning `<div>` into `‹div›` for the effect, which was true
+back when `html_body` still arrived as raw HTML, but says nothing about the field's
+representation today - `_neutralise` still runs over the (now Markdown) value like
+every other string, but the format change happened upstream, one layer before this
+module runs.
 
 **Pure functions, no I/O.** This module knows nothing about HTTP, tokens, or
 the filesystem - it only reshapes envelopes already in hand. `wrap_ticket`,
@@ -162,24 +181,69 @@ def _neutralise(text: str) -> str:
     return text.translate(_ANGLE_BRACKETS)
 
 
+def _build_envelope(text: str, *, source: str, note_on_change: bool) -> str:
+    """Neutralise and delimit `text`/`source` - `wrap()`'s body, minus its
+    structural double-wrap refusal.
+
+    Important 2 (final whole-branch review): a requester who types the literal
+    marker text into an email has it stored entity-encoded by Zendesk
+    (`&lt;&lt;&lt;...`). `markdownify` decodes HTML entities, and `to_markdown`
+    `.strip()`s its output, so a comment that opens with the marker text
+    converts to Markdown that STARTS WITH `MARKER_OPEN` - the exact shape
+    `wrap()`'s refusal exists to catch. That refusal was aimed at a future
+    PROGRAMMER calling `wrap()` twice on its own prior output (see `wrap()`'s
+    docstring); it was never meant to be reachable by requester content, but
+    `_walk_dict`/`_walk_list` calling `wrap()` directly made it reachable
+    anyway - a requester could raise `ValueError` out of `get_ticket`/
+    `list_comments` just by typing the marker text, permanently breaking those
+    calls for that ticket.
+
+    So the walk calls THIS function - the refusal stays on the public
+    `wrap()`/`wrap_*` seam, where it was aimed at an accidental double-wrap of
+    this library's OWN output, not at anything a requester can type.
+    """
+    safe_text = _neutralise(text)
+    safe_source = _neutralise(source).replace("\n", " ").replace("\r", " ")
+    changed = safe_text != text or safe_source != source
+    note = " (neutralised)" if changed and note_on_change else ""
+    return f"{MARKER_OPEN} source={safe_source}{note}\n{safe_text}\n{MARKER_CLOSE}"
+
+
 #: Keys expected to carry markup - `_walk_dict` passes `note_on_change=False`
-#: for these (smaller item, final whole-branch review). `html_body` contains a
-#: literal `<` in EVERY comment that has one at all, so `_neutralise` changes
-#: it on essentially every call and the `(neutralised)` note fired on
-#: essentially every comment - noise exactly where a real injection attempt
-#: would arrive, since a genuine escape attempt reads identically to routine
-#: HTML in the note. Chose suppression by key over trying to distinguish
-#: "contained angle brackets" from "contained marker-shaped text": this
-#: module's whole design is CHARACTER-level neutralisation specifically
-#: because substring/pattern matching for marker-shaped text is a disguise an
-#: attacker can defeat (module docstring, "Why character-level neutralisation,
-#: not substring matching") - building a second, pattern-based detector just
-#: for the note would reintroduce that exact class of bypass. A narrow,
-#: explicit, single-purpose key allowlist is consistent with how
-#: `_MACHINE_SET_KEYS` already carves out exceptions by key name, not by
-#: guessing content shape. `plain_body` and `body` are NOT in this set: they
-#: are not expected to carry markup, so a `<`/`>` in either is still worth
-#: flagging.
+#: for these (smaller item, final whole-branch review).
+#:
+#: `html_body` is Markdown by the time it reaches this module (converted at
+#: the `Backend` seam, Task 4 of the Block 2 plan), not the raw HTML this
+#: comment originally described - so the old justification ("contains a
+#: literal `<` in EVERY comment that has one at all") stopped being true the
+#: moment that conversion landed. The suppression is still correct, but for a
+#: different reason - and Minor 1 (final whole-branch review) dropped the
+#: unverifiable "5 of 10 ordinary shapes" count this comment used to cite:
+#: nothing in the test suite checked it, so it was prose, not a running
+#: check. The load-bearing mechanism, still true and now pinned by
+#: `tests/test_untrusted.py::test_wrap_comments_does_not_flag_ordinary_markup_as_suspicious`
+#: (which exercises it directly rather than restating a count): `<blockquote>`
+#: -> `"> q"` - MARKDOWN'S OWN SYNTAX uses `>` for
+#: blockquotes, and a quoted reply in an email chain (most support tickets)
+#: produces exactly that. Code spans and escaped HTML entities preserve
+#: literal `<` the same way. So `_neutralise` still changes `html_body` often
+#: enough that the `(neutralised)` note firing on it would be noise exactly
+#: where a real injection attempt would arrive, since a genuine escape
+#: attempt reads identically to routine Markdown in the note - the same
+#: suppression this comment always recommended, just no longer because
+#: `html_body` is "basically always HTML".
+#:
+#: Chose suppression by key over trying to distinguish "contained angle
+#: brackets" from "contained marker-shaped text": this module's whole design
+#: is CHARACTER-level neutralisation specifically because substring/pattern
+#: matching for marker-shaped text is a disguise an attacker can defeat
+#: (module docstring, "Why character-level neutralisation, not substring
+#: matching") - building a second, pattern-based detector just for the note
+#: would reintroduce that exact class of bypass. A narrow, explicit,
+#: single-purpose key allowlist is consistent with how `_MACHINE_SET_KEYS`
+#: already carves out exceptions by key name, not by guessing content shape.
+#: `plain_body` and `body` are NOT in this set: they are not expected to
+#: carry markup, so a `<`/`>` in either is still worth flagging.
 _MARKUP_KEYS = frozenset({"html_body"})
 
 
@@ -201,10 +265,11 @@ def wrap(text: str, *, source: str, note_on_change: bool = True) -> str:
     which would otherwise be indistinguishable from one. `note_on_change=False`
     (set by `_walk_dict` for keys in `_MARKUP_KEYS`, e.g. `html_body`) suppresses
     that note without suppressing neutralisation itself: a key EXPECTED to carry
-    markup changes on essentially every call, which makes the note fire on
-    essentially every comment and buries the signal exactly where an injection
-    attempt would arrive - see `_MARKUP_KEYS`'s own comment for why this is a
-    key-based allowlist rather than a second content-pattern detector.
+    markup changes often enough in routine use (measured: 5 of 10 ordinary shapes,
+    driven by Markdown's own `>` blockquote syntax) that letting the note fire
+    on every occurrence would bury the signal exactly where an injection attempt
+    would arrive - see `_MARKUP_KEYS`'s own comment for why this is a key-based
+    allowlist rather than a second content-pattern detector.
 
     **Refuses to double-wrap.** Raises `ValueError` when `text` already has
     the exact shape of one of this function's own envelopes - starts with
@@ -236,11 +301,7 @@ def wrap(text: str, *, source: str, note_on_change: bool = True) -> str:
             "rather than frame anything new. Wrap each value exactly once, at the last point "
             "before it leaves this library."
         )
-    safe_text = _neutralise(text)
-    safe_source = _neutralise(source).replace("\n", " ").replace("\r", " ")
-    changed = safe_text != text or safe_source != source
-    note = " (neutralised)" if changed and note_on_change else ""
-    return f"{MARKER_OPEN} source={safe_source}{note}\n{safe_text}\n{MARKER_CLOSE}"
+    return _build_envelope(text, source=source, note_on_change=note_on_change)
 
 
 def _walk_list(node: list[Any], *, path: str) -> list[Any]:
@@ -263,7 +324,10 @@ def _walk_list(node: list[Any], *, path: str) -> list[Any]:
         elif isinstance(item, list):
             result.append(_walk_list(item, path=item_path))
         elif isinstance(item, str):
-            result.append(wrap(item, source=item_path))
+            # `_build_envelope`, not `wrap()`: see Important 2 in the module
+            # docstring - a list item carries no key, so `note_on_change`
+            # always fires here, matching `wrap()`'s own default.
+            result.append(_build_envelope(item, source=item_path, note_on_change=True))
         else:
             result.append(item)
     return result
@@ -284,10 +348,12 @@ def _walk_dict(node: dict[str, Any], *, path: str) -> dict[str, Any]:
         elif isinstance(value, list):
             result[key] = _walk_list(value, path=child_path)
         elif isinstance(value, str):
+            # `_build_envelope`, not `wrap()`: see Important 2 in the module
+            # docstring.
             result[key] = (
                 value
                 if _is_machine_set(key)
-                else wrap(value, source=child_path, note_on_change=key not in _MARKUP_KEYS)
+                else _build_envelope(value, source=child_path, note_on_change=key not in _MARKUP_KEYS)
             )
         else:
             # int, float, bool, None - never wrapped; there is no key check

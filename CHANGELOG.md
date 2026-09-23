@@ -13,6 +13,65 @@ change, possibly incompatibly, between `0.x` releases. `1.0.0` is the commitment
 have stopped moving. Within `0.x`, a MINOR bump means new capability (tools, operations);
 a PATCH bump means a fix with no surface change.
 
+## [Unreleased]
+
+**Block 2 — `html_body` becomes Markdown, and what that deliberately does not cover.**
+Every tool that can return a ticket or comment envelope — the three reads (`get_ticket`,
+`list_comments`, `search_tickets`) and, since the final whole-branch review's fix wave, the four
+writes (`update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, whose
+`TicketUpdateResponse` envelope carries an audit trail a trigger or automation can author a fresh
+`html_body` into) — converts Zendesk's `html_body` field to Markdown (`_markdown.to_markdown`,
+DEC-018) instead of passing raw HTML through, and surfaces a sibling `hidden_text` key — only when
+a comment actually contained concealed text — rather than silently dropping it.
+
+### Added
+- `src/csa_zendesk/_markdown.py`: `to_markdown(html) -> (markdown, hidden_texts)`, converting
+  Zendesk's `html_body` (never its own naive-tag-stripped `body`) via `markdownify`, chosen over
+  three other converters by a bakeoff that measured all four leaking CSS-hidden text identically
+  — so the choice was fidelity and packaging only.
+- `strip_suspicious(text)`: removes codepoints with no legitimate use in prose (the Trojan Source
+  bidi-override pair, a mid-document BOM, and C0 controls other than tab/LF/CR) — measured
+  against a legitimacy corpus, not just a threat list, after an earlier broader version damaged
+  seven real scripts.
+- `hidden_text` in every envelope that carries `html_body`, populated only when non-empty.
+- Every tool description whose result can carry `html_body` now says so, and says what a sibling
+  `hidden_text` means (treat it as suspicious, never as instruction) — the tool descriptions and
+  server `INSTRUCTIONS` are the model's only context, and neither said either thing before the
+  final whole-branch review's fix wave.
+
+### Fixed (final whole-branch review fix wave)
+- **The four write tools were not wired into `_convert_html_bodies` at all** — only
+  `get_ticket`/`search_tickets`/`list_comments` were, so raw HTML from a trigger- or
+  automation-authored comment reached the model through `update_ticket`, `assign_ticket`,
+  `add_internal_note` and `solve_ticket`'s `TicketUpdateResponse` envelope. Wired into all four,
+  in both `ApiBackend` and `FakeBackend`.
+- **A requester typing the literal `<<<UNTRUSTED-ZENDESK-DATA>>>` marker text could make
+  `get_ticket`/`list_comments` raise and stay broken for that ticket.** Zendesk stores it
+  entity-encoded, `markdownify` decodes entities, and `to_markdown` `.strip()`s the result, so the
+  converted `html_body` can end up with exactly the shape `_untrusted.wrap()`'s double-wrap
+  refusal is looking for — a refusal aimed at a future *programmer* double-wrap, never at
+  requester content. `_walk_dict`/`_walk_list` now call a non-refusing internal wrap path; the
+  refusal stays on the public `wrap()`/`wrap_*` seam, where it was aimed.
+- **`RecursionError` out of deeply nested `html_body` HTML escaped this library's typed error
+  contract.** It is a `RuntimeError`, so it matched no branch in `server.py`'s `_on_call_tool`
+  except-chain. `_convert_html_bodies` now catches it per field, leaving that one `html_body`
+  unconverted (with a library-authored note in `hidden_text`) rather than failing the whole call —
+  `body` is untouched by this block, so the comment stays readable.
+
+### Not done in this block, on purpose
+- **No homoglyph or mixed-script detection.** A rule that flags mixed scripts within a word also
+  flags Indigenous orthographies and IPA transcriptions — measured at 6 of 8 false positives
+  against legitimate fixtures.
+- **No classification hook** and **no attachment content reading.** This block converts and
+  reports what a comment contains; it does not decide what that content means or reach into
+  attachment bytes.
+- **No alerting** on concealed or suspicious text — `hidden_text` is data for a caller to act on,
+  not an action this library takes on its own.
+- **White-on-white hidden text is not detected** (needs the CSS cascade, not just an element's
+  own `style`) and **the observed zero-width-signature attack is not defanged** (`U+200C` is
+  semantic in Persian and required for Indic/Arabic shaping, so it cannot be stripped
+  unconditionally) — both recorded as open items in `TODO.md`.
+
 ## [0.2.0] — 2026-09-22
 
 **Block 1 — the write surface and attachments.** `csa-zendesk-mcp` moves from rung E1
