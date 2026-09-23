@@ -125,6 +125,15 @@ def strip_suspicious(text: str) -> str:
     zero-width-signature attack (U+200C interleaved through a name) - see
     `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
 
+    Residual, recorded but not pinned by a test (Minor 5, final whole-branch
+    review, TODO.md H4): bidi ISOLATES (U+2066-U+2069) and EMBEDDINGS
+    (U+202A-U+202C) are part of the Trojan Source family too - they produce
+    RUN-LEVEL visual reordering rather than the character-level reversal the
+    stripped OVERRIDE pair (LRO/RLO) produces - and excluding them was correct
+    on the same legitimacy grounds as everything else in this docstring, but
+    unlike U+200C above it has no pinning test, no README paragraph and no
+    CHANGELOG line of its own - only this sentence and TODO.md H4.
+
     NOT a homoglyph check. A rule that flags mixed scripts within a word also
     flags Indigenous orthographies (Musqueam contains a Greek theta, because
     IPA-derived characters are its standard written form) and IPA

@@ -410,14 +410,18 @@ silent — a token that names an attachment which downloads as nothing.
 
 ### `html_body` is Markdown, not HTML
 
-`get_ticket`, `list_comments` and `search_tickets` all convert Zendesk's `html_body` field to
-**Markdown** before it reaches a model (`_markdown.to_markdown`, wired in at the `Backend` seam
-— DEC-018). It is read from `html_body`, never Zendesk's own `body` field: Zendesk's plain-text
-rendering is a naive tag strip that keeps CSS-hidden text as ordinary prose while discarding the
-CSS that would have revealed it was hidden, which is strictly worse than converting the HTML
-ourselves. A comment's Markdown sits under the same `html_body` key as before — the type changed,
-the key did not — and it is still wrapped as untrusted data by `_untrusted.py` exactly like every
-other requester-authored string.
+Every tool whose result can carry a ticket or comment envelope converts Zendesk's `html_body`
+field to **Markdown** before it reaches a model (`_markdown.to_markdown`, wired in at the
+`Backend` seam — DEC-018): the three reads (`get_ticket`, `list_comments`, `search_tickets`) and,
+since the final whole-branch review, the four writes too (`update_ticket`, `assign_ticket`,
+`add_internal_note`, `solve_ticket`) — each of those returns a `TicketUpdateResponse` envelope
+whose audit trail can carry a *fresh* `html_body` authored by a trigger or automation firing on
+that very update, not just by this call's own note. It is read from `html_body`, never Zendesk's
+own `body` field: Zendesk's plain-text rendering is a naive tag strip that keeps CSS-hidden text
+as ordinary prose while discarding the CSS that would have revealed it was hidden, which is
+strictly worse than converting the HTML ourselves. A comment's Markdown sits under the same
+`html_body` key as before — the type changed, the key did not — and it is still wrapped as
+untrusted data by `_untrusted.py` exactly like every other requester-authored string.
 
 **A sibling `hidden_text` key appears beside `html_body` only when a comment contained text a
 reader would not see** — an element hidden by an inline `display:none`, `visibility:hidden`,

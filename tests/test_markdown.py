@@ -1,6 +1,24 @@
+import re
+
 import pytest
 
-from csa_zendesk._markdown import HIDING_RULES, strip_suspicious, to_markdown
+from csa_zendesk._markdown import _NEVER_RENDERED, HIDING_RULES, strip_suspicious, to_markdown
+
+#: Hoisted from the parametrize list below (Minor 3, final whole-branch
+#: review) so `test_every_hiding_rule_is_exercised_by_a_test` can check
+#: against the LIVE list rather than a hand-typed duplicate of it - see that
+#: test's own comment for why the duplicate made the guard vacuous.
+_HIDING_STYLES = (
+    "display:none",
+    "display: none",
+    "visibility:hidden",
+    "font-size:0",
+    "height:0",
+    "max-height:0",
+    "opacity:0",
+    "left:-9999px",
+    "text-indent:-9999px",
+)
 
 
 def test_basic_html_becomes_markdown():
@@ -18,9 +36,17 @@ def test_links_keep_their_destination():
     assert "the doc" in md
 
 
-def test_script_does_not_survive():
-    md, _ = to_markdown("<p>hi</p><script>alert(1)</script>")
-    assert "alert(1)" not in md
+@pytest.mark.parametrize("tag", _NEVER_RENDERED)
+def test_element_in_never_rendered_does_not_survive(tag):
+    # Important 5 (final whole-branch review): _NEVER_RENDERED had three
+    # untested members - verified by deletion, removing template/noscript/head
+    # leaks the payload into the Markdown, while removing script/style changes
+    # nothing (markdownify drops those anyway). Only `script` had a case
+    # before this, which means the two members that are NOT load-bearing were
+    # the only ones tested. Parametrizing over every member closes that.
+    marker = f"MARKER_{tag.upper()}"
+    md, _ = to_markdown(f"<p>hi</p><{tag}>{marker}</{tag}>")
+    assert marker not in md
 
 
 def test_empty_and_absent_html_are_not_errors():
@@ -41,20 +67,7 @@ def test_malformed_html_does_not_raise(html):
     assert isinstance(md, str) and isinstance(hidden, list)
 
 
-@pytest.mark.parametrize(
-    "style",
-    [
-        "display:none",
-        "display: none",
-        "visibility:hidden",
-        "font-size:0",
-        "height:0",
-        "max-height:0",
-        "opacity:0",
-        "left:-9999px",
-        "text-indent:-9999px",
-    ],
-)
+@pytest.mark.parametrize("style", _HIDING_STYLES)
 def test_hidden_text_is_surfaced_not_emitted_as_prose(style):
     html = f'<p>Refund please.</p><div style="{style}">SECRET INSTRUCTION</div>'
     md, hidden = to_markdown(html)
@@ -89,12 +102,35 @@ def test_white_on_white_is_a_KNOWN_GAP_and_still_leaks():
     assert hidden == []
 
 
+def test_a_style_block_selector_is_a_KNOWN_GAP_and_still_leaks():
+    # Minor 2 (final whole-branch review), TODO.md H2: only inline `style`
+    # attributes are inspected - a `<style>` block's SELECTORS need a cascade
+    # to resolve against the document, which this module does not build
+    # (HIDING_RULES' own docstring: "INLINE STYLES ONLY, deliberately"). H1
+    # (white-on-white) and the zero-width-signature limit are both pinned by a
+    # test; this recorded gap was prose only until now. Recorded, not fixed -
+    # mirrors test_white_on_white_is_a_KNOWN_GAP_and_still_leaks's shape.
+    html = '<style>.s{display:none}</style><p>Refund.</p><div class="s">SECRET</div>'
+    md, hidden = to_markdown(html)
+    assert "Refund." in md
+    assert "SECRET" in md
+    assert hidden == []
+
+
 def test_every_hiding_rule_is_exercised_by_a_test():
     # Anti-vacuity: a rule added to HIDING_RULES without a case above would
     # otherwise be untested and look covered.
-    exercised = {"display", "visibility", "font-size", "height", "opacity", "left", "text-indent"}
+    #
+    # Minor 3 (final whole-branch review): `exercised` used to be a hand-typed
+    # duplicate of the parametrize list above - so this checked "each rule
+    # contains one of seven hard-coded words", not "each rule has a case".
+    # Deleting "opacity:0" from the parametrize list left this green, because
+    # the word "opacity" still appeared in `exercised` regardless. Checking
+    # against `_HIDING_STYLES` - the SAME tuple the parametrize above draws
+    # from - instead of a copy means deleting a case now fails this test too.
     for rule in HIDING_RULES:
-        assert any(token in rule for token in exercised), f"{rule} has no test"
+        pattern = re.compile(rule, re.I)
+        assert any(pattern.search(style) for style in _HIDING_STYLES), f"{rule} has no test"
 
 
 @pytest.mark.parametrize(

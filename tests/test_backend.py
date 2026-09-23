@@ -1055,11 +1055,28 @@ def test_no_hidden_key_when_there_is_no_hidden_text():
 def test_plain_body_is_left_alone():
     # `body` is Zendesk's own tag strip and is NOT the source of truth here,
     # but it is also not ours to rewrite - callers may rely on it verbatim.
+    #
+    # Minor 4 (final whole-branch review): the name promised `plain_body`
+    # coverage, but the fixture (`_comment_html`) never carried a `plain_body`
+    # key at all and the assertion below was on `body` - `body` IS the more
+    # important field (it is what a caller actually reads when it is not
+    # converting `html_body` itself), so the coverage was right and the name
+    # was wrong. Building the envelope directly here, rather than adding
+    # `plain_body` to the shared `_comment_html` helper every other test in
+    # this file also uses, keeps this fix scoped to the one test it names.
     def handler(request):
-        return httpx.Response(200, json=_comment_html("<p>x</p>"))
+        return httpx.Response(
+            200,
+            json={
+                "comments": [
+                    {"id": 1, "public": True, "body": "plain", "plain_body": "plain too", "html_body": "<p>x</p>"}
+                ]
+            },
+        )
 
     cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
     assert cm["body"] == "plain"
+    assert cm["plain_body"] == "plain too"
 
 
 def test_a_ticket_description_is_converted_too():
@@ -1089,3 +1106,64 @@ def test_the_fake_converts_too():
     fake.tickets[1] = {"id": 1, "html_body": "<p>hi <em>there</em></p>"}
     out = fake.get_ticket(ticket_id=1)["ticket"]
     assert "*there*" in out["html_body"] and "<em>" not in out["html_body"]
+
+
+# --- Important 1 (final whole-branch review): the write tools were not wired ---
+# `update_ticket`/`assign_ticket`/`add_internal_note`/`solve_ticket` all return
+# a `TicketUpdateResponse` (`{audit, ticket}` - specs/zendesk-support-oas.yaml),
+# and an audit Comment event can carry a FRESH `html_body` authored by a
+# trigger or automation firing on this very update - not just this call's own
+# note. Before this fix only get_ticket/search_tickets/list_comments converted,
+# so raw HTML from a trigger-authored comment reached the model through these
+# four tools.
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda b: b.update_ticket(ticket_id=7, fields={"priority": "high"}),
+        lambda b: b.assign_ticket(ticket_id=7, assignee_id=42),
+        lambda b: b.add_internal_note(ticket_id=7, body="hi"),
+        lambda b: b.solve_ticket(ticket_id=7),
+    ],
+    ids=["update_ticket", "assign_ticket", "add_internal_note", "solve_ticket"],
+)
+def test_every_write_tool_converts_html_body_in_its_audit_event(call):
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "audit": {
+                    "events": [{"id": 1, "type": "Comment", "html_body": "<p>hi <em>there</em></p>"}],
+                },
+                "ticket": {"id": 7},
+            },
+        )
+
+    result = call(ApiBackend(_client(handler)))
+    converted = result["audit"]["events"][0]["html_body"]
+    assert "*there*" in converted
+    assert "<em>" not in converted
+
+
+# --- Important 3 (final whole-branch review): RecursionError must not escape ---
+
+
+def test_deeply_nested_html_is_left_unconverted_rather_than_raising():
+    # `to_markdown` recurses through BeautifulSoup's parsed tree; nesting past
+    # ~495 <div>s overflows Python's recursion limit and raises RecursionError
+    # - which IS a RuntimeError, so it matches no branch in server.py's
+    # _on_call_tool except-chain and would otherwise escape this library as a
+    # bare, untyped exception. Caught at the seam so ONE field fails rather
+    # than the whole envelope/call.
+    nested = "<div>" * 1000 + "hi" + "</div>" * 1000
+
+    def handler(request):
+        return httpx.Response(200, json=_comment_html(nested))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert cm["html_body"] == nested  # left unconverted, not blanked
+    assert cm["body"] == "plain"  # untouched - the agent can still read the comment
+    assert cm["hidden_text"] == [
+        "csa-zendesk: html_body could not be converted to Markdown (nested too deeply) - left as raw, unconverted HTML."
+    ]

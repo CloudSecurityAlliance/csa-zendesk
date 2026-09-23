@@ -867,6 +867,42 @@ def test_authenticate_description_says_it_can_take_a_while():
     assert "5 minutes" in t.description or "300" in t.description or "minutes" in t.description.lower()
 
 
+def test_every_tool_whose_envelope_can_carry_html_body_says_so_in_its_description():
+    # Important 4 (final whole-branch review): `grep -i "html\|markdown\|
+    # hidden_text"` over tools.py/server.py/client.py used to return nothing -
+    # the tool descriptions and INSTRUCTIONS are the model's only context, and
+    # neither said `html_body` is Markdown or what a sibling `hidden_text`
+    # array means, so the whole point of Block 2 (surfacing concealed text
+    # instead of dropping it) depended on an interpretation the model was
+    # never given. Extends the one existing test that asserts tool-description
+    # CONTENT (above) rather than adding a parallel one.
+    #
+    # get_ticket/search_tickets/list_comments (reads) and
+    # update_ticket/assign_ticket/add_internal_note/solve_ticket (writes, per
+    # Important 1's fix - their TicketUpdateResponse envelope carries the same
+    # audit.events[].html_body a read does). get_attachment/upload_file/
+    # delete_upload are deliberately excluded: none of their envelopes is a
+    # ticket/comment shape, so html_body never appears in one.
+    names_with_html_body = {
+        "get_ticket",
+        "search_tickets",
+        "list_comments",
+        "update_ticket",
+        "assign_ticket",
+        "add_internal_note",
+        "solve_ticket",
+    }
+    by_name = {t.name: t for t in srv.TOOLS}
+    for name in names_with_html_body:
+        text = by_name[name].description.lower()
+        assert "html_body" in text and "markdown" in text, name
+        assert "hidden_text" in text, name
+
+    for name in ("get_attachment", "upload_file", "delete_upload"):
+        text = by_name[name].description.lower()
+        assert "html_body" not in text, name
+
+
 def test_the_server_instructions_tell_the_model_not_to_retry_or_hunt_for_files():
     text = srv.INSTRUCTIONS.lower()
     assert "authenticate" in text

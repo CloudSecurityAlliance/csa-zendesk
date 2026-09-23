@@ -248,10 +248,36 @@ def _convert_html_bodies(envelope: Envelope) -> Envelope:
     if isinstance(envelope, dict):
         html = envelope.get("html_body")
         if isinstance(html, str):
-            markdown, hidden = _markdown.to_markdown(html)
-            envelope["html_body"] = markdown
-            if hidden:
-                envelope["hidden_text"] = hidden
+            try:
+                markdown, hidden = _markdown.to_markdown(html)
+            except RecursionError:
+                # Important 3 (final whole-branch review): `to_markdown` recurses
+                # through BeautifulSoup's parsed tree, and deeply nested HTML
+                # (measured: ~495 levels of `<div>`) overflows Python's recursion
+                # limit. `RecursionError` IS a `RuntimeError`, so it matches no
+                # branch in `server.py`'s `_on_call_tool` except-chain and would
+                # otherwise escape this library as a bare, untyped exception - a
+                # library consumer gets a crash from `get_ticket`, not a typed
+                # error.
+                #
+                # Fail this ONE field, not the whole envelope: `body` is untouched
+                # by this block (this function never reads or writes it), so the
+                # agent can still read the comment via Zendesk's own plain-text
+                # rendering even when `html_body` cannot be converted.
+                #
+                # `html_body` is left UNCONVERTED (the original raw HTML), not
+                # blanked - and a library-authored note goes in `hidden_text` so a
+                # reader (human or model) can tell "conversion failed, this is raw
+                # HTML below" from "ordinary Markdown", rather than silently
+                # returning something that merely looks like a normal field.
+                envelope["hidden_text"] = [
+                    "csa-zendesk: html_body could not be converted to Markdown (nested too "
+                    "deeply) - left as raw, unconverted HTML."
+                ]
+            else:
+                envelope["html_body"] = markdown
+                if hidden:
+                    envelope["hidden_text"] = hidden
         # `hidden_text` above is added BEFORE this loop starts, not inside it:
         # `.values()` is a live view over the dict, and adding a key to a dict
         # while an iterator over it is active raises `RuntimeError: dictionary
@@ -400,8 +426,17 @@ class ApiBackend:
         # passes through tools.TOOLS at all (ADR-002's public seam). See
         # exc.EmptyWrite's docstring for why a no-op write is not free.
         _refuse_an_empty_update(fields=fields)
-        return self._http.request(
-            "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
+        # Important 1 (final whole-branch review): this call's response is a
+        # `TicketUpdateResponse` (`{audit, ticket}` - specs/zendesk-support-oas.yaml),
+        # and an audit Comment event can carry a fresh `html_body` - a trigger or
+        # automation firing on this very update can author one, so it must be
+        # converted here exactly as it is on every read path. `_convert_html_bodies`
+        # walks the whole envelope, so it finds `audit.events[].html_body` without
+        # this method needing to know that shape specifically.
+        return _convert_html_bodies(
+            self._http.request(
+                "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
+            )
         )
 
     def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
@@ -426,8 +461,12 @@ class ApiBackend:
             fields["assignee_id"] = assignee_id
         if group_id is not None:
             fields["group_id"] = group_id
-        return self._http.request(
-            "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
+        # Important 1 (final whole-branch review): same TicketUpdateResponse shape
+        # and same trigger/automation-authored html_body risk as update_ticket above.
+        return _convert_html_bodies(
+            self._http.request(
+                "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
+            )
         )
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
@@ -472,11 +511,19 @@ class ApiBackend:
         # claimed every `request` caller was a state-setting PUT. That was true
         # when the only callers were GETs and became false in the same branch
         # that wrote it; the claim is corrected there.)
-        return self._http.request(
-            "PUT",
-            f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
-            json={"ticket": {"comment": comment}},
-            idempotent=False,
+        #
+        # Important 1 (final whole-branch review): the response here is the
+        # same TicketUpdateResponse shape as update_ticket/assign_ticket - THIS
+        # note's own audit entry always carries html_body, and any OTHER
+        # trigger/automation firing on the same update could add another. Both
+        # must be converted before they leave this method.
+        return _convert_html_bodies(
+            self._http.request(
+                "PUT",
+                f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
+                json={"ticket": {"comment": comment}},
+                idempotent=False,
+            )
         )
 
     def solve_ticket(self, *, ticket_id: int) -> Envelope:
@@ -492,10 +539,17 @@ class ApiBackend:
         # alone (tools.py) still refuses an extra kwarg with a clean
         # PolicyError before it would otherwise reach this method as a raw
         # TypeError.
-        return self._http.request(
-            "PUT",
-            f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
-            json={"ticket": {"status": "solved"}},
+        #
+        # Important 1 (final whole-branch review): same TicketUpdateResponse
+        # shape and same trigger/automation-authored html_body risk as the
+        # three siblings above - solving a ticket is exactly the kind of
+        # update a trigger fires on.
+        return _convert_html_bodies(
+            self._http.request(
+                "PUT",
+                f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
+                json={"ticket": {"status": "solved"}},
+            )
         )
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
@@ -630,7 +684,11 @@ class FakeBackend:
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
         ticket.update(copy.deepcopy(fields))
-        return {"ticket": copy.deepcopy(ticket)}
+        # Important 1 (final whole-branch review): converted for symmetry with
+        # ApiBackend, even though this fake's canned shape carries no audit
+        # events today - a no-op now, not a promise that stays true if a test
+        # fixture ever puts an html_body in the returned ticket.
+        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
 
     def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
         # Checked first, before the existence lookup below, matching
@@ -646,7 +704,9 @@ class FakeBackend:
             ticket["assignee_id"] = assignee_id
         if group_id is not None:
             ticket["group_id"] = group_id
-        return {"ticket": copy.deepcopy(ticket)}
+        # Important 1 (final whole-branch review): symmetry with ApiBackend -
+        # see update_ticket's fake, just above, for why this is a no-op today.
+        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
         # Checked first, before the existence lookup, matching ApiBackend
@@ -663,7 +723,9 @@ class FakeBackend:
             ticket = self.tickets[ticket_id]
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
-        return {"ticket": copy.deepcopy(ticket)}
+        # Important 1 (final whole-branch review): symmetry with ApiBackend -
+        # see update_ticket's fake, above, for why this is a no-op today.
+        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
 
     def solve_ticket(self, *, ticket_id: int) -> Envelope:
         # Mutates the backing store, like update_ticket/assign_ticket: a
@@ -674,7 +736,9 @@ class FakeBackend:
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
         ticket["status"] = "solved"
-        return {"ticket": copy.deepcopy(ticket)}
+        # Important 1 (final whole-branch review): symmetry with ApiBackend -
+        # see update_ticket's fake, above, for why this is a no-op today.
+        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
         # Canned, like search_tickets/list_comments: an upload is not scoped
