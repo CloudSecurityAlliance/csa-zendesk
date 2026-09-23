@@ -408,6 +408,52 @@ ordinary empty-write refusal every other write tool has: Zendesk *accepts* a zer
 hands back a real, usable-looking token for it, so without this refusal the failure would be
 silent — a token that names an attachment which downloads as nothing.
 
+### `html_body` is Markdown, not HTML
+
+`get_ticket`, `list_comments` and `search_tickets` all convert Zendesk's `html_body` field to
+**Markdown** before it reaches a model (`_markdown.to_markdown`, wired in at the `Backend` seam
+— DEC-018). It is read from `html_body`, never Zendesk's own `body` field: Zendesk's plain-text
+rendering is a naive tag strip that keeps CSS-hidden text as ordinary prose while discarding the
+CSS that would have revealed it was hidden, which is strictly worse than converting the HTML
+ourselves. A comment's Markdown sits under the same `html_body` key as before — the type changed,
+the key did not — and it is still wrapped as untrusted data by `_untrusted.py` exactly like every
+other requester-authored string.
+
+**A sibling `hidden_text` key appears beside `html_body` only when a comment contained text a
+reader would not see** — an element hidden by an inline `display:none`, `visibility:hidden`,
+zero size, zero opacity, or an off-canvas position. That text is removed from the Markdown and
+surfaced separately rather than silently dropped or emitted as ordinary prose, so concealment
+itself is the signal a caller gets to act on. When a comment has no concealed text, there is no
+`hidden_text` key at all — it is never present-but-empty.
+
+**KNOWN GAP: white-on-white hidden text is not detected.** Whether a piece of text visually
+matches its own background needs the ancestor chain's resolved background — the CSS cascade —
+and a rule that only inspects one element's own `style` attribute cannot see it. This is a real,
+open gap, not a footnote: a ticket comment can hide text by setting `color` to match an ancestor's
+`background-color` and this server will not catch it. Pinned by a test so it stays a visible,
+tracked absence rather than a silent one.
+
+**KNOWN LIMIT: the observed zero-width-signature attack (a name with `U+200C` interleaved through
+it) is NOT defanged.** `U+200C` (ZWNJ) is semantic in Persian — می‌رود ("mi-ravad") and میرود are
+different words — and is required for Indic conjuncts and Arabic letter shaping, so it cannot be
+stripped unconditionally without breaking real text in those scripts. Catching that specific
+attack needs a density-based detector (how often the character recurs relative to ordinary use),
+which is deliberately out of scope for this block.
+
+**No homoglyph or mixed-script detection**, and this is a decision with a reason, not an
+oversight: a rule that flags mixed scripts within a word also flags Indigenous orthographies
+(Musqueam contains a Greek theta, because IPA-derived characters are its standard written form)
+and IPA transcriptions — measured at 6 of 8 false positives against legitimate fixtures.
+
+**Only inline `style` attributes are inspected for hidden content.** A `<style>` block's
+selectors need a cascade to resolve against the document, which this module does not build —
+under-reporting concealment there is the honest failure direction, not a claim that no such
+ticket exists.
+
+Also not in this block: classification hooks, attachment content reading, and any alerting on
+concealed or suspicious text. This block converts and reports; it does not decide what to do
+about what it finds.
+
 ## Development
 
 ```bash

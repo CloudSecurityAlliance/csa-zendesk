@@ -26,6 +26,9 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries",
 ]
+# httpx, not requests: the sibling projects use it and it gives us one client type
+# for sync now and async later without a second dependency.
+#
 # markdownify + beautifulsoup4, not markitdown or pandoc: the bakeoff
 # (research/html-to-markdown/) measured all four real converters leaking
 # CSS-hidden text identically, so the choice is fidelity and packaging only.

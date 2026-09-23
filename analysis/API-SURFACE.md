@@ -495,6 +495,30 @@ much tighter — incremental exports really are **10/min**. A limiter that only
 watches `x-rate-limit` will trip the incremental bucket 40× sooner than it
 expects. Both header families must be honoured, and `Retry-After` on 429.
 
+### 5.7 `body`'s plain-text rendering keeps CSS-hidden text and destroys the evidence that it was hidden
+
+A comment carries both `html_body` (the source markup) and `body` (Zendesk's own flattened,
+plain-text rendering of it). `body` looked like the cheaper thing to convert to Markdown from —
+no HTML parsing needed — until it was measured against five CSS-hidden-text shapes, one per
+hiding rule `_markdown.HIDING_RULES` recognises (`display:none`, `visibility:hidden`, zero size,
+zero opacity, off-canvas positioning): **all five survived into `body` as ordinary visible text,
+while the CSS declarations that would have marked them hidden did not.** `body`'s own rendering
+is a naive tag strip, not a CSS-aware renderer — it keeps the payload every hidden element
+carries and throws away the one piece of information (the hiding rule) that would let a reader
+tell concealed text from ordinary text.
+
+That makes `body` **strictly worse than the original HTML** for this project's purposes, not
+merely a lossier alternative: converting `html_body` ourselves (`_markdown.to_markdown`) can
+still see the `style` attribute and split concealed text into `hidden_text`; reading `body`
+instead would silently fold that same text back into ordinary prose with no way to recover which
+part had been hidden. `get_ticket`, `list_comments` and `search_tickets` therefore read
+`html_body` and never `body` — see `src/csa_zendesk/_markdown.py`'s module docstring.
+
+*Recorded from the measurement behind the Block 2 plan (`docs/superpowers/plans/
+2026-09-22-block-2-markdown-and-codepoints.md`), which cites this exact finding as the reason
+`_markdown.py` reads `html_body` and never `body`; the underlying probe detail is not repeated
+here beyond what that module's docstring already states.*
+
 ---
 
 ## 6. What is not machine-readable

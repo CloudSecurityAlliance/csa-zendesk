@@ -78,11 +78,15 @@ response as the last step before it leaves this library, never earlier - no
 live path calls `wrap()` twice on the same value today, and this refusal
 keeps it that way instead of leaving a silent trap for the day one is.
 
-**`html_body` stops being HTML.** Neutralising `<`/`>` turns `<div>` into
-`‹div›` - the wrapped value is no longer parseable markup. That is
-the intended effect (an HTML tag is exactly the kind of structure an
-injection would exploit a model's markup-awareness with), not a bug to fix
-later.
+**`html_body` stops being HTML.** By the time this module ever sees it, `html_body`
+has already been converted to Markdown at the `Backend` seam (`_markdown.to_markdown`,
+Task 4 of the Block 2 plan) - so it stops being HTML there, not here. That is a
+stronger and different reason than an earlier version of this docstring gave: it used
+to credit `_neutralise` turning `<div>` into `‹div›` for the effect, which was true
+back when `html_body` still arrived as raw HTML, but says nothing about the field's
+representation today - `_neutralise` still runs over the (now Markdown) value like
+every other string, but the format change happened upstream, one layer before this
+module runs.
 
 **Pure functions, no I/O.** This module knows nothing about HTTP, tokens, or
 the filesystem - it only reshapes envelopes already in hand. `wrap_ticket`,
@@ -163,23 +167,36 @@ def _neutralise(text: str) -> str:
 
 
 #: Keys expected to carry markup - `_walk_dict` passes `note_on_change=False`
-#: for these (smaller item, final whole-branch review). `html_body` contains a
-#: literal `<` in EVERY comment that has one at all, so `_neutralise` changes
-#: it on essentially every call and the `(neutralised)` note fired on
-#: essentially every comment - noise exactly where a real injection attempt
-#: would arrive, since a genuine escape attempt reads identically to routine
-#: HTML in the note. Chose suppression by key over trying to distinguish
-#: "contained angle brackets" from "contained marker-shaped text": this
-#: module's whole design is CHARACTER-level neutralisation specifically
-#: because substring/pattern matching for marker-shaped text is a disguise an
-#: attacker can defeat (module docstring, "Why character-level neutralisation,
-#: not substring matching") - building a second, pattern-based detector just
-#: for the note would reintroduce that exact class of bypass. A narrow,
-#: explicit, single-purpose key allowlist is consistent with how
-#: `_MACHINE_SET_KEYS` already carves out exceptions by key name, not by
-#: guessing content shape. `plain_body` and `body` are NOT in this set: they
-#: are not expected to carry markup, so a `<`/`>` in either is still worth
-#: flagging.
+#: for these (smaller item, final whole-branch review).
+#:
+#: `html_body` is Markdown by the time it reaches this module (converted at
+#: the `Backend` seam, Task 4 of the Block 2 plan), not the raw HTML this
+#: comment originally described - so the old justification ("contains a
+#: literal `<` in EVERY comment that has one at all") stopped being true the
+#: moment that conversion landed. The suppression is still correct, but for a
+#: different reason: measured converting ten ordinary HTML shapes, 5 of 10
+#: still contain `<` or `>` in their Markdown form. The decisive case is
+#: `<blockquote>` -> `"> q"` - MARKDOWN'S OWN SYNTAX uses `>` for
+#: blockquotes, and a quoted reply in an email chain (most support tickets)
+#: produces exactly that. Code spans and escaped HTML entities preserve
+#: literal `<` the same way. So `_neutralise` still changes `html_body` often
+#: enough that the `(neutralised)` note firing on it would be noise exactly
+#: where a real injection attempt would arrive, since a genuine escape
+#: attempt reads identically to routine Markdown in the note - the same
+#: suppression this comment always recommended, just no longer because
+#: `html_body` is "basically always HTML".
+#:
+#: Chose suppression by key over trying to distinguish "contained angle
+#: brackets" from "contained marker-shaped text": this module's whole design
+#: is CHARACTER-level neutralisation specifically because substring/pattern
+#: matching for marker-shaped text is a disguise an attacker can defeat
+#: (module docstring, "Why character-level neutralisation, not substring
+#: matching") - building a second, pattern-based detector just for the note
+#: would reintroduce that exact class of bypass. A narrow, explicit,
+#: single-purpose key allowlist is consistent with how `_MACHINE_SET_KEYS`
+#: already carves out exceptions by key name, not by guessing content shape.
+#: `plain_body` and `body` are NOT in this set: they are not expected to
+#: carry markup, so a `<`/`>` in either is still worth flagging.
 _MARKUP_KEYS = frozenset({"html_body"})
 
 
@@ -201,10 +218,11 @@ def wrap(text: str, *, source: str, note_on_change: bool = True) -> str:
     which would otherwise be indistinguishable from one. `note_on_change=False`
     (set by `_walk_dict` for keys in `_MARKUP_KEYS`, e.g. `html_body`) suppresses
     that note without suppressing neutralisation itself: a key EXPECTED to carry
-    markup changes on essentially every call, which makes the note fire on
-    essentially every comment and buries the signal exactly where an injection
-    attempt would arrive - see `_MARKUP_KEYS`'s own comment for why this is a
-    key-based allowlist rather than a second content-pattern detector.
+    markup changes often enough in routine use (measured: 5 of 10 ordinary shapes,
+    driven by Markdown's own `>` blockquote syntax) that letting the note fire
+    on every occurrence would bury the signal exactly where an injection attempt
+    would arrive - see `_MARKUP_KEYS`'s own comment for why this is a key-based
+    allowlist rather than a second content-pattern detector.
 
     **Refuses to double-wrap.** Raises `ValueError` when `text` already has
     the exact shape of one of this function's own envelopes - starts with

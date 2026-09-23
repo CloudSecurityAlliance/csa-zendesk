@@ -8,7 +8,7 @@ Reads `html_body` and never `body`. Measured 2026-09-22: Zendesk's own
 plain-text rendering is a naive tag strip - all five CSS-hidden probes survived
 into `body` while the CSS that reveals them did not. The flattened form keeps
 the payload and destroys the evidence, so it is strictly worse than the HTML.
-"""  # noqa: D205
+"""
 
 from __future__ import annotations
 
@@ -68,13 +68,19 @@ _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 #: embeddings suffer, and are ordinary in mixed-direction text. Soft hyphen
 #: (0x00AD) is a legitimate hyphenation hint, invisible unless the renderer
 #: actually breaks there, and ubiquitous in justified text produced by word
-#: processors. The Mongolian vowel separator (0x180E) is legitimate in
-#: Mongolian script.
+#: processors. The Mongolian vowel separator (0x180E) is a format control
+#: that selects Mongolian vowel/letter presentation forms, functionally
+#: similar to ZWNJ - not "legitimate in Mongolian script" on its own, which
+#: states legitimacy without saying what the character does.
 #:
 #: What remains: the Trojan Source bidi-OVERRIDE pair (LRO/RLO reorder how
 #: text renders without reordering the source, which is how `invoice[RLO]
-#: fdp.exe` displays as `invoice.exe`, with no legitimate prose use), a
-#: mid-document BOM, and C0 controls other than tab/LF/CR.
+#: fdp.exe` displays as `invoice.exe`, with no legitimate prose use); U+FEFF,
+#: whose word-joiner role Unicode formally deprecated in version 3.2 (2002)
+#: when it introduced U+2060 (WORD JOINER, above) specifically to take that
+#: role over - so U+FEFF has no SURVIVING legitimate use, unlike U+2060,
+#: which is exactly why one is stripped here and the other is not; and C0
+#: controls other than tab/LF/CR.
 #:
 #: Consequence, not an oversight: this no longer defangs the observed
 #: zero-width-signature attack (U+200C interleaved through a name), because
@@ -84,7 +90,8 @@ _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 #: `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
 _STRIP = (
     {0x202D, 0x202E}  # LEFT-TO-RIGHT OVERRIDE, RIGHT-TO-LEFT OVERRIDE - Trojan Source
-    | {0xFEFF}  # BOM - no legitimate mid-document use
+    | {0xFEFF}  # BOM - word-joiner role deprecated by Unicode 3.2 (2002) in favour
+    #            of U+2060; no surviving legitimate use (contrast U+2060, not stripped)
     | frozenset(c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D))  # controls
 )
 
@@ -104,10 +111,11 @@ def strip_suspicious(text: str) -> str:
     for embedding - they scope directionality without embedding's leakage),
     tag characters (subdivision-flag emoji), soft hyphen (a hyphenation
     hint, invisible unless the renderer actually breaks there), the
-    Mongolian vowel separator (legitimate in Mongolian script), and the WORD
-    JOINER (the functional complement of ZWSP - it suppresses a break rather
-    than permitting one, e.g. binding a number to its unit or holding an
-    abbreviation together). A broader first version of this set stripped
+    Mongolian vowel separator (a format control that selects Mongolian
+    vowel/letter presentation forms, functionally similar to ZWNJ), and the
+    WORD JOINER (the functional complement of ZWSP - it suppresses a break
+    rather than permitting one, e.g. binding a number to its unit or holding
+    an abbreviation together). A broader first version of this set stripped
     ZWSP, ZWNJ, ZWJ, LRM/RLM, bidi EMBEDDING, tag characters, bidi isolates,
     soft hyphen and the Mongolian vowel separator, and was measured to
     damage seven languages/scripts; a second pass added WORD JOINER without
