@@ -262,10 +262,11 @@ def _defang_bodies(envelope: Envelope) -> Envelope:
     consumer does not get.
     """
     if isinstance(envelope, dict):
+        changes: list[dict[str, str]] = []
         html = envelope.get("html_body")
         if isinstance(html, str):
             try:
-                markdown, hidden = _markdown.to_markdown(html)
+                markdown, hidden, stripped = _markdown.to_markdown(html)
             except RecursionError:
                 # Important 3 (final whole-branch review): `to_markdown` recurses
                 # through BeautifulSoup's parsed tree, and deeply nested HTML
@@ -294,13 +295,43 @@ def _defang_bodies(envelope: Envelope) -> Envelope:
                 envelope["html_body"] = markdown
                 if hidden:
                     envelope["hidden_text"] = hidden
+                changes.append(
+                    {
+                        "field": "html_body",
+                        "action": "converted",
+                        "detail": "text/html -> text/markdown",
+                        "rule": "dec-018/convert-on-ingest",
+                    }
+                )
+                if hidden:
+                    changes.append(
+                        {
+                            "field": "html_body",
+                            "action": "removed",
+                            # The COUNT matters and `hidden_text` cannot supply it:
+                            # a reader cannot tell two removed elements from one
+                            # element that happened to contain two paragraphs.
+                            "detail": f"{len(hidden)} concealed element(s), surfaced in hidden_text",
+                            "rule": "hidden-element/inline-style",
+                        }
+                    )
+                for rule in stripped:
+                    changes.append({"field": "html_body", "action": "stripped", "detail": "codepoint(s)", "rule": rule})
         for key in _PLAIN_BODY_KEYS:
             plain = envelope.get(key)
             # `is not None` would still pass an int to `str.translate`. Zendesk
             # returns `null` for some bodies and the audit shape puts non-strings
             # under keys this walk meets, so check the type, not the presence.
             if isinstance(plain, str):
+                for rule in _markdown.rules_fired(plain):
+                    changes.append({"field": key, "action": "stripped", "detail": "codepoint(s)", "rule": rule})
                 envelope[key] = _markdown.strip_suspicious(plain)
+        # Absent when nothing happened (DEC-021). A block on every untouched
+        # record is the cost this project already measured with `hidden_text`,
+        # and silence carrying meaning is the whole point: it is a claim we are
+        # making, not the absence of one.
+        if changes:
+            envelope["transformations"] = changes
         # `hidden_text` above is added BEFORE this loop starts, not inside it:
         # `.values()` is a live view over the dict, and adding a key to a dict
         # while an iterator over it is active raises `RuntimeError: dictionary

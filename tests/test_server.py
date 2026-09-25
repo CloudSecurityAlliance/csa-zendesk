@@ -229,6 +229,16 @@ def test_the_body_note_warns_that_the_plain_text_fields_are_not_equivalent():
     assert "hidden_text" in note
 
 
+def test_the_body_note_tells_a_reader_that_silence_means_untouched():
+    """DEC-021. The absence of `transformations` is a claim, not a gap - but
+    only if something says so. A model that has never been told will read a
+    missing key as "not implemented" rather than "nothing was changed".
+    """
+    note = srv._HTML_BODY_NOTE
+    assert "transformations" in note
+    assert "ABSENT" in note or "absent" in note
+
+
 def test_assign_ticket_declares_both_of_its_side_effects():
     """G5/G4. A one-field call changes three fields; two were never asked for.
 

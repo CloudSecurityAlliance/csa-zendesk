@@ -1168,6 +1168,76 @@ def test_a_body_that_is_not_a_string_is_left_alone():
     assert cm["plain_body"] == 12345
 
 
+def test_a_converted_body_says_it_was_converted():
+    """DEC-021. A tool description is read once, by a model that may not be the
+    one holding this result. The payload is the consumer's only account of what
+    it has, and until now it did not mention that every `html_body` had been
+    rewritten.
+    """
+
+    def handler(request):
+        return httpx.Response(200, json=_comment_html("<p>Hello <strong>world</strong></p>"))
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    (conversion,) = [t for t in cm["transformations"] if t["action"] == "converted"]
+    assert conversion["field"] == "html_body"
+    assert conversion["rule"] == "dec-018/convert-on-ingest"
+    assert "text/html" in conversion["detail"] and "text/markdown" in conversion["detail"]
+
+
+def test_removed_concealed_elements_are_disclosed_with_a_count():
+    """`hidden_text` already says WHAT was concealed. This says it was removed
+    from the body, by which rule, and how many - which `hidden_text` alone does
+    not, because a reader cannot tell a two-element removal from one element
+    containing two paragraphs.
+    """
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json=_comment_html('<p>Hi.</p><div style="display:none">A</div><span style="font-size:0">B</span>'),
+        )
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    (removal,) = [t for t in cm["transformations"] if t["action"] == "removed"]
+    assert removal["rule"] == "hidden-element/inline-style"
+    assert "2" in removal["detail"]
+    assert len(cm["hidden_text"]) == 2
+
+
+def test_stripped_codepoints_name_their_class_not_just_the_fact():
+    """Three classes live in `_STRIP` and they are not the same signal. A
+    Trojan Source override being present is worth a reader's attention; a stray
+    control character is housekeeping. A single "stripped" rule would flatten
+    them into each other.
+    """
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"comments": [{"id": 1, "public": True, "body": "before\u202eafter", "plain_body": "x\u0007y"}]},
+        )
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    by_field = {t["field"]: t for t in cm["transformations"] if t["action"] == "stripped"}
+    assert by_field["body"]["rule"] == "codepoint/bidi-override"
+    assert by_field["plain_body"]["rule"] == "codepoint/control-character"
+
+
+def test_nothing_changed_means_no_disclosure_key_at_all():
+    """DEC-021 is explicit that the block is absent when nothing happened, so
+    silence is a claim rather than the absence of one - and so this does not
+    become another key on every record, which this project has already measured
+    the cost of.
+    """
+
+    def handler(request):
+        return httpx.Response(200, json={"comments": [{"id": 1, "public": True, "body": "ordinary text"}]})
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert "transformations" not in cm
+
+
 def test_the_fake_converts_too():
     # A fake that returned raw HTML would let every markdown assertion pass
     # while doing nothing in production - the reason the fake enforces the

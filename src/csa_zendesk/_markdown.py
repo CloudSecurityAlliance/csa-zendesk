@@ -88,6 +88,32 @@ _HIDDEN = re.compile("|".join(HIDING_RULES), re.I)
 #: Indic text. Catching that needs a density-based detector, deliberately out
 #: of scope here - see
 #: `test_a_zero_width_signature_attack_is_NOT_defanged_by_stripping`.
+#: The three classes in `_STRIP`, kept apart because they are not the same
+#: signal to a reader (DEC-021). A Trojan Source override being present in a
+#: support ticket is worth attention; a stray control character is
+#: housekeeping. Collapsing them into one "stripped" rule would flatten a
+#: finding into a non-finding.
+#:
+#: Ordered most- to least-interesting, and `rules_fired` reports in this order
+#: so the first entry is the one worth reading.
+_STRIP_RULES: tuple[tuple[str, frozenset[int]], ...] = (
+    ("codepoint/bidi-override", frozenset({0x202D, 0x202E})),
+    ("codepoint/byte-order-mark", frozenset({0xFEFF})),
+    ("codepoint/control-character", frozenset(c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D))),
+)
+
+
+def rules_fired(text: str) -> list[str]:
+    """Which `_STRIP` classes are present in `text`, most interesting first.
+
+    Reports what `strip_suspicious` WOULD remove, so a caller can disclose it
+    (DEC-021) without diffing before and after - a diff says a change happened
+    and cannot say which class it belonged to.
+    """
+    present = {ord(ch) for ch in text}
+    return [name for name, points in _STRIP_RULES if present & points]
+
+
 _STRIP = (
     {0x202D, 0x202E}  # LEFT-TO-RIGHT OVERRIDE, RIGHT-TO-LEFT OVERRIDE - Trojan Source
     | {0xFEFF}  # BOM - word-joiner role deprecated by Unicode 3.2 (2002) in favour
@@ -147,7 +173,7 @@ def _soup(html: str) -> BeautifulSoup:
     return BeautifulSoup(html or "", "html.parser")
 
 
-def to_markdown(html: str) -> tuple[str, list[str]]:
+def to_markdown(html: str) -> tuple[str, list[str], list[str]]:
     """Convert `html` to Markdown, separating text a reader would not see.
 
     Returns `(markdown, hidden_texts)`. Hidden text is REMOVED from the Markdown
@@ -180,4 +206,14 @@ def to_markdown(html: str) -> tuple[str, list[str]]:
         element.decompose()
 
     markdown = MarkdownConverter().convert_soup(soup)
-    return strip_suspicious(markdown.strip()), [strip_suspicious(t) for t in hidden_texts]
+    cleaned = markdown.strip()
+    # Report against the CONVERTED text, not the source HTML. A codepoint inside
+    # a `<script>` never reaches the output - it went with the decomposed
+    # element - so reporting from the source would claim a strip that did not
+    # happen.
+    fired = rules_fired(cleaned) + [r for t in hidden_texts for r in rules_fired(t)]
+    return (
+        strip_suspicious(cleaned),
+        [strip_suspicious(t) for t in hidden_texts],
+        sorted(set(fired), key=lambda r: [n for n, _ in _STRIP_RULES].index(r)),
+    )

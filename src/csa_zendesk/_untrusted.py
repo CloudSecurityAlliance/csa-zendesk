@@ -181,7 +181,7 @@ def _neutralise(text: str) -> str:
     return text.translate(_ANGLE_BRACKETS)
 
 
-def _build_envelope(text: str, *, source: str, note_on_change: bool) -> str:
+def _build_envelope(text: str, *, source: str) -> str:
     """Neutralise and delimit `text`/`source` - `wrap()`'s body, minus its
     structural double-wrap refusal.
 
@@ -204,50 +204,40 @@ def _build_envelope(text: str, *, source: str, note_on_change: bool) -> str:
     """
     safe_text = _neutralise(text)
     safe_source = _neutralise(source).replace("\n", " ").replace("\r", " ")
-    changed = safe_text != text or safe_source != source
-    note = " (neutralised)" if changed and note_on_change else ""
+    # A COUNT, not a flag (DEC-021). The bare `(neutralised)` was suppressed on
+    # markup-bearing keys because it fired on nearly every comment and said
+    # nothing actionable - which was right for a flag carrying no information,
+    # and does not survive a decision that a modification must be disclosed.
+    # Frequency was never the problem; emptiness was. One changed character is a
+    # quoted reply; forty-seven is worth a look; the count distinguishes them and
+    # the flag never could.
+    # `strict=True` is a real assertion, not a lint appeasement: `_neutralise`
+    # is a character-for-character `translate`, so the lengths cannot differ
+    # today. If that ever stops being true, a silently truncated `zip` would
+    # UNDER-COUNT the disclosure - the failure direction that matters - and this
+    # raises instead.
+    changed = sum(a != b for a, b in zip(text, safe_text, strict=True)) + sum(
+        a != b for a, b in zip(source, safe_source, strict=True)
+    )
+    note = f" (neutralised: {changed} character{'' if changed == 1 else 's'})" if changed else ""
     return f"{MARKER_OPEN} source={safe_source}{note}\n{safe_text}\n{MARKER_CLOSE}"
 
 
-#: Keys expected to carry markup - `_walk_dict` passes `note_on_change=False`
-#: for these (smaller item, final whole-branch review).
+#: REMOVED (DEC-021, 2026-09-25). `_MARKUP_KEYS` held `html_body` for one
+#: purpose: suppressing the `(neutralised)` note on the field most likely to
+#: contain a legitimate `>`, because Markdown uses it for blockquotes and a
+#: quoted reply appears in most support tickets. The note fired on nearly every
+#: comment and said nothing a reader could act on.
 #:
-#: `html_body` is Markdown by the time it reaches this module (converted at
-#: the `Backend` seam, Task 4 of the Block 2 plan), not the raw HTML this
-#: comment originally described - so the old justification ("contains a
-#: literal `<` in EVERY comment that has one at all") stopped being true the
-#: moment that conversion landed. The suppression is still correct, but for a
-#: different reason - and Minor 1 (final whole-branch review) dropped the
-#: unverifiable "5 of 10 ordinary shapes" count this comment used to cite:
-#: nothing in the test suite checked it, so it was prose, not a running
-#: check. The load-bearing mechanism, still true and now pinned by
-#: `tests/test_untrusted.py::test_wrap_comments_does_not_flag_ordinary_markup_as_suspicious`
-#: (which exercises it directly rather than restating a count): `<blockquote>`
-#: -> `"> q"` - MARKDOWN'S OWN SYNTAX uses `>` for
-#: blockquotes, and a quoted reply in an email chain (most support tickets)
-#: produces exactly that. Code spans and escaped HTML entities preserve
-#: literal `<` the same way. So `_neutralise` still changes `html_body` often
-#: enough that the `(neutralised)` note firing on it would be noise exactly
-#: where a real injection attempt would arrive, since a genuine escape
-#: attempt reads identically to routine Markdown in the note - the same
-#: suppression this comment always recommended, just no longer because
-#: `html_body` is "basically always HTML".
-#:
-#: Chose suppression by key over trying to distinguish "contained angle
-#: brackets" from "contained marker-shaped text": this module's whole design
-#: is CHARACTER-level neutralisation specifically because substring/pattern
-#: matching for marker-shaped text is a disguise an attacker can defeat
-#: (module docstring, "Why character-level neutralisation, not substring
-#: matching") - building a second, pattern-based detector just for the note
-#: would reintroduce that exact class of bypass. A narrow, explicit,
-#: single-purpose key allowlist is consistent with how `_MACHINE_SET_KEYS`
-#: already carves out exceptions by key name, not by guessing content shape.
-#: `plain_body` and `body` are NOT in this set: they are not expected to
-#: carry markup, so a `<`/`>` in either is still worth flagging.
-_MARKUP_KEYS = frozenset({"html_body"})
+#: That reasoning was right for a FLAG and does not survive a decision that a
+#: modification must be disclosed. The note now carries a count, which is
+#: informative at any frequency - one changed character is a quoted reply,
+#: forty-seven is worth a look - so there is nothing left to suppress and no
+#: key-based exception to maintain. Frequency was never the problem; emptiness
+#: was.
 
 
-def wrap(text: str, *, source: str, note_on_change: bool = True) -> str:
+def wrap(text: str, *, source: str) -> str:
     """Delimit `text` as untrusted content originating at `source`.
 
     `source` names where the text came from (e.g. `zendesk-ticket-42.subject`)
@@ -301,7 +291,7 @@ def wrap(text: str, *, source: str, note_on_change: bool = True) -> str:
             "rather than frame anything new. Wrap each value exactly once, at the last point "
             "before it leaves this library."
         )
-    return _build_envelope(text, source=source, note_on_change=note_on_change)
+    return _build_envelope(text, source=source)
 
 
 def _walk_list(node: list[Any], *, path: str) -> list[Any]:
@@ -327,7 +317,7 @@ def _walk_list(node: list[Any], *, path: str) -> list[Any]:
             # `_build_envelope`, not `wrap()`: see Important 2 in the module
             # docstring - a list item carries no key, so `note_on_change`
             # always fires here, matching `wrap()`'s own default.
-            result.append(_build_envelope(item, source=item_path, note_on_change=True))
+            result.append(_build_envelope(item, source=item_path))
         else:
             result.append(item)
     return result
@@ -350,11 +340,7 @@ def _walk_dict(node: dict[str, Any], *, path: str) -> dict[str, Any]:
         elif isinstance(value, str):
             # `_build_envelope`, not `wrap()`: see Important 2 in the module
             # docstring.
-            result[key] = (
-                value
-                if _is_machine_set(key)
-                else _build_envelope(value, source=child_path, note_on_change=key not in _MARKUP_KEYS)
-            )
+            result[key] = value if _is_machine_set(key) else _build_envelope(value, source=child_path)
         else:
             # int, float, bool, None - never wrapped; there is no key check
             # that would apply to a non-string value in the first place.
