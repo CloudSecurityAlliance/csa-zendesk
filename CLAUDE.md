@@ -2,6 +2,8 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
+
+**Fleet decisions**: [DECISIONS-INHERITED.md](DECISIONS-INHERITED.md) records which cross-project decisions this server adopted, and the two it deliberately deviates from. Check it before assuming a fleet default applies here.
 ## What this repository is
 
 `csa-zendesk` — a Python library (import name `csa_zendesk`) and local stdio MCP server over

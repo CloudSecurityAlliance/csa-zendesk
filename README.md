@@ -475,6 +475,13 @@ Also not in this block: classification hooks, attachment content reading, and an
 concealed or suspicious text. This block converts and reports; it does not decide what to do
 about what it finds.
 
+## Fleet decisions
+
+Which cross-project decisions this server has adopted, which it has not assessed, and the two places
+it deliberately **deviates** — with the reasoning and what would bring it back — are in
+[DECISIONS-INHERITED.md](DECISIONS-INHERITED.md). Decisions this project made for itself are in
+[DECISIONS-ADR/](DECISIONS-ADR/).
+
 ## Development
 
 ```bash
