@@ -327,14 +327,18 @@ TOOLS: dict[str, ToolSpec] = {
     "reply_publicly": ToolSpec(
         "ticket.reply", reach=True, subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_force_public(True)
     ),
-    # NOTE (Task 3 correction): same reasoning as add_internal_note just
-    # above. `Backend.solve_ticket(*, ticket_id: int)` takes no `status`
-    # parameter - solving is the only thing this call can do, by
-    # construction - so `_status("solved")` (which requires and validates a
-    # `status` key) would reject every real call. `_status` is unchanged and
-    # stays in use by `close_ticket` below, whose Backend method does not
-    # exist yet.
-    "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only()),
+    # NOTE (Task 3 correction, extended by F7): `Backend.solve_ticket` takes no
+    # `status` parameter - solving is the only thing this call can do - so
+    # `_status("solved")` (which requires and validates a `status` key) would
+    # reject every real call. `_status` is unchanged and stays in use by
+    # `close_ticket` below, whose Backend method does not exist yet.
+    #
+    # `custom_fields` is permitted because a tenant whose ticket form marks
+    # fields required-on-solve refuses every solve without them (F7, measured
+    # twice). It does NOT make the status negotiable: `status` is absent from
+    # this allowlist, so a caller naming it is still refused here, before the
+    # backend that hardcodes `solved` is ever reached.
+    "solve_ticket": ToolSpec("ticket.solve", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("custom_fields")),
     "close_ticket": ToolSpec("ticket.close", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_status("closed")),
     # ticket.merge, not ticket.close (fix wave C1): POST .../merge accepts
     # source_comment_is_public/target_comment_is_public, the same reach mechanism

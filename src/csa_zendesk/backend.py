@@ -246,6 +246,20 @@ def _refuse_a_filename_without_extension(*, filename: str) -> None:
 _PLAIN_BODY_KEYS = ("body", "plain_body")
 
 
+def _is_required_on_solve(error: exc.ValidationError) -> bool:
+    """Is this 422 the tenant's form demanding fields at solve time?
+
+    Matched on Zendesk's own wording rather than on a field name, because the
+    fields are tenant configuration - naming them here would both leak this
+    tenant's form into a public repository and break on every other tenant.
+    """
+    return any(
+        "required when solving" in str(problem.get("description", "")).lower()
+        for problems in error.problems.values()
+        for problem in problems
+    )
+
+
 def _defang_bodies(envelope: Envelope) -> Envelope:
     """Convert every `html_body` to Markdown and strip the plain-text siblings.
 
@@ -377,7 +391,7 @@ class Backend(Protocol):
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope: ...
 
-    def solve_ticket(self, *, ticket_id: int) -> Envelope: ...
+    def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope: ...
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope: ...
 
@@ -580,31 +594,63 @@ class ApiBackend:
             )
         )
 
-    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+    def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope:
         # Same operation and path as update_ticket/assign_ticket -
         # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
         # /api/v2/tickets/{ticket_id},UpdateTicket,Update Ticket,,,yes.
         #
-        # No `status` parameter, unlike update_ticket's allowlist or
-        # assign_ticket's allowlist over two optional fields: solving is the
-        # only thing this call can do, by construction - there is nothing
-        # here for a caller to choose, so there is nothing to force or
-        # refuse. `tools.TOOLS["solve_ticket"]`'s allowlist over `ticket_id`
-        # alone (tools.py) still refuses an extra kwarg with a clean
-        # PolicyError before it would otherwise reach this method as a raw
-        # TypeError.
+        # No `status` PARAMETER, and that remains the invariant: `solved` is
+        # hardcoded below for the same reason `add_internal_note` hardcodes
+        # `public: false` - the tool's whole identity is that one effect, so a
+        # caller must not be able to choose otherwise.
+        #
+        # `custom_fields` is NOT a relaxation of it (F7). A tenant whose ticket
+        # form marks fields required-on-solve refuses every solve that omits
+        # them, so this method could not solve ANY ticket on such a tenant -
+        # measured twice, on two fixtures, byte-identical refusals. The caller
+        # supplies data Zendesk demands; it does not choose what the call does.
+        # The status stays forced and the form's requirements travel beside it.
         #
         # Important 1 (final whole-branch review): same TicketUpdateResponse
         # shape and same trigger/automation-authored html_body risk as the
         # three siblings above - solving a ticket is exactly the kind of
         # update a trigger fires on.
-        return _defang_bodies(
-            self._http.request(
-                "PUT",
-                f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
-                json={"ticket": {"status": "solved"}},
+        try:
+            return _defang_bodies(
+                self._http.request(
+                    "PUT",
+                    f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
+                    # Spread AFTER the forced status so a caller-supplied key
+                    # could never overwrite it, and `custom_fields` is the only
+                    # thing that can be added at all.
+                    json={
+                        "ticket": {
+                            "status": "solved",
+                            **({"custom_fields": custom_fields} if custom_fields else {}),
+                        }
+                    },
+                )
             )
-        )
+        except exc.ValidationError as e:
+            # Zendesk's own message is accurate and says nothing about THIS
+            # tool: a caller reading "Department: is required when solving a
+            # ticket" has no way to know `custom_fields` is the argument that
+            # fixes it. Measured (F7): a model asked to solve a ticket discovers
+            # the pairing only by failing first.
+            #
+            # DEC-020's shape - a refusal names what tripped AND what would
+            # proceed. Re-raised rather than swallowed, with `problems` carried
+            # through so a programmatic caller can still read the field map, and
+            # chained with `from e` so the original diagnostic survives.
+            if not _is_required_on_solve(e):
+                raise
+            raise exc.ValidationError(
+                "Zendesk refused to solve this ticket because its form requires fields that were "
+                "not supplied. Pass them as `custom_fields` on this same call - a list of "
+                "{'id': <field id>, 'value': <value>} - rather than setting them separately first. "
+                "The field ids come from this tenant's ticket form",
+                problems=e.problems,
+            ) from e
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Attachments,POST,
@@ -781,7 +827,7 @@ class FakeBackend:
         # see update_ticket's fake, above, for why this is a no-op today.
         return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
-    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+    def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope:
         # Mutates the backing store, like update_ticket/assign_ticket: a
         # caller needs to see the ticket read back as solved on a subsequent
         # get_ticket, the same way the real API would show it.
@@ -790,6 +836,11 @@ class FakeBackend:
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
         ticket["status"] = "solved"
+        if custom_fields:
+            # Mirrors ApiBackend: the fake has to accept what the real one
+            # accepts, or a test passes against a double that ignores the
+            # argument the whole fix exists to add.
+            ticket["custom_fields"] = custom_fields
         # Important 1 (final whole-branch review): symmetry with ApiBackend -
         # see update_ticket's fake, above, for why this is a no-op today.
         return _defang_bodies({"ticket": copy.deepcopy(ticket)})

@@ -118,14 +118,18 @@ class ZendeskClient:
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.add_internal_note(ticket_id=ticket_id, body=body, uploads=uploads))
 
-    def solve_ticket(self, *, ticket_id: int) -> Envelope:
+    def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope:
         """Mark a ticket solved, as the raw upstream envelope: `{"ticket": {...}}`.
 
-        Sets `status=solved` and nothing else - `Backend.solve_ticket` takes
-        no other parameter, so there is nothing else this call could change.
+        `status=solved` is forced and cannot be changed through this call.
+
+        `custom_fields` carries the fields a tenant's ticket form requires at
+        solve time (F7): without it this method could not solve any ticket on
+        such a tenant. Supplying data Zendesk demands is not the same as
+        choosing what the call does, so the status stays forced.
         """
         # See get_ticket's comment above on why this needs an explicit cast.
-        return cast(Envelope, self._backend.solve_ticket(ticket_id=ticket_id))
+        return cast(Envelope, self._backend.solve_ticket(ticket_id=ticket_id, custom_fields=custom_fields))
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
         """Upload a file's bytes, as the raw upstream envelope: `{"upload": {"token": ...}}`.
