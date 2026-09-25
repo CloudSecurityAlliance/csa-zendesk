@@ -1,7 +1,12 @@
 """Receiving the authorization code.
 
 A one-shot loopback listener for the ordinary case, and a paste fallback for a
-remote shell where no browser can reach this machine (ADR-009).
+remote shell whose browser is on a different machine (ADR-009).
+
+Both paths require a browser. OAuth's consent screen is where a human proves
+who they are, and on an account with passkeys or biometrics that is the point
+rather than an obstacle - there is no headless path that preserves it. What
+`paste` changes is WHICH machine holds the browser, never whether one exists.
 
 Every prompt goes to the stream the caller passes, which is stderr in practice.
 Under stdio MCP, stdout is the JSON-RPC channel: a print() here would corrupt
@@ -176,8 +181,10 @@ class Listener:
                 f"no callback arrived within {timeout:.0f}s, so the login window has closed "
                 f"and the browser link is now dead - completing sign-in in that tab will show "
                 f"a connection error rather than finishing. Run `authenticate` again to get a "
-                f"fresh link, and complete it within {timeout:.0f}s. If this machine has no "
-                f"browser, use the paste fallback instead."
+                f"fresh link, and complete it within {timeout:.0f}s. A browser is required - "
+                f"if none can open on this machine, run `csa-zendesk auth login --paste` in a "
+                f"terminal instead and finish sign-in in a browser elsewhere; all surfaces share "
+                f"the same credential file, so that fixes this session too."
             )
         if self._error is not None:
             raise CallbackError(self._error)

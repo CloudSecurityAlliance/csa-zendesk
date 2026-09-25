@@ -583,8 +583,13 @@ AUTH_TOOLS: list[mcp_types.Tool] = [
     mcp_types.Tool(
         name="authenticate",
         description=(
-            "Run the OAuth login flow and store the resulting credential. Opens a browser for "
-            "the user to sign in, then reports the authenticated identity and granted scope - "
+            "Run the OAuth login flow and store the resulting credential. REQUIRES A BROWSER on "
+            "this machine - it opens one for the user to sign in, and there is no headless path, "
+            "because the consent screen is where a human proves who they are (a passkey or "
+            "biometric step cannot be automated away). If no browser can open here, tell the user "
+            "to run `csa-zendesk auth login --paste` in a terminal and finish sign-in in a browser "
+            "elsewhere; every surface shares one credential file, so that fixes this session too. "
+            "Reports the authenticated identity and granted scope - "
             "never the token itself. This call blocks for up to 5 minutes waiting for the user "
             "to complete sign-in in the browser - tell the user to check for a new browser tab "
             "while you wait, rather than treating a long-running call as stuck. TELL THE USER "
