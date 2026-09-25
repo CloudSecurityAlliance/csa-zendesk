@@ -1098,6 +1098,76 @@ def test_a_ticket_description_is_converted_too():
     assert "<p>" not in t["html_body"]
 
 
+def test_body_and_plain_body_are_stripped_of_suspicious_codepoints():
+    """H5. `html_body` is converted; these two ride along beside it, undefended.
+
+    They carry Zendesk's own plain-text rendering, which keeps a Trojan Source
+    override exactly as the sender wrote it. Measured live in F2: the U+202E
+    was stripped from `html_body` while the same character survived in both of
+    these. A model reads whichever field it likes, so defanging one of three
+    renderings is defanging none.
+    """
+    rlo = "\u202e"
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "comments": [
+                    {
+                        "id": 1,
+                        "public": True,
+                        "html_body": f"<p>before{rlo}after</p>",
+                        "body": f"before{rlo}after",
+                        "plain_body": f"before{rlo}after",
+                    }
+                ]
+            },
+        )
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert rlo not in cm["html_body"], "html_body regressed"
+    assert rlo not in cm["body"], "body still carries the override"
+    assert rlo not in cm["plain_body"], "plain_body still carries the override"
+    assert cm["body"] == "beforeafter"
+
+
+def test_stripping_body_leaves_ordinary_non_english_text_untouched():
+    """The strip must be invisible on real prose, including non-English prose.
+
+    Persian ZWNJ is semantic, an emoji ZWJ sequence is one glyph, and an
+    accented Latin character is ordinary. None may be touched. This is the set
+    `_STRIP` was narrowed to after an earlier version damaged seven legitimate
+    cases, and the narrowing is the point: a strip that mangles Persian to
+    catch an attack nobody has sent is a bad trade.
+    """
+    ordinary = "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 caf\u00e9 \U0001f469\u200d\U0001f4bb"
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"comments": [{"id": 1, "public": True, "body": ordinary, "plain_body": ordinary}]},
+        )
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert cm["body"] == ordinary
+    assert cm["plain_body"] == ordinary
+
+
+def test_a_body_that_is_not_a_string_is_left_alone():
+    """Zendesk returns `null` for some bodies; the strip must not crash on one."""
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"comments": [{"id": 1, "public": True, "body": None, "plain_body": 12345}]},
+        )
+
+    cm = ApiBackend(_client(handler)).list_comments(ticket_id=1)["comments"][0]
+    assert cm["body"] is None
+    assert cm["plain_body"] == 12345
+
+
 def test_the_fake_converts_too():
     # A fake that returned raw HTML would let every markdown assertion pass
     # while doing nothing in production - the reason the fake enforces the

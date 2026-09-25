@@ -230,8 +230,24 @@ def _refuse_a_filename_without_extension(*, filename: str) -> None:
         )
 
 
-def _convert_html_bodies(envelope: Envelope) -> Envelope:
-    """Replace every `html_body` in `envelope` with Markdown, in place.
+#: Zendesk's own plain-text renderings of a comment. Stripped, never converted.
+#:
+#: These are the vendor's output and this library does not rewrite them into
+#: something Zendesk did not return - so the hidden text they carry inline stays
+#: inline. That concealment evidence is Zendesk's to lose (it discards the CSS
+#: and keeps the text; measured in F2), and reconstructing it from a naive tag
+#: strip is not possible. What IS removed is the codepoint class `strip_suspicious`
+#: names, because those have no legitimate use in prose and no reading of the
+#: vendor's intent makes an unpaired bidi override meaningful.
+#:
+#: H5, from F2: before this, `html_body` was defanged while these two rode along
+#: beside it carrying the same `U+202E` untouched. A model reads whichever field
+#: it likes, so defanging one of three renderings is defanging none.
+_PLAIN_BODY_KEYS = ("body", "plain_body")
+
+
+def _defang_bodies(envelope: Envelope) -> Envelope:
+    """Convert every `html_body` to Markdown and strip the plain-text siblings.
 
     Walks the whole envelope rather than naming ticket/comment shapes, because
     `html_body` appears on tickets, comments, audit events and search results,
@@ -278,6 +294,13 @@ def _convert_html_bodies(envelope: Envelope) -> Envelope:
                 envelope["html_body"] = markdown
                 if hidden:
                     envelope["hidden_text"] = hidden
+        for key in _PLAIN_BODY_KEYS:
+            plain = envelope.get(key)
+            # `is not None` would still pass an int to `str.translate`. Zendesk
+            # returns `null` for some bodies and the audit shape puts non-strings
+            # under keys this walk meets, so check the type, not the presence.
+            if isinstance(plain, str):
+                envelope[key] = _markdown.strip_suspicious(plain)
         # `hidden_text` above is added BEFORE this loop starts, not inside it:
         # `.values()` is a live view over the dict, and adding a key to a dict
         # while an iterator over it is active raises `RuntimeError: dictionary
@@ -286,10 +309,10 @@ def _convert_html_bodies(envelope: Envelope) -> Envelope:
         # already done by the time the loop below opens its iterator, so the
         # dict's size is stable for the whole walk.
         for value in envelope.values():
-            _convert_html_bodies(value)
+            _defang_bodies(value)
     elif isinstance(envelope, list):
         for item in envelope:
-            _convert_html_bodies(item)
+            _defang_bodies(item)
     return envelope
 
 
@@ -345,7 +368,7 @@ class ApiBackend:
         # ShowTicket), whose own response example's `url` field also omits it.
         # Only the unrelated Countries family carries a .json suffix anywhere in
         # the inventory; it is not a general convention to imitate here.
-        return _convert_html_bodies(self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}"))
+        return _defang_bodies(self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}"))
 
     def search_tickets(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Search,GET,/api/v2/search,
@@ -373,7 +396,7 @@ class ApiBackend:
         # never match anything - narrowed to nothing, never widened to users. A
         # caller cannot make this tool's bucket bigger by asking twice.
         constrained_query = f"{query} type:ticket"
-        return _convert_html_bodies(
+        return _defang_bodies(
             self._http.get("/api/v2/search", params={"query": constrained_query, "page": page, "per_page": per_page})
         )
 
@@ -389,7 +412,7 @@ class ApiBackend:
         # than 100 comments silently omits its newest ones here. This method
         # does not add a paging parameter the brief did not ask for; a caller
         # reading a long ticket must not assume the result is complete.
-        return _convert_html_bodies(self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}/comments"))
+        return _defang_bodies(self._http.get(f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}/comments"))
 
     def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
@@ -430,10 +453,10 @@ class ApiBackend:
         # `TicketUpdateResponse` (`{audit, ticket}` - specs/zendesk-support-oas.yaml),
         # and an audit Comment event can carry a fresh `html_body` - a trigger or
         # automation firing on this very update can author one, so it must be
-        # converted here exactly as it is on every read path. `_convert_html_bodies`
+        # converted here exactly as it is on every read path. `_defang_bodies`
         # walks the whole envelope, so it finds `audit.events[].html_body` without
         # this method needing to know that shape specifically.
-        return _convert_html_bodies(
+        return _defang_bodies(
             self._http.request(
                 "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
             )
@@ -463,7 +486,7 @@ class ApiBackend:
             fields["group_id"] = group_id
         # Important 1 (final whole-branch review): same TicketUpdateResponse shape
         # and same trigger/automation-authored html_body risk as update_ticket above.
-        return _convert_html_bodies(
+        return _defang_bodies(
             self._http.request(
                 "PUT", f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}", json={"ticket": fields}
             )
@@ -517,7 +540,7 @@ class ApiBackend:
         # note's own audit entry always carries html_body, and any OTHER
         # trigger/automation firing on the same update could add another. Both
         # must be converted before they leave this method.
-        return _convert_html_bodies(
+        return _defang_bodies(
             self._http.request(
                 "PUT",
                 f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
@@ -544,7 +567,7 @@ class ApiBackend:
         # shape and same trigger/automation-authored html_body risk as the
         # three siblings above - solving a ticket is exactly the kind of
         # update a trigger fires on.
-        return _convert_html_bodies(
+        return _defang_bodies(
             self._http.request(
                 "PUT",
                 f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
@@ -639,7 +662,7 @@ class FakeBackend:
 
     def get_ticket(self, *, ticket_id: int) -> Envelope:
         try:
-            return _convert_html_bodies({"ticket": copy.deepcopy(self.tickets[ticket_id])})
+            return _defang_bodies({"ticket": copy.deepcopy(self.tickets[ticket_id])})
         except KeyError:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
 
@@ -649,23 +672,23 @@ class FakeBackend:
         # It still enforces the same 1000-result ceiling `ApiBackend` does: a
         # fake that let this through would pass tests the real API rejects.
         #
-        # Wrapped in `_convert_html_bodies` for symmetry with `ApiBackend`, even
+        # Wrapped in `_defang_bodies` for symmetry with `ApiBackend`, even
         # though the canned envelope below carries no `html_body` today - this
         # is a no-op now, not a promise that stays true if the canned shape
         # ever grows one.
         _refuse_past_search_ceiling(page=page, per_page=per_page)
-        return _convert_html_bodies({"results": [], "count": 0})
+        return _defang_bodies({"results": [], "count": 0})
 
     def list_comments(self, *, ticket_id: int) -> Envelope:
         # Canned, like search_tickets: this fake does not maintain a per-ticket
         # comment store. It does share get_ticket's existence check against
         # self.tickets, so a ticket_id nothing has ever heard of still raises
         # NotFound rather than a silent, misleadingly-empty conversation.
-        # Wrapped in `_convert_html_bodies` for the same symmetry reason as
+        # Wrapped in `_defang_bodies` for the same symmetry reason as
         # search_tickets above - a no-op today.
         if ticket_id not in self.tickets:
             raise exc.NotFound(f"no such record (ticket {ticket_id})")
-        return _convert_html_bodies({"comments": []})
+        return _defang_bodies({"comments": []})
 
     def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope:
         # Mutates the backing store, unlike search_tickets/list_comments'
@@ -688,7 +711,7 @@ class FakeBackend:
         # ApiBackend, even though this fake's canned shape carries no audit
         # events today - a no-op now, not a promise that stays true if a test
         # fixture ever puts an html_body in the returned ticket.
-        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
+        return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
     def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
         # Checked first, before the existence lookup below, matching
@@ -706,7 +729,7 @@ class FakeBackend:
             ticket["group_id"] = group_id
         # Important 1 (final whole-branch review): symmetry with ApiBackend -
         # see update_ticket's fake, just above, for why this is a no-op today.
-        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
+        return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
         # Checked first, before the existence lookup, matching ApiBackend
@@ -725,7 +748,7 @@ class FakeBackend:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
         # Important 1 (final whole-branch review): symmetry with ApiBackend -
         # see update_ticket's fake, above, for why this is a no-op today.
-        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
+        return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
     def solve_ticket(self, *, ticket_id: int) -> Envelope:
         # Mutates the backing store, like update_ticket/assign_ticket: a
@@ -738,7 +761,7 @@ class FakeBackend:
         ticket["status"] = "solved"
         # Important 1 (final whole-branch review): symmetry with ApiBackend -
         # see update_ticket's fake, above, for why this is a no-op today.
-        return _convert_html_bodies({"ticket": copy.deepcopy(ticket)})
+        return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
         # Canned, like search_tickets/list_comments: an upload is not scoped
