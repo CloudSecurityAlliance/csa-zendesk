@@ -193,9 +193,19 @@ already do.
 
 ### Getting a token
 
+**OAuth needs a browser, and that is not a limitation to engineer around.** The consent screen is
+where a human proves who they are, and on an account with passkeys, biometrics or an SSO step
+that is *the point* — there is no headless path that preserves it, and inventing one would mean
+asking for a weaker credential than the account deserves. So: a browser is a requirement, stated
+once here rather than apologised for repeatedly below.
+
+What `--paste` changes is **which machine** the browser is on, not whether there is one. On a
+remote shell it prints the URL, you complete sign-in in the browser on your own laptop — passkey
+and all — and paste the redirect back. The browser is still doing the work.
+
 `csa-zendesk` (`src/csa_zendesk/cli.py`) is a small console script, a door into OAuth rather than
-a product: `auth login` runs the flow once and persists the result — opening a browser, or
-printing a URL to paste back with `--paste` on a remote shell with no browser of its own —
+a product: `auth login` runs the flow once and persists the result — opening a browser, or with
+`--paste` printing a URL for a browser elsewhere to finish —
 `auth status` reports whether a token file exists, its path, its expiry and its granted scope
 without a network call, `auth whoami` confirms live which Zendesk identity it resolves to, and
 `auth logout` revokes the stored token server-side and then clears the local file. All four print
@@ -371,9 +381,16 @@ time — `_cmd_authenticate`, defaulting to `read` — which is why widening it 
 
 **There is no separate login step to run first.** `authenticate`, `auth_status` and `logout` are
 themselves tools, reachable from inside the session at every rung — including before this one
-has a working credential — so a user who is logged out, or whose credential has lapsed, never
-has to leave Claude Code to fix it: the server's own instructions tell the model to call
-`authenticate` the moment another tool reports it is not authorized. `logout` sits alongside them
+has a working credential — so a user who is logged out, or whose credential has lapsed, fixes it
+from inside Claude Code: the server's own instructions tell the model to call `authenticate` the
+moment another tool reports it is not authorized.
+
+The one case that leaves the session is **a machine where no browser can open** — a container, a
+bare remote shell. `authenticate` cannot offer the `--paste` path, because reading pasted input
+means reading `sys.stdin`, which under stdio MCP is the JSON-RPC channel itself. Run
+`csa-zendesk auth login --paste` in a terminal instead and finish sign-in in a browser wherever
+you have one; the CLI and the server read the same credential file, so the session picks it up
+with no further action. `logout` sits alongside them
 rather than being left to the CLI, per [ADR-017](DECISIONS-ADR/ADR-017.md) — a surface that can
 acquire a credential must also expose a way to relinquish it, reachable at least as easily as the
 tool that acquires it.
