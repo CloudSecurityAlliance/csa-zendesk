@@ -84,7 +84,31 @@ picks whichever field it likes. On this fixture, two of the three choices are wr
 Worth noting the failure is *silent* under all three today: nothing currently warns a reader that
 `body` may contain concealed text. Whatever is chosen, that sentence is the minimum.
 
-## Finding 3 — `html_body` is neutralised without being labelled neutralised
+## Finding 3 — WITHDRAWN: the missing `(neutralised)` label is deliberate
+
+*(Corrected 2026-09-24, the same day it was filed. The measurement below stands; the conclusion
+drawn from it was wrong. Left in place rather than deleted, because the mistake is the instructive
+part.)*
+
+`_MARKUP_KEYS = frozenset({"html_body"})`, and `_walk_dict` passes `note_on_change=False` for those
+keys. Two tests pin it. The reasoning sits in the source beside the definition, and it is the same
+reasoning that rejected a colour rule for hidden text:
+
+> `html_body` is Markdown; Markdown uses `>` for blockquotes; a quoted reply appears in most support
+> tickets. So the note would fire on nearly **every** comment — noise exactly where a real injection
+> attempt would arrive, since a genuine escape attempt reads identically to routine Markdown.
+
+**A signal that fires constantly is not a signal.**
+
+The lesson is not that the measurement was sloppy — it was reproduced offline with identical input
+to both fields, and it is correct. It is that *"the code does not do X"* and *"the code should do
+X"* are different claims, and only the first one was measured. The second was assumed, in a file
+whose neighbouring comment answers it in full — a comment this same session had already read while
+closing a different residual.
+
+What follows is the original finding, unedited.
+
+### Original finding — `html_body` is neutralised without being labelled neutralised
 
 The provenance marker appends `(neutralised)` when markup characters in a field were altered. On
 the live response, `body` was labelled; `html_body` was not — **though both had been altered.**

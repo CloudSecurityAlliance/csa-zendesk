@@ -166,8 +166,17 @@ class Listener:
         self._server.timeout = timeout
         self._server.handle_request()
         if not self._got_request:
+            # Says the link is DEAD, not merely that we stopped waiting (#48).
+            # The listener closes here, so a sign-in completed after this point
+            # redirects to a socket nobody is bound to and the browser reports
+            # "can't connect to the server" - which reads as a broken machine
+            # rather than an expired attempt. Observed: that error surfaced long
+            # afterwards with nothing connecting it back to this timeout.
             raise CallbackError(
-                f"no callback arrived within {timeout:.0f}s. If this machine has no "
+                f"no callback arrived within {timeout:.0f}s, so the login window has closed "
+                f"and the browser link is now dead - completing sign-in in that tab will show "
+                f"a connection error rather than finishing. Run `authenticate` again to get a "
+                f"fresh link, and complete it within {timeout:.0f}s. If this machine has no "
                 f"browser, use the paste fallback instead."
             )
         if self._error is not None:

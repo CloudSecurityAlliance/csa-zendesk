@@ -215,6 +215,75 @@ def test_get_ticket_refuses_every_ticket_when_the_read_allowlist_is_unset(monkey
         srv.call_tool_sync("get_ticket", {"ticket_id": 44821})
 
 
+def test_the_body_note_warns_that_the_plain_text_fields_are_not_equivalent():
+    """H5. The note is the only thing telling a model which field is safe.
+
+    `html_body` has concealed text removed; `body` and `plain_body` do not, and
+    on a real ticket they carry it inline reading like ordinary prose. Nothing
+    in the payload distinguishes them, so if this sentence is ever shortened
+    away the warning goes with it and the failure is silent.
+    """
+    note = srv._HTML_BODY_NOTE
+    assert "`body` and `plain_body`" in note, "the note no longer names the unsafe fields"
+    assert "NOT equivalent" in note, "the note no longer says they differ"
+    assert "hidden_text" in note
+
+
+def test_assign_ticket_declares_both_of_its_side_effects():
+    """G5/G4. A one-field call changes three fields; two were never asked for.
+
+    ADR-016 splits tools so each one's blast radius is legible. A tool that
+    silently reassigns queue ownership is not legible, so the description has
+    to carry what the audit showed.
+    """
+    spec = next(tool for tool in srv.TOOLS if tool.name == "assign_ticket")
+    assert "group" in spec.description, "the group_id side effect is undocumented"
+    assert "`open`" in spec.description, "the status side effect is undocumented"
+    assert "ONE-WAY" in spec.description, "the one-way door is undocumented"
+
+
+@pytest.mark.parametrize("tool", [t.name for t in srv.TOOLS])
+def test_every_tool_refuses_an_argument_it_does_not_declare(tool):
+    """#51. Parameterised over the registry, not written per tool.
+
+    The lesson from the unknown-tool-name case is that this is exactly the kind
+    of guard someone writes once and that then silently stops covering tools
+    added later. Driving it from `TOOLS` means a new tool is covered the day it
+    is registered, with nobody remembering to extend a list.
+    """
+    with pytest.raises(ValueError, match="unexpected"):
+        srv.call_tool_sync(tool, {"definitely_not_a_real_argument": 1})
+
+
+def test_the_refusal_names_both_the_offender_and_what_is_accepted():
+    """A refusal a caller cannot act on is a dead end."""
+    with pytest.raises(ValueError) as caught:
+        srv.call_tool_sync("get_ticket", {"fields": ["id"], "ticket_id": 1})
+    message = str(caught.value)
+    assert "fields" in message, "the offending argument is not named"
+    assert "ticket_id" in message, "the accepted arguments are not named"
+
+
+def test_the_accepted_set_comes_from_the_schema_not_a_hand_written_list():
+    """So the check and the declaration cannot drift apart.
+
+    A hand-written copy of each tool's parameters would be a second source of
+    truth that nothing reconciles - the shape this project has paid for before.
+    """
+    spec = next(t for t in srv.TOOLS if t.name == "update_ticket")
+    declared = set(spec.input_schema["properties"])
+    with pytest.raises(ValueError) as caught:
+        srv.call_tool_sync("update_ticket", {"nope": 1})
+    for name in declared:
+        assert name in str(caught.value)
+
+
+def test_an_unknown_argument_to_an_unknown_tool_reports_the_tool_not_the_argument():
+    """Two things are wrong; report the one the caller must fix first."""
+    with pytest.raises(ValueError, match="unknown tool"):
+        srv.call_tool_sync("delete_everything", {"bogus": 1})
+
+
 def test_an_unknown_tool_name_is_an_error_not_a_crash():
     with pytest.raises(ValueError, match="unknown tool"):
         srv.call_tool_sync("delete_everything", {})
@@ -581,6 +650,45 @@ def test_auth_status_never_returns_a_token(monkeypatch):
     out = srv.call_tool_sync("auth_status", {})
     assert "AT-SECRET" not in out and "RT-SECRET" not in out
     assert "read" in out
+
+
+def test_auth_status_says_a_working_credential_is_working(monkeypatch):
+    """#47. The bug was reporting "expired" while the credential worked.
+
+    The access token's clock is not the credential's clock: an expired access
+    token refreshes silently on the next call. Reporting the first as if it
+    were the second sent a reader to re-authenticate needlessly, which is how a
+    dead callback link came to exist.
+    """
+    from csa_zendesk.auth import _store
+
+    monkeypatch.setattr(
+        srv.auth,
+        "read",
+        lambda: _store.Tokens(access_token="AT", refresh_token="RT", expires_at=0.0, scope="read"),
+    )
+    out = srv.call_tool_sync("auth_status", {})
+    assert out.startswith("Authenticated"), "a refreshable credential is reported as not working"
+    assert "no action is needed" in out
+    assert "refreshed automatically" in out
+
+
+def test_auth_status_does_not_claim_to_know_whether_the_refresh_token_is_valid(monkeypatch):
+    """`Tokens` stores no refresh-token expiry, so this is genuinely unknowable.
+
+    Saying so is the point. A status tool that overstates its certainty is the
+    same defect it was just fixed for, one level up.
+    """
+    from csa_zendesk.auth import _store
+
+    monkeypatch.setattr(
+        srv.auth,
+        "read",
+        lambda: _store.Tokens(access_token="AT", refresh_token="RT", expires_at=0.0, scope="read"),
+    )
+    out = srv.call_tool_sync("auth_status", {})
+    assert "cannot be determined without a network call" in out
+    assert "run `authenticate`" in out, "no remedy given for the case where refresh does fail"
 
 
 def test_auth_status_when_logged_out_says_so_rather_than_failing(monkeypatch):
