@@ -130,18 +130,107 @@ and it is pure padding.
 
 ---
 
+## The write half, same day
+
+`CSA_ZD_ALLOWLIST_WRITE` was set to this ticket alone and the server restarted. First check: a write
+to an id *outside* the allowlist, which refused before any API call and named the variable to
+change. The allowlist was loaded and scoping.
+
+### Finding 5 — `add_internal_note` forces `public: false` on a ticket that defaults to public. Confirmed on the live audit.
+
+This is the test the fixture was chosen for. On an email-originated ticket the first comment is
+public, and `comment.public` **inherits from it** — so on this ticket, a comment that does not
+force otherwise is emailed to the requester. The hardcoded `public: false` in
+`add_internal_note` is the only thing standing in the way.
+
+Zendesk's own audit event for the note:
+
+```
+"type": "Comment",  "public": false
+```
+
+Read from the audit event Zendesk returned, not from our own request and not from `FakeBackend` —
+which is the point. Until now that literal was verified only against a double that was told what to
+say. **The control holds.**
+
+Worth stating plainly: a fixture whose comments default to *private* could not have tested this. It
+would have passed whether the control existed or not.
+
+### Finding 6 — `assign_ticket` changes three fields, and only one was asked for
+
+F1 recorded that assignment silently moves `status` `new`→`open`. The audit for a single
+`assign_ticket(assignee_id=…)` call shows **three** changes:
+
+| field | previous | new | asked for? |
+|---|---|---|---|
+| `assignee_id` | null | the agent | **yes** |
+| `group_id` | one group | **a different group** | **no** |
+| `status` | `new` | `open` | **no** |
+
+The `group_id` change is new — F1 never saw it, and nothing in the tool description mentions it.
+Assigning to an agent moved the ticket into that agent's group, which is Zendesk behaviour, not
+ours. But it means a tool presented as *"set the assignee"* reassigns queue ownership as a side
+effect, and on a tenant that routes by group that is a visible, potentially disruptive change
+nobody requested.
+
+This matters more here than it would elsewhere. ADR-016 splits tools so each is
+`(operation × constrained arguments)` — `assign_ticket` exists as its own tool *precisely* so its
+blast radius is legible. A tool with two undocumented side effects is not legible, and the split
+bought less than it appeared to.
+
+Both side effects belong in the tool description. G4 already asks for the `status` one; `group_id`
+is added to it here.
+
+### Finding 7 — G4's one-way door, confirmed live
+
+Both halves refuse, both with accurate messages:
+
+- `update_ticket(fields={"assignee_id": None})` → refused by the field allowlist, which names the
+  nine editable fields and says assignment has its own tool.
+- `assign_ticket()` with neither argument → refused as an empty write, on the grounds that it would
+  spend the tenant's write-rate budget and land in the audit log having changed nothing.
+
+Each refusal is right on its own terms. Together they mean **assignment at rung E2 cannot be
+undone by this tool**, which is what G4 records. Confirmed rather than reasoned, now.
+
+### Finding 8 — `solve_ticket` fails identically on an email-originated ticket
+
+Zendesk refused it, naming **two required custom fields** that must be set before any ticket on
+this tenant can be solved. (The field names are tenant configuration and stay out of this
+repository; they are in the operator's own notes.)
+
+Byte-for-byte the refusal F1 got on a different fixture. So the requirement is **tenant form
+configuration, not a property of the ticket type** — which narrows it usefully: `solve_ticket`
+cannot solve *any* ticket on this tenant as built.
+
+There is a path, and it is worth recording because it is not obvious: both required fields are
+custom fields, and `update_ticket`'s allowlist *does* include `custom_fields`. So solving is
+`update_ticket(custom_fields=…)` followed by `solve_ticket` — two tools, in order. Nothing in
+either tool's description says so, and a model asked to "solve this ticket" has no way to discover
+it except by failing first.
+
+### Observation — the operator's IP and location ride on every write
+
+Every write audit carries `metadata.system.ip_address`, `location`, latitude and longitude. On
+reads (Finding, above) this was the *requester's*; on writes it is the **operator's own machine**.
+It is Zendesk's record and the tool is right to pass it through unaltered, but it means running
+this server writes the operator's approximate physical location into model context on every call.
+Worth a deliberate decision rather than a default, and it is the same decision as the read-side one.
+
 ## What was left changed
 
-The test ticket, still open. It was not worked through the write surface: `CSA_ZD_ALLOWLIST_WRITE`
-is unset, so every write correctly refused — the allowlist doing exactly its job (F3). Exercising
-the write path on this fixture needs the id registered by hand first, which is a separate run.
+The test ticket, now **assigned, moved to the assigning agent's group, status `open`**, and
+carrying one internal note. It could not be solved (Finding 8), so it is left open deliberately.
+
+F3 is done: the id was registered in `CSA_ZD_ALLOWLIST_WRITE` by hand, which is the operator-granted
+half of the allowlist doing its job, and the read/write asymmetry held — `READ=*` for triage,
+`WRITE=` this one id.
 
 ## What F2 did not cover
 
-- The write path on an email-originated ticket, and specifically the `comment.public` inheritance
-  trap: on this fixture the first comment **is** public, so every later comment defaults to public
-  unless forced. That is the sharpest possible test of `add_internal_note`'s hardcoded
-  `public: false`, and it remains untested live. It needs F3 done first.
-- `reply_publicly` / `merge_tickets` (E5, G2) and `close_ticket` (G1) — still unbuilt.
+- `reply_publicly` / `merge_tickets` (E5, G2) and `close_ticket` (G1) — still unbuilt, so the one
+  thing never yet exercised end to end is a comment that actually reaches a customer.
+- Whether the `group_id` side effect (Finding 6) is disruptive on this tenant. It changed queue
+  ownership on a test ticket nobody routes; on a live ticket it may matter considerably more.
 - Hidden text arriving via a `<style>` block rather than an inline attribute (H2). The fixture used
   inline styles only, so H2 is unchanged by this run: still an open, untested gap.
