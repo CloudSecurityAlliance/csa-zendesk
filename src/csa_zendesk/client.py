@@ -123,6 +123,17 @@ class ZendeskClient:
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.add_internal_note(ticket_id=ticket_id, body=body, uploads=uploads))
 
+    def reply_publicly(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        """Reply PUBLICLY: an email to the requester that cannot be unsent.
+
+        Same shape as `add_internal_note`, with `public` forced to `True`
+        instead of `False` in the backend. There is no `public` parameter here
+        either - the asymmetry between these two methods is which tool you
+        called, never an argument you passed.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.reply_publicly(ticket_id=ticket_id, body=body, uploads=uploads))
+
     def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope:
         """Mark a ticket solved, as the raw upstream envelope: `{"ticket": {...}}`.
 

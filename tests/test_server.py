@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from csa_zendesk import server as srv
+from csa_zendesk.policy import TICKET_REPLY
 
 
 def test_the_read_tools_are_exactly_the_four_read_tools():
@@ -315,6 +316,23 @@ def test_solve_ticket_declares_the_pairing_a_model_would_otherwise_find_by_faili
     assert "status" not in spec.input_schema["properties"], "status must not be settable here"
 
 
+def test_reply_publicly_dispatches_through_the_client(monkeypatch):
+    """The dispatch path, exercised once - and with reach granted, since
+    without it the tool is not offered at all.
+    """
+    monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "true")
+    seen = {}
+
+    class _Client:
+        def reply_publicly(self, *, ticket_id, body, uploads=None):
+            seen.update(ticket_id=ticket_id, body=body, uploads=uploads)
+            return {"ticket": {"id": ticket_id}}
+
+    monkeypatch.setattr(srv, "_client", lambda: _Client())
+    srv.call_tool_sync("reply_publicly", {"ticket_id": 7, "body": "resolved"})
+    assert seen == {"ticket_id": 7, "body": "resolved", "uploads": None}
+
+
 def test_an_unknown_tool_name_is_an_error_not_a_crash():
     with pytest.raises(ValueError, match="unknown tool"):
         srv.call_tool_sync("delete_everything", {})
@@ -521,8 +539,27 @@ def test_serve_wires_build_server_to_stdio(monkeypatch):
 # --- Task 6: authentication from inside the server -------------------------
 
 
-def test_the_auth_tools_are_exactly_authenticate_auth_status_and_logout():
-    assert {t.name for t in srv.AUTH_TOOLS} == {"authenticate", "auth_status", "logout"}
+def test_the_auth_tools_are_exactly_the_four_credential_questions():
+    """Four, since `whoami` joined them: can I act, what may I do, WHO AM I, and
+    how do I stop.
+
+    `auth_status` answers the first two from disk with no network call, which is
+    precisely why it cannot answer the third - and at rung E5 this server can
+    email a customer under that identity, so "who am I acting as?" stopped being
+    a curiosity.
+    """
+    assert {t.name for t in srv.AUTH_TOOLS} == {"authenticate", "auth_status", "whoami", "logout"}
+
+
+def test_whoami_wraps_the_identity_it_reports(monkeypatch):
+    """Name and email are requester-settable strings on a Zendesk user record.
+    Being *about the caller* does not make them trustworthy, so they are wrapped
+    like any other untrusted value.
+    """
+    monkeypatch.setattr(srv.auth, "whoami", lambda: {"id": 1, "name": "A <b>", "email": "a@example.org"})
+    out = srv.call_tool_sync("whoami", {})
+    assert out.startswith(srv._untrusted.MARKER_OPEN)
+    assert "<b>" not in out
 
 
 def test_tools_is_read_tools_plus_write_tools_plus_auth_tools():
@@ -1138,13 +1175,39 @@ def test_solve_ticket_is_annotated_non_destructive_and_idempotent():
     assert t.annotations.idempotent_hint is True
 
 
-def test_reply_publicly_and_merge_and_close_are_not_registered():
-    # Reach (E5) and irreversibility are separate rungs from E2. A tool a
-    # model can see but must not use is worse than an absent one (task brief).
-    names = {t.name for t in srv.TOOLS}
-    assert "reply_publicly" not in names
+def test_merge_and_close_are_still_not_registered_anywhere():
+    """`merge_tickets` irreversibly closes tickets it was not asked about (C8)
+    and `closed` is terminal. Neither has earned a rung.
+    """
+    names = {t.name for t in srv.TOOLS + srv.REACH_TOOLS}
     assert "merge_tickets" not in names
     assert "close_ticket" not in names
+
+
+def test_reply_publicly_is_invisible_until_reach_is_granted(monkeypatch):
+    """The Block 1 principle, kept while adding the tool it was written about:
+    *a tool a model can see but must not use is worse than an absent one.*
+
+    Registering it unconditionally would put a customer-reaching tool in front
+    of every model on every install, refused by a gate it cannot see - which
+    invites retry-until-it-works, the exact behaviour the gate exists to stop.
+    """
+    monkeypatch.delenv("CSA_ZD_ALLOW_REACH", raising=False)
+    assert "reply_publicly" not in {t.name for t in srv._visible_tools()}
+
+    monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "true")
+    assert "reply_publicly" in {t.name for t in srv._visible_tools()}
+
+
+def test_visibility_capability_and_gate_never_disagree(monkeypatch):
+    """All three follow the same grant, so there is no state where a model can
+    see the tool but the capability was not requested, or vice versa.
+    """
+    for granted in (False, True):
+        monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "true" if granted else "false")
+        visible = "reply_publicly" in {t.name for t in srv._visible_tools()}
+        requested = TICKET_REPLY in srv._requested_capabilities()
+        assert visible is granted and requested is granted
 
 
 def test_e2_capabilities_is_e1_plus_the_four_write_capabilities():

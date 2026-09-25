@@ -181,16 +181,18 @@ from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from . import __version__, _untrusted, auth
+from . import __version__, _untrusted, auth, policy
 from . import exceptions as exc
 from ._connect import connect
 from .client import ZendeskClient
-from .policy import TICKET_ATTACH, TICKET_NOTE, TICKET_READ, TICKET_SOLVE, TICKET_WRITE
+from .policy import TICKET_ATTACH, TICKET_NOTE, TICKET_READ, TICKET_REPLY, TICKET_SOLVE, TICKET_WRITE
 
 __all__ = [
     "AUTH_TOOLS",
     "E1_CAPABILITIES",
     "E2_CAPABILITIES",
+    "E5_CAPABILITIES",
+    "REACH_TOOLS",
     "INSTRUCTIONS",
     "READ_TOOLS",
     "TOOLS",
@@ -251,6 +253,23 @@ E1_CAPABILITIES: frozenset[str] = frozenset({TICKET_READ})
 #: mistake.
 E2_CAPABILITIES: frozenset[str] = E1_CAPABILITIES | {TICKET_WRITE, TICKET_NOTE, TICKET_SOLVE, TICKET_ATTACH}
 
+#: Rung E5 (whole-project design §5): "replies reach customers." Adds
+#: `TICKET_REPLY` over E2 and nothing else - `TICKET_MERGE` and `TICKET_CLOSE`
+#: stay out, because merge irreversibly closes tickets it was not asked about
+#: (C8) and `closed` is terminal.
+#:
+#: **Granting this capability is necessary and deliberately not sufficient.**
+#: `TICKET_REPLY` is in `policy.REACH_CAPABILITIES`, so `assert_reach_permitted`
+#: additionally requires `CSA_ZD_ALLOW_REACH=true`, which no profile can grant -
+#: and the ticket must still be named in `CSA_ZD_ALLOWLIST_WRITE`. Three
+#: controls, three places, because a public reply cannot be unsent.
+#:
+#: The server requests this set only when reach is enabled (`_requested()`
+#: below), so an install that never sets `CSA_ZD_ALLOW_REACH` asks for no more
+#: authority than it did at E2 - the capability is not merely unused there, it
+#: is not requested.
+E5_CAPABILITIES: frozenset[str] = E2_CAPABILITIES | {TICKET_REPLY}
+
 
 def _client() -> ZendeskClient:
     """A thin indirection so tests substitute a fake client here.
@@ -269,7 +288,23 @@ def _client() -> ZendeskClient:
     the point in the file where the server actually moves from rung E1 to
     rung E2, not merely where the tools are listed.
     """
-    return connect(capabilities=E2_CAPABILITIES)
+    return connect(capabilities=_requested_capabilities())
+
+
+def _visible_tools() -> list[mcp_types.Tool]:
+    """What a model is offered: E2 always, plus reach tools where granted."""
+    return TOOLS + REACH_TOOLS if policy.reach_permitted() else TOOLS
+
+
+def _requested_capabilities() -> frozenset[str]:
+    """E2 normally; E5 only where reach has actually been granted.
+
+    Asking for `TICKET_REPLY` on an install that will never use it would make
+    every such install carry authority it does not need, which is the opposite
+    of what the rung ladder is for. The capability follows the grant rather
+    than the other way round.
+    """
+    return E5_CAPABILITIES if policy.reach_permitted() else E2_CAPABILITIES
 
 
 #: `solve_ticket` takes the ticket id plus, optionally, the custom fields a
@@ -623,7 +658,53 @@ _NO_ARGS_SCHEMA: dict[str, Any] = {
 #: `auth_status` only reads the local file, with no network call at all;
 #: `logout` is the one destructive, idempotent, open-world write in this
 #: server.
+#: Rung E5, kept OUT of `TOOLS` and surfaced only when reach is granted.
+#:
+#: The principle this follows is the one Block 1 wrote down: *a tool a model
+#: can see but must not use is worse than an absent one.* Registering
+#: `reply_publicly` unconditionally would put a customer-reaching tool in front
+#: of every model on every install, refused by a gate it cannot see - which
+#: invites exactly the retry-until-it-works behaviour the gate exists to stop.
+#:
+#: So visibility follows the grant: with `CSA_ZD_ALLOW_REACH=true` the tool
+#: appears AND the capability is requested AND the gate passes; without it, all
+#: three are false together. There is no state where one of them disagrees.
+REACH_TOOLS: list[mcp_types.Tool] = [
+    mcp_types.Tool(
+        name="reply_publicly",
+        description=(
+            "Reply to a ticket PUBLICLY. This sends an email to the requester and anyone CC'd, "
+            "and it CANNOT BE UNSENT. Same arguments as add_internal_note, with the one word that "
+            "matters inverted: that tool's comment is private to agents, this one's is not. If you "
+            "are unsure which you want, you want add_internal_note. Requires CSA_ZD_ALLOW_REACH "
+            "and the ticket must be named in CSA_ZD_ALLOWLIST_WRITE." + _HTML_BODY_NOTE
+        ),
+        input_schema=_ADD_INTERNAL_NOTE_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=False,
+            # Not destructive - it adds rather than discards - but emphatically
+            # not idempotent: a replay emails the customer a second time.
+            destructive_hint=False,
+            idempotent_hint=False,
+            # The one tool here whose effect leaves this organisation.
+            open_world_hint=True,
+        ),
+    ),
+]
+
+
 AUTH_TOOLS: list[mcp_types.Tool] = [
+    mcp_types.Tool(
+        name="whoami",
+        description=(
+            "Which Zendesk identity this credential resolves to, and on which tenant - id, name, "
+            "email and role. Makes a live call, unlike auth_status, which reads only what is on "
+            "disk and so cannot say whose credential it is. Ask this before any write if you need "
+            "to know who the action will be attributed to."
+        ),
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
+    ),
     mcp_types.Tool(
         name="authenticate",
         description=(
@@ -815,6 +896,31 @@ def _cmd_auth_status() -> str:
     )
 
 
+def _cmd_whoami() -> str:
+    """Which identity this credential actually resolves to, and on which tenant.
+
+    `auth_status` deliberately makes no network call, so it can say a
+    credential exists and what it may do, but never **whose** it is. A model
+    asked "who am I acting as?" had no way to answer - which matters here more
+    than it would elsewhere, because at rung E5 this server can email a
+    customer, and the name on that email is this identity.
+
+    The subdomain is included because it is not a secret from the person the
+    credential belongs to: they see it in every URL they use to reach the same
+    tenant. It stays out of the repository, which is a different audience -
+    `check_public_safe.py` guards that boundary and this does not cross it.
+
+    Name and email are requester-settable strings on a Zendesk user record, so
+    they are wrapped as untrusted like any other - being about the caller does
+    not make them trustworthy.
+    """
+    identity = auth.whoami()
+    parts = [f"{k}: {identity[k]}" for k in ("id", "name", "email", "role") if k in identity]
+    where = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
+    tenant = f" on {where}.zendesk.com" if where else ""
+    return _untrusted.wrap("; ".join(parts), source=f"zendesk-whoami{tenant}")
+
+
 def _cmd_logout() -> str:
     """Revoke the stored credential, reporting each of `auth.logout()`'s
     three outcomes distinctly, and treating a failed revoke as a genuine
@@ -893,7 +999,7 @@ def _refuse_unknown_arguments(name: str, arguments: dict[str, Any]) -> None:
     The rule was written, published to every client, and enforced by nothing -
     a declaration is not a control until something reads it.
     """
-    spec = next((tool for tool in TOOLS if tool.name == name), None)
+    spec = next((tool for tool in TOOLS + REACH_TOOLS if tool.name == name), None)
     if spec is None:
         # Unknown tool name - the existing check below owns that error, and
         # answering it here would report the wrong problem.
@@ -967,6 +1073,8 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         return _cmd_authenticate()
     if name == "auth_status":
         return _cmd_auth_status()
+    if name == "whoami":
+        return _cmd_whoami()
     if name == "logout":
         return _cmd_logout()
     if name not in {
@@ -977,6 +1085,7 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         "update_ticket",
         "assign_ticket",
         "add_internal_note",
+        "reply_publicly",
         "solve_ticket",
         "upload_file",
         "delete_upload",
@@ -1011,6 +1120,11 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
             assignee_id=arguments.get("assignee_id"),
             group_id=arguments.get("group_id"),
             unassign=bool(arguments.get("unassign", False)),
+        )
+        return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
+    if name == "reply_publicly":
+        envelope = client.reply_publicly(
+            ticket_id=arguments["ticket_id"], body=arguments["body"], uploads=arguments.get("uploads")
         )
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
     if name == "add_internal_note":
@@ -1057,7 +1171,7 @@ async def _on_list_tools(
     context: Any,
     params: mcp_types.PaginatedRequestParams | None,
 ) -> mcp_types.ListToolsResult:
-    return mcp_types.ListToolsResult(tools=TOOLS)
+    return mcp_types.ListToolsResult(tools=_visible_tools())
 
 
 #: `exceptions.ZendeskError` subclasses whose message is, at EVERY raise site

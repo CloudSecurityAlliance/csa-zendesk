@@ -319,11 +319,25 @@ def test_add_internal_note_permits_only_body_and_uploads():
         tools.TOOLS["add_internal_note"].check({"ticket_id": 1, "body": "note", "public": True})
 
 
-def test_reply_publicly_forces_public_true_and_is_flagged_for_reach():
-    kwargs = {"ticket_id": 1, "comment": {"body": "hello"}}
+def test_reply_publicly_has_no_public_key_to_force_and_is_flagged_for_reach():
+    """The constraint moved from overwriting to absence when the Backend method
+    was built (E5).
+
+    It used to take a `comment` dict and set `public` inside it. The real method
+    is flat, so `public` is not a key anything can supply - which is the
+    stronger guarantee, and the one `add_internal_note` already had. Taking the
+    weaker one for the tool that can reach a customer would have been backwards.
+    """
+    kwargs = {"ticket_id": 1, "body": "hello"}
     tools.TOOLS["reply_publicly"].check(kwargs)
-    assert kwargs["comment"]["public"] is True
+    assert "public" not in kwargs, "public must not be reachable from the tool layer at all"
     assert tools.TOOLS["reply_publicly"].reach is True
+
+
+def test_reply_publicly_refuses_a_caller_who_names_public():
+    """The absence has to be enforced, not merely relied on."""
+    with pytest.raises(exc.PolicyError, match="public"):
+        tools.TOOLS["reply_publicly"].check({"ticket_id": 1, "body": "hi", "public": False})
 
 
 def test_reply_publicly_and_merge_tickets_reach_a_person():
@@ -376,9 +390,13 @@ def test_create_ticket_permits_no_comment_at_all():
 # --- coverage: the remaining check() branches ---------------------------------
 
 
-def test_reply_publicly_requires_a_comment_object():
-    with pytest.raises(exc.PolicyError, match="comment"):
-        tools.TOOLS["reply_publicly"].check({"ticket_id": 1})
+def test_reply_publicly_takes_the_same_shape_as_an_internal_note():
+    """Same arguments, one word inverted, deliberately - so a model that can
+    write an internal note can write a public reply without learning a second
+    shape, and the only difference between them is the one that matters.
+    """
+    assert tools.TOOLS["reply_publicly"].check({"ticket_id": 1, "body": "hi", "uploads": ["t"]}) is None
+    assert tools.TOOLS["add_internal_note"].check({"ticket_id": 1, "body": "hi", "uploads": ["t"]}) is None
 
 
 def test_solve_ticket_permits_only_ticket_id():

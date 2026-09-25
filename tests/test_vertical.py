@@ -1,5 +1,7 @@
 """The point of Block 0: one method, every layer, no network."""
 
+import json
+
 import httpx
 import pytest
 
@@ -99,3 +101,42 @@ def test_the_fake_backend_path_works_through_the_full_client():
     # The offline tier, through the same ZendeskClient API, no transport at all.
     c = ZendeskClient(PolicyBackend(FakeBackend({7: {"id": 7, "subject": "offline"}}), Policy.from_profile("default")))
     assert c.get_ticket(ticket_id=7) == {"ticket": {"id": 7, "subject": "offline"}}
+
+
+def test_a_public_reply_needs_the_capability_the_reach_grant_and_the_allowlist(monkeypatch):
+    """The whole vertical for the one tool that leaves the building.
+
+    Three controls in three places, and none of them is sufficient alone -
+    which is the point, because a public reply cannot be unsent.
+    """
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 7}})
+
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "7")
+
+    # 1. capability granted, reach NOT granted -> refused
+    monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "false")
+    c = build(handler, policy=Policy(capabilities=frozenset({"ticket.reply"})))
+    with pytest.raises(exc.PolicyError, match="CSA_ZD_ALLOW_REACH"):
+        c.reply_publicly(ticket_id=7, body="hello")
+
+    # 2. reach granted, capability NOT granted -> still refused
+    monkeypatch.setenv("CSA_ZD_ALLOW_REACH", "true")
+    c = build(handler, policy=Policy(capabilities=frozenset({"ticket.note"})))
+    with pytest.raises(exc.PolicyError):
+        c.reply_publicly(ticket_id=7, body="hello")
+
+    # 3. both granted, but the ticket is outside the write allowlist -> refused
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "999")
+    c = build(handler, policy=Policy(capabilities=frozenset({"ticket.reply"})))
+    with pytest.raises(exc.PolicyError):
+        c.reply_publicly(ticket_id=7, body="hello")
+
+    # 4. all three -> the call goes out, public
+    monkeypatch.setenv("CSA_ZD_ALLOWLIST_WRITE", "7")
+    c = build(handler, policy=Policy(capabilities=frozenset({"ticket.reply"})))
+    c.reply_publicly(ticket_id=7, body="hello")
+    assert sent["ticket"]["comment"]["public"] is True
