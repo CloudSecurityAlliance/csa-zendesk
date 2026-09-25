@@ -22,7 +22,7 @@ _HIDING_STYLES = (
 
 
 def test_basic_html_becomes_markdown():
-    md, hidden = to_markdown("<p>Hello <strong>world</strong></p>")
+    md, hidden, _ = to_markdown("<p>Hello <strong>world</strong></p>")
     assert "Hello" in md and "**world**" in md
     assert "<p>" not in md
     assert hidden == []
@@ -31,7 +31,7 @@ def test_basic_html_becomes_markdown():
 def test_links_keep_their_destination():
     # Dropping the href was the reason "just use Zendesk's plain body" was
     # rejected: a mailto: or https: target is often the thing an agent needs.
-    md, _ = to_markdown('<p>See <a href="https://example.invalid/d">the doc</a>.</p>')
+    md, _, _ = to_markdown('<p>See <a href="https://example.invalid/d">the doc</a>.</p>')
     assert "https://example.invalid/d" in md
     assert "the doc" in md
 
@@ -45,13 +45,13 @@ def test_element_in_never_rendered_does_not_survive(tag):
     # before this, which means the two members that are NOT load-bearing were
     # the only ones tested. Parametrizing over every member closes that.
     marker = f"MARKER_{tag.upper()}"
-    md, _ = to_markdown(f"<p>hi</p><{tag}>{marker}</{tag}>")
+    md, _, _ = to_markdown(f"<p>hi</p><{tag}>{marker}</{tag}>")
     assert marker not in md
 
 
 def test_empty_and_absent_html_are_not_errors():
     for value in ("", "   "):
-        md, hidden = to_markdown(value)
+        md, hidden, _ = to_markdown(value)
         assert md.strip() == ""
         assert hidden == []
 
@@ -63,14 +63,14 @@ def test_empty_and_absent_html_are_not_errors():
 def test_malformed_html_does_not_raise(html):
     # Real ticket HTML is mail-client output. BeautifulSoup tolerates this;
     # the transform must not add a failure mode BeautifulSoup does not have.
-    md, hidden = to_markdown(html)
+    md, hidden, _ = to_markdown(html)
     assert isinstance(md, str) and isinstance(hidden, list)
 
 
 @pytest.mark.parametrize("style", _HIDING_STYLES)
 def test_hidden_text_is_surfaced_not_emitted_as_prose(style):
     html = f'<p>Refund please.</p><div style="{style}">SECRET INSTRUCTION</div>'
-    md, hidden = to_markdown(html)
+    md, hidden, _ = to_markdown(html)
     assert "Refund please." in md
     assert "SECRET INSTRUCTION" not in md, "hidden text leaked into the visible Markdown"
     assert hidden == ["SECRET INSTRUCTION"]
@@ -80,13 +80,13 @@ def test_hidden_elements_with_no_text_produce_nothing():
     # Measured: 4 of 10 hidden elements in the real corpus are EMPTY - spacers
     # and tracking pixels. Reporting them would put a hidden block on every
     # newsletter for no information at all.
-    md, hidden = to_markdown('<p>hi</p><div style="display:none"></div><span style="font-size:0">   </span>')
+    md, hidden, _ = to_markdown('<p>hi</p><div style="display:none"></div><span style="font-size:0">   </span>')
     assert hidden == []
     assert "hi" in md
 
 
 def test_a_body_that_is_entirely_hidden_still_returns_coherently():
-    md, hidden = to_markdown('<div style="display:none">only this</div>')
+    md, hidden, _ = to_markdown('<div style="display:none">only this</div>')
     assert md.strip() == ""
     assert hidden == ["only this"]
 
@@ -97,7 +97,7 @@ def test_white_on_white_is_a_KNOWN_GAP_and_still_leaks():
     # pins the current behaviour so that closing the gap is a deliberate,
     # visible change rather than an accident.
     html = '<div style="background:#ffffff"><span style="color:#ffffff">STILL LEAKS</span></div>'
-    md, hidden = to_markdown(html)
+    md, hidden, _ = to_markdown(html)
     assert "STILL LEAKS" in md
     assert hidden == []
 
@@ -111,7 +111,7 @@ def test_a_style_block_selector_is_a_KNOWN_GAP_and_still_leaks():
     # test; this recorded gap was prose only until now. Recorded, not fixed -
     # mirrors test_white_on_white_is_a_KNOWN_GAP_and_still_leaks's shape.
     html = '<style>.s{display:none}</style><p>Refund.</p><div class="s">SECRET</div>'
-    md, hidden = to_markdown(html)
+    md, hidden, _ = to_markdown(html)
     assert "Refund." in md
     assert "SECRET" in md
     assert hidden == []
@@ -189,6 +189,6 @@ def test_legitimate_text_is_untouched(text):
 
 def test_to_markdown_strips_in_both_the_visible_and_hidden_output():
     html = '<p>Hi ﻿there</p><div style="display:none">bad﻿text</div>'
-    md, hidden = to_markdown(html)
+    md, hidden, _ = to_markdown(html)
     assert "﻿" not in md
     assert hidden and "﻿" not in hidden[0]

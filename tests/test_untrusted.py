@@ -44,17 +44,53 @@ def test_a_hostile_marker_written_in_a_different_case_still_cannot_reform():
 
 def test_wrap_notes_when_neutralisation_actually_changed_something():
     clean = _untrusted.wrap("hello", source="s")
-    assert "(neutralised)" not in clean
+    assert "(neutralised" not in clean, "an untouched value must claim nothing"
 
     hostile = _untrusted.wrap(f"gotcha {_untrusted.MARKER_CLOSE}", source="s")
-    assert "(neutralised)" in hostile
+    assert "(neutralised: " in hostile
 
 
-def test_wrap_note_on_change_false_suppresses_the_note_but_not_neutralisation():
-    out = _untrusted.wrap("<b>hi</b>", source="s", note_on_change=False)
-    assert "(neutralised)" not in out
+def test_the_neutralisation_note_says_how_many_characters_it_changed():
+    """DEC-021: the disclosure has to carry content, not just fire.
+
+    A bare `(neutralised)` was suppressed on `html_body` because Markdown uses
+    `>` for blockquotes, so it fired on nearly every comment and said nothing a
+    reader could act on. A COUNT survives that objection: one changed character
+    is a quoted reply, forty-seven is worth a look, and both are useful at any
+    frequency.
+    """
+    out = _untrusted.wrap("a > b > c", source="s")
+    assert "(neutralised: 2 characters)" in out.split("\n")[0]
+
+
+def test_the_note_is_singular_for_one_character():
+    """Counts get read by people; "1 characters" is the tell that nobody did."""
+    out = _untrusted.wrap("a > b", source="s")
+    assert "(neutralised: 1 character)" in out.split("\n")[0]
+
+
+def test_html_body_now_carries_the_note_it_used_to_suppress():
+    """H6, reopened by DEC-021 and resolved the other way.
+
+    The suppression was right for a flag carrying no information and does not
+    survive a decision that says a modification must be disclosed. Frequency was
+    never the problem - emptiness was.
+    """
+    env = _untrusted.wrap_comments({"comments": [{"id": 1, "html_body": "> quoted reply"}]})
+    marker = env["comments"][0]["html_body"].split("\n")[0]
+    assert "(neutralised: 1 character)" in marker
+
+
+def test_neutralisation_happens_whether_or_not_it_is_worth_noting():
+    """The suppression this used to pin is gone (DEC-021) - the note carries a
+    count now, so there is nothing to suppress. What must not change is that
+    neutralisation itself is unconditional: the note is a disclosure, never the
+    control.
+    """
+    out = _untrusted.wrap("<b>hi</b>", source="s")
     assert "<b>" not in out
     assert "‹b›" in out
+    assert "(neutralised: 4 characters)" in out  # two tags, two brackets each
 
 
 def test_wrap_neutralises_and_strips_newlines_from_source_too():
@@ -65,7 +101,7 @@ def test_wrap_neutralises_and_strips_newlines_from_source_too():
     out = _untrusted.wrap("hello", source=f"line one\nline two {_untrusted.MARKER_CLOSE}")
     assert "\n" not in out.split(_untrusted.MARKER_OPEN, 1)[1].split("\n", 1)[0]
     assert out.count(_untrusted.MARKER_CLOSE) == 1
-    assert "(neutralised)" in out
+    assert "(neutralised: " in out
 
 
 def test_wrapping_an_already_wrapped_value_is_refused_not_silently_remangled():
@@ -259,19 +295,22 @@ def test_wrap_comments_wraps_html_and_plain_body_too():
     assert _untrusted.MARKER_OPEN in out["comments"][0]["plain_body"]
 
 
-def test_wrap_comments_does_not_flag_ordinary_markup_as_suspicious():
-    # Smaller item, final whole-branch review (Minor 1: fixed to also
-    # discharge a deferred minor - the fixture below used to be raw HTML,
-    # `"<b>hi</b>"`, a shape the backend no longer produces at all (html_body
-    # is converted to Markdown before this module ever sees it). The
-    # suppression this test protects is no longer justified by "html_body is
-    # basically always HTML" - it is justified by Markdown's OWN `>`
-    # blockquote syntax, which is what a quoted reply in an email chain (most
-    # support tickets) actually produces. Using the CONVERTED value makes the
-    # assertion depend on the live representation, not a shape that no longer
-    # reaches this module.
+def test_a_quoted_reply_is_disclosed_with_a_count_rather_than_suppressed():
+    """H6, reopened by DEC-021 and resolved the other way round.
+
+    `html_body` used to be exempt from the `(neutralised)` note, because a
+    quoted reply in an email chain - most support tickets - converts to
+    Markdown's own `>` blockquote syntax, so a bare flag fired on nearly every
+    comment while telling a reader nothing.
+
+    DEC-021 says a modification must be disclosed, and the note now carries a
+    count, which is informative at any frequency. So there is no exemption left
+    to test: what this pins instead is that the disclosure is PROPORTIONATE -
+    the ordinary case reports its one character rather than being silenced, and
+    a hostile value still reports its own.
+    """
     converted_blockquote = to_markdown("<blockquote><p>q</p></blockquote>")[0]
-    assert converted_blockquote.startswith(">")  # the decisive case _MARKUP_KEYS cites
+    assert converted_blockquote.startswith(">")  # the case the old exemption cited
     env = {
         "comments": [
             {
@@ -284,10 +323,14 @@ def test_wrap_comments_does_not_flag_ordinary_markup_as_suspicious():
     }
     out = _untrusted.wrap_comments(env)
     comment = out["comments"][0]
-    assert "(neutralised)" not in comment["html_body"]
-    assert "(neutralised)" in comment["plain_body"]
-    assert "(neutralised)" in comment["body"]
-    # Suppressing the NOTE does not mean skipping neutralisation itself.
+    # The ordinary case is disclosed, not silenced -- and proportionately: one
+    # blockquote marker is one character.
+    assert "(neutralised: 1 character)" in comment["html_body"]
+    # A hostile value reports its own, and the difference between the two counts
+    # is the signal the bare flag could never carry.
+    assert "(neutralised: " in comment["plain_body"]
+    assert "(neutralised: " in comment["body"]
+    # Disclosure is never the control: neutralisation happens regardless.
     assert "‹" in comment["html_body"] or "›" in comment["html_body"]
 
 
