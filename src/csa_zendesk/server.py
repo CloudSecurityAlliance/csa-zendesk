@@ -272,6 +272,33 @@ def _client() -> ZendeskClient:
     return connect(capabilities=E2_CAPABILITIES)
 
 
+#: `solve_ticket` takes the ticket id plus, optionally, the custom fields a
+#: tenant's ticket form requires at solve time (F7). Deliberately NOT the same
+#: as `update_ticket`'s field allowlist: this one carries exactly what Zendesk
+#: demands to accept a solve, and nothing a caller might use to change what the
+#: call does.
+_SOLVE_TICKET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ticket_id": {"type": "integer", "description": "The numeric Zendesk ticket id."},
+        "custom_fields": {
+            "type": "array",
+            "description": (
+                "Custom fields this tenant's ticket form requires when solving, as "
+                "[{'id': <field id>, 'value': <value>}]. Omit unless a solve was refused for "
+                "missing fields - the refusal names them."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}, "value": {}},
+                "required": ["id", "value"],
+            },
+        },
+    },
+    "required": ["ticket_id"],
+    "additionalProperties": False,
+}
+
 _TICKET_ID_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -536,11 +563,15 @@ WRITE_TOOLS: list[mcp_types.Tool] = [
     mcp_types.Tool(
         name="solve_ticket",
         description=(
-            "Mark a ticket solved, as the raw upstream ticket envelope. Sets status=solved and "
-            "nothing else. Not itself terminal, but the on-ramp to it: many accounts auto-close a "
-            "solved ticket after a fixed period, after which no further write is possible." + _HTML_BODY_NOTE
+            "Mark a ticket solved, as the raw upstream ticket envelope. Sets status=solved; the "
+            "status is forced and cannot be set to anything else through this tool. Not itself "
+            "terminal, but the on-ramp to it: many accounts auto-close a solved ticket after a "
+            "fixed period, after which no further write is possible. IF THIS TENANT'S TICKET FORM "
+            "REQUIRES FIELDS AT SOLVE TIME, supply them here as custom_fields on this same call - "
+            "the refusal will name which ones. Do not set them with update_ticket first; that is "
+            "two writes where one will do." + _HTML_BODY_NOTE
         ),
-        input_schema=_TICKET_ID_SCHEMA,
+        input_schema=_SOLVE_TICKET_SCHEMA,
         annotations=mcp_types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
     ),
     mcp_types.Tool(
@@ -979,7 +1010,7 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         )
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
     if name == "solve_ticket":
-        envelope = client.solve_ticket(ticket_id=arguments["ticket_id"])
+        envelope = client.solve_ticket(ticket_id=arguments["ticket_id"], custom_fields=arguments.get("custom_fields"))
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
     if name == "upload_file":
         # validate=True, NOT the default: `b64decode` discards non-alphabet

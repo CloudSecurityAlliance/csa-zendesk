@@ -1238,6 +1238,121 @@ def test_nothing_changed_means_no_disclosure_key_at_all():
     assert "transformations" not in cm
 
 
+def test_solve_ticket_can_carry_the_custom_fields_a_form_requires():
+    """F7. `solve_ticket` took only a ticket id, so on a tenant whose form
+    requires fields at solve time it could not solve ANY ticket - measured
+    twice, on two different fixtures, with byte-identical refusals.
+
+    That is the difference between rung E2 and a usable server: you can
+    triage, note, assign and attach, and then cannot close the loop.
+    """
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1, "status": "solved"}})
+
+    ApiBackend(_client(handler)).solve_ticket(ticket_id=1, custom_fields=[{"id": 42, "value": "x"}])
+    assert sent["ticket"]["custom_fields"] == [{"id": 42, "value": "x"}]
+
+
+def test_solve_ticket_still_forces_solved_and_a_caller_cannot_choose_otherwise():
+    """The invariant the original design protected, kept.
+
+    `status: "solved"` is hardcoded for the same reason `add_internal_note`
+    hardcodes `public: false`: the tool's whole identity is that one effect.
+    Carrying custom_fields alongside adds the data Zendesk demands; it does not
+    make the status negotiable.
+    """
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    ApiBackend(_client(handler)).solve_ticket(ticket_id=1, custom_fields=[{"id": 7, "value": "a"}])
+    assert sent["ticket"]["status"] == "solved"
+    assert set(sent["ticket"]) == {"status", "custom_fields"}
+
+
+def test_omitting_custom_fields_sends_no_key_at_all():
+    """A tenant with no required fields must not start receiving an empty list."""
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    assert sent["ticket"] == {"status": "solved"}
+
+
+def test_a_solve_refused_for_missing_fields_says_which_and_how_to_supply_them():
+    """DEC-020's shape: a refusal names what tripped and what would proceed.
+
+    Zendesk answers with its own `details` map, which is accurate and says
+    nothing about THIS tool - a caller reading it has no way to know
+    `custom_fields` is the argument that fixes it. Measured: a model asked to
+    solve a ticket discovers the pairing only by failing first.
+    """
+
+    def handler(request):
+        return httpx.Response(
+            422,
+            json={
+                "error": "RecordInvalid",
+                "description": "Record validation errors",
+                "details": {
+                    "base": [
+                        {"description": "Department: is required when solving a ticket"},
+                        {"description": "Allocation: is required when solving a ticket"},
+                    ]
+                },
+            },
+        )
+
+    with pytest.raises(exc.ValidationError) as caught:
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    message = str(caught.value)
+    assert "custom_fields" in message, "the refusal does not name the argument that would proceed"
+    assert "Department" in message, "the refusal does not carry which fields Zendesk named"
+
+
+def test_a_validation_error_that_is_not_about_solving_is_re_raised_untouched():
+    """The guidance must attach to the ONE case it describes.
+
+    A ticket refused for an unrelated validation problem gets Zendesk's own
+    message, not advice about `custom_fields` that would send the caller
+    chasing the wrong thing.
+    """
+
+    def handler(request):
+        return httpx.Response(
+            422,
+            json={
+                "error": "RecordInvalid",
+                "description": "Record validation errors",
+                "details": {"priority": [{"description": "Priority: is not a valid value"}]},
+            },
+        )
+
+    with pytest.raises(exc.ValidationError) as caught:
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    assert "custom_fields" not in str(caught.value)
+    assert "Priority" in str(caught.value)
+
+
+def test_the_fake_stores_custom_fields_so_a_later_read_shows_them():
+    """A double that accepted the argument and dropped it would let every test
+    pass while the real path was broken - which is the failure mode the whole
+    Backend-seam design exists to prevent.
+    """
+    fake = FakeBackend(tickets={1: {"id": 1, "status": "open"}})
+    fake.solve_ticket(ticket_id=1, custom_fields=[{"id": 9, "value": "done"}])
+    assert fake.tickets[1]["custom_fields"] == [{"id": 9, "value": "done"}]
+    assert fake.tickets[1]["status"] == "solved"
+
+
 def test_the_fake_converts_too():
     # A fake that returned raw HTML would let every markdown assertion pass
     # while doing nothing in production - the reason the fake enforces the

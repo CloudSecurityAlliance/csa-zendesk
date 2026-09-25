@@ -114,7 +114,7 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
         def add_internal_note(self, *, ticket_id, body, uploads=None):
             return self._ticket()
 
-        def solve_ticket(self, *, ticket_id):
+        def solve_ticket(self, *, ticket_id, custom_fields=None):
             return self._ticket()
 
         def upload_file(self, *, filename, content, content_type):
@@ -292,6 +292,27 @@ def test_an_unknown_argument_to_an_unknown_tool_reports_the_tool_not_the_argumen
     """Two things are wrong; report the one the caller must fix first."""
     with pytest.raises(ValueError, match="unknown tool"):
         srv.call_tool_sync("delete_everything", {"bogus": 1})
+
+
+def test_solve_ticket_still_refuses_a_caller_who_names_status():
+    """`custom_fields` widened the allowlist; it must not have widened it to
+    `status`. The tool's whole identity is the one effect it has, and the
+    refusal has to happen at the tool layer, before the backend that hardcodes
+    `solved` is reached.
+    """
+    with pytest.raises(Exception) as caught:
+        srv.call_tool_sync("solve_ticket", {"ticket_id": 1, "status": "open"})
+    assert "status" in str(caught.value)
+
+
+def test_solve_ticket_declares_the_pairing_a_model_would_otherwise_find_by_failing():
+    """F7: the workaround was undiscoverable from the descriptions, so a model
+    asked to solve a ticket learned it only by failing first.
+    """
+    spec = next(tool for tool in srv.TOOLS if tool.name == "solve_ticket")
+    assert "custom_fields" in spec.description
+    assert "custom_fields" in spec.input_schema["properties"]
+    assert "status" not in spec.input_schema["properties"], "status must not be settable here"
 
 
 def test_an_unknown_tool_name_is_an_error_not_a_crash():
@@ -1178,7 +1199,7 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
         def add_internal_note(self, *, ticket_id, body, uploads=None):
             return {"ticket": {"id": ticket_id, "subject": "s"}}
 
-        def solve_ticket(self, *, ticket_id):
+        def solve_ticket(self, *, ticket_id, custom_fields=None):
             return {"ticket": {"id": ticket_id, "subject": "s"}}
 
         def upload_file(self, *, filename, content, content_type):
@@ -1270,7 +1291,7 @@ def test_solve_ticket_forwards_ticket_id(monkeypatch):
     seen = {}
 
     class _Client:
-        def solve_ticket(self, *, ticket_id):
+        def solve_ticket(self, *, ticket_id, custom_fields=None):
             seen["ticket_id"] = ticket_id
             return {"ticket": {"id": ticket_id, "status": "solved", "subject": "s"}}
 
