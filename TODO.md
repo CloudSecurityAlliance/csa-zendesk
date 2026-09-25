@@ -78,6 +78,29 @@ Status: `open` · `in progress` · `blocked` · `done`
 
 ## F. Live end-to-end testing
 
+> **What these runs can and cannot establish** ([#53](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/53)).
+> Every live run so far used an **account with admin access**, which bounds the conclusions:
+>
+> - **Our own controls are fully testable** — the allowlist, capability gates, field allowlists and
+>   subject-key checks refuse *before any API call*, so their behaviour is observable whatever the
+>   account can do. Results about them mean what they say. `C8`'s `merge_tickets` fail-open is in
+>   this class, and is real.
+> - **Server-side authorization is not testable at all here.** The invariant is *you cannot do
+>   anything with this tool that you could not already do in Zendesk*, and on an admin account that
+>   is everything. Every request is permitted, so a successful call carries no information about
+>   boundaries. A test that cannot fail has not been run.
+> - **OAuth scope is the exception.** The token's ceiling binds the *token*, not the account, so
+>   scope enforcement is genuinely exercised by these runs.
+>
+> Ticket ids are **sequential**, so enumeration is the default way to be wrong rather than a clever
+> attack — a ticket unrelated to this work was read during F2 simply by guessing the next id while
+> the search index caught up. Not a security finding (an admin opens the same ticket in the UI), but
+> it is precisely what the read allowlist exists to narrow, and `READ=*` narrows nothing. The
+> difference that matters is that a human enumerating a queue is choosing to; an agent may wander.
+>
+> Closing the untestable half needs a **restricted agent account**, raised early and deliberately
+> deferred. Recorded as F9 rather than left as an open loop.
+
 | | Item | Status | Notes |
 |---|---|---|---|
 | F1 | **A live end-to-end run against a real ticket.** | **done 2026-09-22** | Ran at rung E2 against the disposable test ticket: `get_ticket`, `update_ticket`, `assign_ticket`, `upload_file`, `add_internal_note` (with the upload attached), `get_attachment` all succeeded live; `solve_ticket` was refused by Zendesk for missing required fields, which is a finding rather than a failure. Write-up: `experiments/2026-09-22-f1-live-walkthrough/RESULTS.md`. **Four findings**, three of which no offline test could have produced: `assign_ticket` silently moves `status` `new`→`open`; `priority` cannot be reset once set, so `update_ticket` is reversible to another value but not to unset (boundary CSV corrected); the E2 surface can assign but **cannot unassign**, because `update_ticket`'s allowlist excludes `assignee_id` and `assign_ticket` refuses an empty write — both correct alone, a one-way door together; and `add_internal_note`'s `public: false` is now confirmed on a live audit event rather than against `FakeBackend`. **Still not covered:** `reply_publicly`/`merge_tickets` (E5, G2), `close_ticket` (G1), and whether Zendesk's plain `body` strips `display:none` text from inbound email HTML — **answered by F2 (2026-09-24): it does not.** Both `body` and `plain_body` keep concealed text inline as ordinary prose, discarding only the CSS that revealed it was hidden, exactly as DEC-018 reasoned. See H5. |
@@ -87,6 +110,7 @@ Status: `open` · `in progress` · `blocked` · `done`
 | F7 | **`solve_ticket` cannot solve any ticket on this tenant as built, and the workaround is undiscoverable from the tool descriptions.** F2 got byte-for-byte the refusal F1 got on a different fixture — the same two required custom fields, named in tenant configuration rather than here — so it is **tenant form configuration, not a property of the ticket type**. | open | Filed by F2 (2026-09-24), Finding 8. There *is* a path: both required fields are custom fields and `update_ticket`'s allowlist includes `custom_fields`, so solving is `update_ticket(custom_fields=…)` then `solve_ticket`, in that order. Nothing in either description says so, and a model asked to solve a ticket can only discover it by failing first. Decide: document the pairing, or have `solve_ticket` accept the required fields and do both. |
 | F4 | **Adopt the fleet's demo-as-end-to-end-test pattern** rather than inventing a Zendesk-specific harness. `csa-google-workspace` proved it once — one artifact that is simultaneously the demo, the release smoke test, the tool-description quality check and the feedback collection point; 3 live runs found 4 real bugs, one of which had survived 660 green unit tests. | open | CINO tracks this as needing a **second** adopter before it becomes fleet standard, and says adopting it unblocks the `mcp-server-development` skill. `csa-zendesk` is the natural one: see [`research/mcp-servers/DEMO-AS-END-TO-END-TEST.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/research/mcp-servers/DEMO-AS-END-TO-END-TEST.md). |
 | F6 | **Announce the OAuth client to `internal-requests@` once it is verified end to end.** An account-wide OAuth client is infrastructure other people should be able to discover, and the note doubles as the record of what it may request and how to revoke it. | blocked | Drafted and held — `tenant-config/DRAFT-internal-requests-oauth-announcement.md` (private; it names an internal list). The narrower reason for withholding it — "before it has authenticated once" — is now satisfied: live login happened 2026-09-18. **Still blocked on F1's fuller sense of "verified end to end"**: no ticket has been filed and walked through the tool surface yet, so the draft stays held rather than sent. |
+| F9 | **A restricted agent account is the only way to test the server-side half.** Everything run so far used an account with admin access, so no result speaks to what Zendesk would refuse. Raised early — *"we're not going to use my account, we're going to use a different account"* — then deliberately deferred to keep moving, and never recorded as a decision with a trigger. | open | Filed 2026-09-24 from [#53](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/53). **Revisit trigger:** before rung E4 (admin write) or E5 (reach), whichever comes first. Both grant authority where *the server refusing* is the last line rather than our own allowlist, and both are the rungs where an untested server-side assumption stops being academic. Until then the honest position is that client-side controls are verified and server-side ones are assumed. |
 | F5 | **The e2e run is how each enablement rung is earned.** E1 read → E2 write → E3 admin read → E4 admin write → E5 reach. A rung is earned by the previous one working against a real ticket, not by elapsed time. | open | Makes the ladder in the whole-project design testable rather than declarative. |
 
 ---
