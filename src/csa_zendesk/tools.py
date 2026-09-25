@@ -303,7 +303,7 @@ TOOLS: dict[str, ToolSpec] = {
         check=_only_fields(*_TICKET_EDITABLE_FIELDS),
     ),
     "assign_ticket": ToolSpec(
-        "ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("assignee_id", "group_id")
+        "ticket.write", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("assignee_id", "group_id", "unassign")
     ),
     # NOTE (Task 3 correction): this entry carried `check=_force_public(False)`
     # from the Block 0c tool-slice carry-over, which assumed a `comment` dict

@@ -108,7 +108,7 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
         def update_ticket(self, *, ticket_id, fields):
             return self._ticket()
 
-        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None):
+        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None, unassign=False):
             return self._ticket()
 
         def add_internal_note(self, *, ticket_id, body, uploads=None):
@@ -1193,7 +1193,7 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
         def update_ticket(self, *, ticket_id, fields):
             return {"ticket": {"id": ticket_id, "subject": "s"}}
 
-        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None):
+        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None, unassign=False):
             return {"ticket": {"id": ticket_id, "subject": "s"}}
 
         def add_internal_note(self, *, ticket_id, body, uploads=None):
@@ -1265,7 +1265,7 @@ def test_assign_ticket_forwards_optional_assignee_and_group(monkeypatch):
     seen = {}
 
     class _Client:
-        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None):
+        def assign_ticket(self, *, ticket_id, assignee_id=None, group_id=None, unassign=False):
             seen["ticket_id"], seen["assignee_id"], seen["group_id"] = ticket_id, assignee_id, group_id
             return {"ticket": {"id": ticket_id, "subject": "s"}}
 
