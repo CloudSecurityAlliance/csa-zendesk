@@ -426,6 +426,8 @@ class Backend(Protocol):
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope: ...
 
+    def reply_publicly(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope: ...
+
     def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope: ...
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope: ...
@@ -639,6 +641,47 @@ class ApiBackend:
             )
         )
 
+    def reply_publicly(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        """Rung E5. This is the one that leaves the building.
+
+        Deliberately the SAME SHAPE as `add_internal_note`, with the one word
+        that matters inverted. `public: True` is **LOAD-BEARING** and hardcoded
+        for the same reason its sibling hardcodes `False`: `comment.public` has
+        no fixed default - it inherits from the ticket's first comment - so on
+        an email-originated ticket a comment is PUBLIC unless something says
+        otherwise. Forcing it means this call's reach never depends on the
+        ticket's history.
+
+        **`public` is not a parameter, and that absence IS the control.** The
+        tool table anticipated a `comment`-dict argument here, guarded by
+        `_force_public(True)` overwriting the key. That is a weaker guarantee
+        than `add_internal_note` already had, and taking the weaker one for the
+        tool that can actually reach a customer is backwards: a dict means
+        `public` is a key a caller - or an instruction injected from ticket
+        content the model is reading - could set, with a check scrambling to
+        overwrite it. Here there is nothing to overwrite.
+
+        Reach and scope are enforced above this method, in `policy.py`:
+        `CSA_ZD_ALLOW_REACH` must be true AND the ticket must be named in
+        `CSA_ZD_ALLOWLIST_WRITE`. Two grants in two places, neither sufficient
+        alone, because a public reply cannot be unsent.
+        """
+        _refuse_an_empty_note(body=body, uploads=uploads)
+        comment: dict[str, Any] = {"body": body, "public": True}
+        if uploads:
+            comment["uploads"] = uploads
+        return _defang_bodies(
+            self._http.request(
+                "PUT",
+                f"/api/v2/tickets/{_path_id(ticket_id, name='ticket_id')}",
+                json={"ticket": {"comment": comment}},
+                # idempotent=False for the same reason as a note, with more at
+                # stake: a replay appends a SECOND comment, and this one emails
+                # a customer twice.
+                idempotent=False,
+            )
+        )
+
     def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope:
         # Same operation and path as update_ticket/assign_ticket -
         # analysis/operation-inventory.csv row: ticketing,Tickets,PUT,
@@ -814,6 +857,11 @@ class FakeBackend:
 
     def __init__(self, tickets: dict[int, dict[str, Any]] | None = None) -> None:
         self.tickets: dict[int, dict[str, Any]] = copy.deepcopy(tickets) if tickets else {}
+        #: Public replies this fake was asked to send, recorded rather than
+        #: discarded. The whole risk of `reply_publicly` is that it reaches
+        #: someone; a double that accepted the call and kept no evidence would
+        #: let a test assert success while proving nothing about reach.
+        self.public_replies: list[dict[str, Any]] = []
 
     def get_ticket(self, *, ticket_id: int) -> Envelope:
         try:
@@ -905,6 +953,18 @@ class FakeBackend:
             raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
         # Important 1 (final whole-branch review): symmetry with ApiBackend -
         # see update_ticket's fake, above, for why this is a no-op today.
+        return _defang_bodies({"ticket": copy.deepcopy(ticket)})
+
+    def reply_publicly(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:
+        _refuse_an_empty_note(body=body, uploads=uploads)
+        try:
+            ticket = self.tickets[ticket_id]
+        except KeyError:
+            raise exc.NotFound(f"no such record (ticket {ticket_id})") from None
+        # Records public=True so a test cannot pass against a double that
+        # silently stores the safe value - the asymmetry with add_internal_note
+        # is the whole point of this method.
+        self.public_replies.append({"ticket_id": ticket_id, "body": body, "public": True})
         return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
     def solve_ticket(self, *, ticket_id: int, custom_fields: list[dict[str, Any]] | None = None) -> Envelope:

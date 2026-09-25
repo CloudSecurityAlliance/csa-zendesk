@@ -118,19 +118,20 @@ def _only(*keys: str) -> Callable[[dict[str, Any]], None]:
     return check
 
 
-def _force_public(value: bool) -> Callable[[dict[str, Any]], None]:
-    def check(kwargs: dict[str, Any]) -> None:
-        _only("comment")(kwargs)
-        comment = kwargs.get("comment")
-        if not isinstance(comment, dict):
-            raise exc.PolicyError("this tool requires a `comment` object")
-        # Forced, never merely defaulted: `comment.public` has NO fixed default -
-        # it inherits from the ticket's first comment, so an email-originated
-        # ticket defaults to PUBLIC. Omitting it here would make the reach of
-        # this call depend on the ticket's history.
-        comment["public"] = value
-
-    return check
+#: `_force_public` REMOVED (E5, 2026-09-25). It took a `comment` dict and set
+#: `public` inside it, and both tools that were ever going to use it now take a
+#: flat `body`/`uploads` shape instead - `add_internal_note` moved first (Task 3
+#: correction), and `reply_publicly` followed when its Backend method was built.
+#:
+#: The reason is the same both times and is worth keeping after the code is
+#: gone: overwriting a key is weaker than the key not existing. A `comment` dict
+#: means `public` is something a caller - or an instruction injected from ticket
+#: content the model is reading - can set, with a check having to correct it afterwards.
+#: Neither method has a `public` parameter now, so there is nothing to race.
+#:
+#: Found by the 100% coverage gate the moment its last caller went, which is
+#: what that gate is for: a helper nobody calls is indistinguishable from one
+#: whose callers all forgot it.
 
 
 def _status(value: str) -> Callable[[dict[str, Any]], None]:
@@ -324,8 +325,20 @@ TOOLS: dict[str, ToolSpec] = {
     # Backend method is expected to take the `comment` shape this helper was
     # written for.
     "add_internal_note": ToolSpec("ticket.note", subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("body", "uploads")),
+    # CORRECTED when the Backend method was built (E5): this carried
+    # `check=_force_public(True)`, which assumed a `comment` dict and worked by
+    # OVERWRITING its `public` key. The real method is flat - ticket_id, body,
+    # uploads - with no `public` parameter at all, exactly like
+    # `add_internal_note` above, and for a stronger reason.
+    #
+    # A dict means `public` is a key a caller, or an instruction injected from
+    # ticket content the model is reading, could set - with a check scrambling to
+    # overwrite it. Taking that weaker guarantee for the one tool that can
+    # actually reach a customer would be backwards. There is nothing to
+    # overwrite: `public: True` is hardcoded in the Backend method and is not
+    # reachable from any argument.
     "reply_publicly": ToolSpec(
-        "ticket.reply", reach=True, subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_force_public(True)
+        "ticket.reply", reach=True, subject_var="CSA_ZD_ALLOWLIST_WRITE", check=_only("body", "uploads")
     ),
     # NOTE (Task 3 correction, extended by F7): `Backend.solve_ticket` takes no
     # `status` parameter - solving is the only thing this call can do - so

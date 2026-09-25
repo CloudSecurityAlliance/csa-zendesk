@@ -238,6 +238,11 @@ _GATES: dict[str, Gate] = {
     "update_ticket": TICKET_WRITE,
     "assign_ticket": TICKET_WRITE,
     "add_internal_note": TICKET_NOTE,
+    # TICKET_REPLY is in REACH_CAPABILITIES, so this gate alone is not enough:
+    # `assert_reach_permitted` additionally requires CSA_ZD_ALLOW_REACH, which
+    # no profile can grant. Two grants, two places - a public reply cannot be
+    # unsent, so the capability is necessary and deliberately not sufficient.
+    "reply_publicly": TICKET_REPLY,
     "solve_ticket": TICKET_SOLVE,
     "upload_file": TICKET_ATTACH,
     "delete_upload": TICKET_ATTACH,

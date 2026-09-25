@@ -57,6 +57,9 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
         def add_internal_note(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
+        def reply_publicly(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
         def solve_ticket(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
@@ -1506,6 +1509,80 @@ def test_a_solve_refusal_with_no_parseable_label_still_gets_the_remedy():
     message = str(caught.value)
     assert "custom_fields" in message
     assert "come from this tenant's ticket form" in message
+
+
+def test_reply_publicly_forces_public_true_the_same_way_a_note_forces_false():
+    """E5. The mirror of `add_internal_note`, and deliberately the same shape.
+
+    `comment.public` has NO fixed default - it inherits from the ticket's first
+    comment - so on an email-originated ticket it defaults to PUBLIC. Forcing it
+    here means the reach of this call never depends on the ticket's history.
+    """
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    ApiBackend(_client(handler)).reply_publicly(ticket_id=1, body="Thanks, resolved.")
+    assert sent["ticket"]["comment"]["public"] is True
+    assert sent["ticket"]["comment"]["body"] == "Thanks, resolved."
+
+
+def test_public_is_not_an_argument_anyone_can_name():
+    """Structural, not checked.
+
+    `add_internal_note` moved off a `comment`-dict constraint precisely so that
+    `public` is not a key a caller - or an instruction injected from ticket
+    content the model is reading - can set at all. That argument is STRONGER
+    for the tool that can actually reach a customer, so the riskier tool gets
+    the stronger guarantee rather than the weaker one.
+    """
+    import inspect
+
+    params = inspect.signature(ApiBackend.reply_publicly).parameters
+    assert "public" not in params
+    assert set(params) == {"self", "ticket_id", "body", "uploads"}
+
+
+def test_reply_publicly_refuses_an_empty_body():
+    """Same refusal as a note: an empty public reply still emails someone."""
+    with pytest.raises(exc.EmptyWrite):
+        ApiBackend(_client(lambda r: httpx.Response(200, json={}))).reply_publicly(ticket_id=1, body="   ")
+
+
+def test_reply_publicly_can_carry_uploads():
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    ApiBackend(_client(handler)).reply_publicly(ticket_id=1, body="see attached", uploads=["tok"])
+    assert sent["ticket"]["comment"]["uploads"] == ["tok"]
+    assert sent["ticket"]["comment"]["public"] is True
+
+
+def test_the_fake_records_the_public_reply_rather_than_discarding_it():
+    """A double that accepted the call and kept no evidence would let a test
+    assert success while proving nothing about the thing that matters - whether
+    this reached anyone.
+    """
+    fake = FakeBackend(tickets={1: {"id": 1, "status": "open"}})
+    fake.reply_publicly(ticket_id=1, body="we have shipped a fix")
+    assert fake.public_replies == [{"ticket_id": 1, "body": "we have shipped a fix", "public": True}]
+
+
+def test_the_fake_refuses_a_public_reply_to_a_ticket_it_does_not_have():
+    fake = FakeBackend(tickets={})
+    with pytest.raises(exc.NotFound):
+        fake.reply_publicly(ticket_id=99, body="hello")
+
+
+def test_the_fake_refuses_an_empty_public_reply():
+    fake = FakeBackend(tickets={1: {"id": 1}})
+    with pytest.raises(exc.EmptyWrite):
+        fake.reply_publicly(ticket_id=1, body="")
 
 
 def test_the_fake_converts_too():
