@@ -260,6 +260,41 @@ def _is_required_on_solve(error: exc.ValidationError) -> bool:
     )
 
 
+def _labels_required_on_solve(error: exc.ValidationError) -> set[str]:
+    """The field LABELS Zendesk named, pulled out of its own prose.
+
+    Zendesk says `"Department: is required when solving a ticket"`, so the label
+    is everything before the first colon. Parsed rather than pattern-matched on
+    known names, because the names are tenant configuration - hardcoding them
+    would leak this tenant's form into a public repository and break on every
+    other tenant.
+    """
+    labels: set[str] = set()
+    for problems in error.problems.values():
+        for problem in problems:
+            text = str(problem.get("description", ""))
+            if "required when solving" in text.lower() and ":" in text:
+                labels.add(text.split(":", 1)[0].strip())
+    return labels
+
+
+def _refuse_a_contradictory_assignment(*, assignee_id: int | None, unassign: bool) -> None:
+    """`unassign=True` with an `assignee_id` says two opposite things.
+
+    Refused rather than resolved by precedence: whichever this library picked
+    would be a silent guess about intent, and the caller would learn which only
+    by inspecting the ticket afterwards. A call that means both is a caller
+    error, and saying so costs one retry against a wrong assignment nobody
+    noticed.
+    """
+    if unassign and assignee_id is not None:
+        raise exc.ZendeskError(
+            "assign_ticket cannot both unassign and set an assignee_id - they contradict each "
+            "other. Pass unassign=True alone to clear the assignee, or assignee_id alone to set "
+            "one. group_id may accompany either."
+        )
+
+
 def _defang_bodies(envelope: Envelope) -> Envelope:
     """Convert every `html_body` to Markdown and strip the plain-text siblings.
 
@@ -386,7 +421,7 @@ class Backend(Protocol):
     def update_ticket(self, *, ticket_id: int, fields: dict[str, Any]) -> Envelope: ...
 
     def assign_ticket(
-        self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None
+        self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None, unassign: bool = False
     ) -> Envelope: ...
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope: ...
@@ -507,7 +542,9 @@ class ApiBackend:
             )
         )
 
-    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+    def assign_ticket(
+        self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None, unassign: bool = False
+    ) -> Envelope:
         # Same operation and path as update_ticket - analysis/operation-inventory.csv
         # row: ticketing,Tickets,PUT,/api/v2/tickets/{ticket_id},UpdateTicket,
         # Update Ticket,,,yes. Bucket-pure by construction rather than by
@@ -523,9 +560,17 @@ class ApiBackend:
         # Backend never passes through tools.TOOLS at all (ADR-002's public
         # seam). See exc.EmptyWrite's docstring for why an empty write is
         # not free even though it changes nothing.
-        _refuse_an_empty_assignment(assignee_id=assignee_id, group_id=group_id)
+        _refuse_a_contradictory_assignment(assignee_id=assignee_id, unassign=unassign)
+        if not unassign:
+            _refuse_an_empty_assignment(assignee_id=assignee_id, group_id=group_id)
         fields: dict[str, Any] = {}
-        if assignee_id is not None:
+        if unassign:
+            # G4: `None` cannot mean "clear" on `assignee_id`, because it already
+            # means "not supplied" and would collide with the empty-write
+            # refusal - so clearing is its own argument and the null is written
+            # here rather than passed in.
+            fields["assignee_id"] = None
+        elif assignee_id is not None:
             fields["assignee_id"] = assignee_id
         if group_id is not None:
             fields["group_id"] = group_id
@@ -644,13 +689,46 @@ class ApiBackend:
             # chained with `from e` so the original diagnostic survives.
             if not _is_required_on_solve(e):
                 raise
+            ids = self._field_ids_for(_labels_required_on_solve(e))
+            named = (
+                " The ids are: " + ", ".join(f"{label} = {fid}" for label, fid in sorted(ids.items()))
+                if ids
+                else " The field ids come from this tenant's ticket form."
+            )
             raise exc.ValidationError(
                 "Zendesk refused to solve this ticket because its form requires fields that were "
                 "not supplied. Pass them as `custom_fields` on this same call - a list of "
-                "{'id': <field id>, 'value': <value>} - rather than setting them separately first. "
-                "The field ids come from this tenant's ticket form",
+                "{'id': <field id>, 'value': <value>} - rather than setting them separately first." + named,
                 problems=e.problems,
             ) from e
+
+    def _field_ids_for(self, labels: set[str]) -> dict[str, int]:
+        """Map required-field LABELS to the ids the API actually takes.
+
+        A courtesy, never a dependency. Zendesk names the fields it wants in
+        prose; the API takes ids, so without this a caller who is already stuck
+        has to go and look them up in a different system.
+
+        **Every failure here is swallowed deliberately.** Reading ticket-field
+        configuration is closer to rung E3 ("see the configuration") than to the
+        E2 tool that triggered it, so a credential that cannot do it is an
+        expected state rather than an error - and the refusal it is decorating
+        is already correct and actionable without this. Turning a courtesy into
+        a second, more confusing failure at the moment someone is already stuck
+        would be strictly worse than saying nothing.
+        """
+        if not labels:
+            return {}
+        try:
+            body = self._http.get("/api/v2/ticket_fields")
+        except exc.ZendeskError:
+            return {}
+        found: dict[str, int] = {}
+        for field in body.get("ticket_fields", []) if isinstance(body, dict) else []:
+            title, fid = field.get("title"), field.get("id")
+            if isinstance(title, str) and title in labels and isinstance(fid, int):
+                found[title] = fid
+        return found
 
     def upload_file(self, *, filename: str, content: bytes, content_type: str) -> Envelope:
         # analysis/operation-inventory.csv row: ticketing,Attachments,POST,
@@ -790,7 +868,9 @@ class FakeBackend:
         # fixture ever puts an html_body in the returned ticket.
         return _defang_bodies({"ticket": copy.deepcopy(ticket)})
 
-    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+    def assign_ticket(
+        self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None, unassign: bool = False
+    ) -> Envelope:
         # Checked first, before the existence lookup below, matching
         # ApiBackend: the refusal does not depend on whether ticket_id is
         # real, so a call naming neither field is refused identically by

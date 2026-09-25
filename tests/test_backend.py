@@ -1353,6 +1353,161 @@ def test_the_fake_stores_custom_fields_so_a_later_read_shows_them():
     assert fake.tickets[1]["status"] == "solved"
 
 
+def test_the_solve_refusal_carries_field_ids_when_it_can_get_them():
+    """A label is not what the API takes. The refusal used to name `Department`
+    and leave the caller to find its id by hand, which is a second lookup in a
+    different system at the moment they are already stuck.
+    """
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if "ticket_fields" in request.url.path:
+            return httpx.Response(
+                200,
+                json={
+                    "ticket_fields": [
+                        {"id": 111, "title": "Department"},
+                        {"id": 222, "title": "Allocation"},
+                        {"id": 333, "title": "Unrelated"},
+                    ]
+                },
+            )
+        return httpx.Response(
+            422,
+            json={
+                "error": "RecordInvalid",
+                "details": {
+                    "base": [
+                        {"description": "Department: is required when solving a ticket"},
+                        {"description": "Allocation: is required when solving a ticket"},
+                    ]
+                },
+            },
+        )
+
+    with pytest.raises(exc.ValidationError) as caught:
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    message = str(caught.value)
+    assert "111" in message and "222" in message, "field ids are missing from the refusal"
+    assert "333" not in message, "an unrelated field leaked into the refusal"
+
+
+def test_the_refusal_still_works_when_the_field_lookup_is_refused():
+    """The enrichment is a courtesy, never a dependency.
+
+    Reading ticket-field configuration is rung E3 territory, so a credential
+    that cannot do it must still get the actionable refusal rather than a
+    second, more confusing error from the lookup itself.
+    """
+
+    def handler(request):
+        if "ticket_fields" in request.url.path:
+            return httpx.Response(403, json={"error": "Forbidden"})
+        return httpx.Response(
+            422,
+            json={
+                "error": "RecordInvalid",
+                "details": {
+                    "base": [
+                        {"description": "Department: is required when solving a ticket"},
+                    ]
+                },
+            },
+        )
+
+    with pytest.raises(exc.ValidationError) as caught:
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    message = str(caught.value)
+    assert "custom_fields" in message, "the remedy was lost when enrichment failed"
+    assert "Department" in message
+
+
+def test_unassign_is_an_explicit_argument_not_a_none():
+    """G4. Assignment was a one-way door: `update_ticket` refuses `assignee_id`
+    (it belongs to `assign_ticket`, ADR-016) and `assign_ticket()` naming
+    neither argument is refused as an empty write. Both correct alone; together
+    nothing at rung E2 could unassign.
+
+    `None` cannot mean "clear" here, because it already means "not supplied" and
+    would collide with the empty-write refusal. So clearing is its own argument.
+    """
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1, "assignee_id": None}})
+
+    ApiBackend(_client(handler)).assign_ticket(ticket_id=1, unassign=True)
+    assert sent["ticket"]["assignee_id"] is None
+
+
+def test_unassign_refuses_to_be_combined_with_an_assignee():
+    """The two say opposite things; a call meaning both is a caller error, not a
+    precedence puzzle for this library to resolve silently.
+    """
+    with pytest.raises(exc.ZendeskError) as caught:
+        ApiBackend(_client(lambda r: httpx.Response(200, json={}))).assign_ticket(
+            ticket_id=1, assignee_id=5, unassign=True
+        )
+    assert "unassign" in str(caught.value).lower()
+
+
+def test_unassign_alone_is_not_an_empty_write():
+    """The empty-write refusal exists so a call that changes nothing does not
+    spend the tenant's rate budget and land in the audit log. `unassign=True`
+    changes something, so it must pass.
+    """
+
+    def handler(request):
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    ApiBackend(_client(handler)).assign_ticket(ticket_id=1, unassign=True)
+
+
+def test_reassigning_to_a_different_agent_still_works():
+    """The ordinary path, pinned beside the new one."""
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"ticket": {"id": 1}})
+
+    ApiBackend(_client(handler)).assign_ticket(ticket_id=1, assignee_id=77)
+    assert sent["ticket"]["assignee_id"] == 77
+
+
+def test_a_solve_refusal_with_no_parseable_label_still_gets_the_remedy():
+    """The two checks are deliberately different strengths.
+
+    `_is_required_on_solve` matches the phrase; the label extractor also needs a
+    colon to split on. Zendesk wording that satisfies the first and not the
+    second must still produce the actionable refusal - just without ids - rather
+    than falling through to the raw vendor message.
+    """
+
+    def handler(request):
+        if "ticket_fields" in request.url.path:  # pragma: no cover - not reached
+            return httpx.Response(200, json={"ticket_fields": []})
+        return httpx.Response(
+            422,
+            json={
+                "error": "RecordInvalid",
+                "details": {
+                    "base": [
+                        {"description": "A field is required when solving a ticket"},
+                    ]
+                },
+            },
+        )
+
+    with pytest.raises(exc.ValidationError) as caught:
+        ApiBackend(_client(handler)).solve_ticket(ticket_id=1)
+    message = str(caught.value)
+    assert "custom_fields" in message
+    assert "come from this tenant's ticket form" in message
+
+
 def test_the_fake_converts_too():
     # A fake that returned raw HTML would let every markdown assertion pass
     # while doing nothing in production - the reason the fake enforces the

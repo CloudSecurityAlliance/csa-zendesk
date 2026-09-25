@@ -87,7 +87,9 @@ class ZendeskClient:
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.update_ticket(ticket_id=ticket_id, fields=fields))
 
-    def assign_ticket(self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None) -> Envelope:
+    def assign_ticket(
+        self, *, ticket_id: int, assignee_id: int | None = None, group_id: int | None = None, unassign: bool = False
+    ) -> Envelope:
         """Reassign a ticket's owner and/or group, as the raw upstream envelope.
 
         Same operation as `update_ticket` (`PUT /tickets/{id}`), but bucket-pure
@@ -96,7 +98,10 @@ class ZendeskClient:
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(
-            Envelope, self._backend.assign_ticket(ticket_id=ticket_id, assignee_id=assignee_id, group_id=group_id)
+            Envelope,
+            self._backend.assign_ticket(
+                ticket_id=ticket_id, assignee_id=assignee_id, group_id=group_id, unassign=unassign
+            ),
         )
 
     def add_internal_note(self, *, ticket_id: int, body: str, uploads: list[str] | None = None) -> Envelope:

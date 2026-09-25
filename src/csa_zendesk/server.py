@@ -456,6 +456,14 @@ _ASSIGN_TICKET_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "description": "The numeric id of the group to assign this ticket to.",
         },
+        "unassign": {
+            "type": "boolean",
+            "description": (
+                "Clear the assignee. The only way to unassign: a null assignee_id cannot mean "
+                "'clear', because it already means 'not supplied'. Cannot be combined with "
+                "assignee_id - they contradict each other and the call is refused."
+            ),
+        },
     },
     "required": ["ticket_id"],
     "additionalProperties": False,
@@ -539,7 +547,9 @@ WRITE_TOOLS: list[mcp_types.Tool] = [
         name="assign_ticket",
         description=(
             "Reassign a ticket's agent and/or group, as the raw upstream ticket envelope. At "
-            "least one of assignee_id/group_id is required - a call naming neither is refused. "
+            "least one of assignee_id/group_id/unassign is required - a call naming none is refused. "
+            "TO UNASSIGN pass unassign=true; there is no other way, because a null assignee_id is "
+            "indistinguishable from not supplying one. It cannot be combined with assignee_id. "
             "TWO SIDE EFFECTS, both Zendesk's and both observed live: setting assignee_id also "
             "moves the ticket into that agent's group, changing queue ownership; and a ticket in "
             "status `new` becomes `open`, which cannot be undone because `new` is unreachable "
@@ -1000,6 +1010,7 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
             ticket_id=arguments["ticket_id"],
             assignee_id=arguments.get("assignee_id"),
             group_id=arguments.get("group_id"),
+            unassign=bool(arguments.get("unassign", False)),
         )
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)
     if name == "add_internal_note":
