@@ -47,7 +47,14 @@ jobs:
       - run: pip install -e ".[dev,server]"
       # 100, not 90: a gate ten points below a measured 100% cannot fail. The
       # sanctioned hatch is `# pragma: no cover` on a specific line, documented there.
-      - run: python -m pytest -q --cov=csa_zendesk --cov-report=term-missing --cov-fail-under=100
+      #
+      # The scope and the threshold moved into [tool.coverage.run] and [tool.coverage.report]
+      # (#66). They were on this line, and pyproject had no [tool.coverage.run] at all, so
+      # this command and a developer's `pytest --cov` measured DIFFERENT THINGS - CI saw the
+      # library at 100%, local saw the library plus the tests at 99% and exited 1. A gate
+      # nobody can reproduce locally is one nobody runs before pushing. Same command both
+      # places now, and the config decides what it means.
+      - run: python -m pytest -q --cov --cov-report=term-missing
 
   gates:
     runs-on: ubuntu-latest

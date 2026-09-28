@@ -161,3 +161,33 @@ def test_retry_after_is_found_whatever_the_header_casing():
         err = parse_error(503, {"error": "Unavailable"}, headers={key: "42"})
         assert isinstance(err, exc.ServiceUnavailable)
         assert err.retry_after == 42, key
+
+
+def test_rate_limited_defaults_when_other_headers_are_present_but_not_retry_after():
+    """The realistic 429, and the one no test reached (#66).
+
+    `test_rate_limited_defaults_when_the_header_is_absent` passes `{}`, which returns at
+    `if not headers` BEFORE the loop - so the loop's fall-through had never run. A real 429
+    always carries headers; it is `Retry-After` specifically that may be missing, and then
+    `raw` stays None and the default is reached through `int(str(None))` raising ValueError.
+    """
+    e = parse_error(
+        429, {}, headers={"X-Rate-Limit": "700", "X-Rate-Limit-Remaining": "0", "Content-Type": "application/json"}
+    )
+    assert isinstance(e, exc.RateLimited)
+    assert e.retry_after == DEFAULT_RETRY_AFTER
+
+
+def test_retry_after_is_found_past_a_non_matching_header():
+    """The loop's other arm: iterating past a header that is not the one being looked for.
+    With a single-key fixture the search always matched on the first pass, so a bug that
+    only examined `next(iter(headers))` would have passed every case above."""
+    e = parse_error(429, {}, headers={"X-Rate-Limit": "700", "Retry-After": "42"})
+    assert isinstance(e, exc.RateLimited) and e.retry_after == 42
+
+
+def test_the_header_match_is_case_insensitive():
+    """HTTP header names are case-insensitive and httpx normalises to lower case, so a
+    fixture written in Title-Case is testing the normalisation as much as the lookup."""
+    assert parse_error(429, {}, headers={"retry-after": "5"}).retry_after == 5
+    assert parse_error(429, {}, headers={"RETRY-AFTER": "5"}).retry_after == 5
