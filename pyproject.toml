@@ -124,6 +124,27 @@ testpaths = ["tests"]
 # silent output a stdio MCP server can't afford to print anyway.
 filterwarnings = ["error"]
 
+[tool.coverage.run]
+# BOTH of these were missing, and each made the number mean something other than it said
+# (#66). The same pair was missing on csa-google-workspace and csa-skilljar; this was the
+# third instance and the last in the fleet.
+#
+# `source` - with none set, a developer running the documented `pytest --cov` measures every
+# module imported, TESTS INCLUDED: 6,122 statements against the library's 1,580, reported as
+# 99%, which against fail_under=100 exits 1. CI passed `--cov=csa_zendesk` on its command
+# line and saw 100%. So the gate failed locally and passed in CI for a reason that had
+# nothing to do with the code, and a developer's first run of the suite was a red build they
+# did not cause.
+#
+# `branch` - without it the 100% was STATEMENTS ONLY, which is not a smaller number than the
+# other three servers report, it is a different measurement presented as the same one.
+# Turning it on found two uncovered branches immediately.
+#
+# Both live here rather than on the CI line so that the config IS the gate: a number a
+# developer cannot reproduce locally is one nobody checks before pushing.
+source = ["csa_zendesk"]
+branch = true
+
 [tool.coverage.report]
 # 100, not the 90 this once was: a gate ten points below a measured 100% cannot
 # fail. The one sanctioned hatch is `# pragma: no cover` on a specific line, with
