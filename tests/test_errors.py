@@ -171,9 +171,9 @@ def test_rate_limited_defaults_when_other_headers_are_present_but_not_retry_afte
     always carries headers; it is `Retry-After` specifically that may be missing, and then
     `raw` stays None and the default is reached through `int(str(None))` raising ValueError.
     """
-    e = parse_error(429, {}, headers={"X-Rate-Limit": "700",
-                                      "X-Rate-Limit-Remaining": "0",
-                                      "Content-Type": "application/json"})
+    e = parse_error(
+        429, {}, headers={"X-Rate-Limit": "700", "X-Rate-Limit-Remaining": "0", "Content-Type": "application/json"}
+    )
     assert isinstance(e, exc.RateLimited)
     assert e.retry_after == DEFAULT_RETRY_AFTER
 
@@ -191,4 +191,3 @@ def test_the_header_match_is_case_insensitive():
     fixture written in Title-Case is testing the normalisation as much as the lookup."""
     assert parse_error(429, {}, headers={"retry-after": "5"}).retry_after == 5
     assert parse_error(429, {}, headers={"RETRY-AFTER": "5"}).retry_after == 5
-
