@@ -9,6 +9,7 @@ the content.
 
 No test here reaches PyPI - `latest_on_pypi` is stubbed wherever it would be called.
 """
+
 import json
 
 import pytest
@@ -28,15 +29,13 @@ class TestTheyAnswerWithoutACredential:
     """The property that makes them worth having. If these needed the thing that is broken,
     they would be silent exactly when somebody needs them."""
 
-    @pytest.mark.parametrize("name", ["describe_configuration", "demonstration_plan",
-                                      "report_a_problem"])
+    @pytest.mark.parametrize("name", ["describe_configuration", "demonstration_plan", "report_a_problem"])
     def test_no_credential_is_required(self, name, monkeypatch, tmp_path):
         monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "absent.json"))
         out = json.loads(srv.call_tool_sync(name, {}))
         assert out
 
-    @pytest.mark.parametrize("name", ["describe_configuration", "demonstration_plan",
-                                      "report_a_problem"])
+    @pytest.mark.parametrize("name", ["describe_configuration", "demonstration_plan", "report_a_problem"])
     def test_none_of_them_is_gated(self, name):
         """Gating them would make the tools that explain a refusal themselves refusable."""
         assert name not in policy._GATES
@@ -98,8 +97,7 @@ class TestDescribeConfiguration:
         out = json.loads(srv.call_tool_sync("describe_configuration", {}))
         assert out["allowlists"]["write"]["ids"] == ["159445", "2"]
 
-    def test_an_unusable_allowlist_says_so_rather_than_permitting_nothing_silently(
-            self, monkeypatch):
+    def test_an_unusable_allowlist_says_so_rather_than_permitting_nothing_silently(self, monkeypatch):
         """An unset allowlist and a typo'd one both permit nothing, and only one is a mistake.
         Reporting the typo as "nothing is permitted" would hide the fix from the only person
         who can make it."""

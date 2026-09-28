@@ -798,10 +798,13 @@ CONFIG_TOOLS: list[mcp_types.Tool] = [
         ),
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         annotations=mcp_types.ToolAnnotations(
-            read_only_hint=True, destructive_hint=False, idempotent_hint=True,
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
             # The one read here that is NOT open-world: it returns this process's own
             # computed state and no Zendesk-authored content at all.
-            open_world_hint=False),
+            open_world_hint=False,
+        ),
     ),
     mcp_types.Tool(
         name="demonstration_plan",
@@ -814,8 +817,8 @@ CONFIG_TOOLS: list[mcp_types.Tool] = [
         ),
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         annotations=mcp_types.ToolAnnotations(
-            read_only_hint=True, destructive_hint=False, idempotent_hint=True,
-            open_world_hint=False),
+            read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+        ),
     ),
     mcp_types.Tool(
         name="report_a_problem",
@@ -830,8 +833,8 @@ CONFIG_TOOLS: list[mcp_types.Tool] = [
         ),
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         annotations=mcp_types.ToolAnnotations(
-            read_only_hint=True, destructive_hint=False, idempotent_hint=True,
-            open_world_hint=False),
+            read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+        ),
     ),
 ]
 
@@ -901,14 +904,19 @@ def _describe_listing(var: str) -> dict[str, object]:
     except _scope.AllowlistError as e:
         return {"variable": var, "unusable": True, "detail": str(e)}
     if listing.all_subjects:
-        return {"variable": var, "all_subjects": True, "ids": [],
-                "detail": "every ticket this credential can already reach"}
+        return {
+            "variable": var,
+            "all_subjects": True,
+            "ids": [],
+            "detail": "every ticket this credential can already reach",
+        }
     return {
         "variable": var,
         "all_subjects": False,
         "ids": sorted(listing.ids),
-        "detail": (f"{len(listing.ids)} listed id(s)" if listing.ids
-                   else f"nothing is permitted; {var} is unset or empty"),
+        "detail": (
+            f"{len(listing.ids)} listed id(s)" if listing.ids else f"nothing is permitted; {var} is unset or empty"
+        ),
     }
 
 
@@ -918,35 +926,38 @@ def _cmd_describe_configuration() -> str:
     reach = policy.reach_permitted()
     active = _requested_capabilities()
     registered = [tool.name for tool in _visible_tools()]
-    return json.dumps({
-        "tenant": os.environ.get("CSA_ZENDESK_SUBDOMAIN") or None,
-        # Not a secret: a PKCE public client id is sent in the clear in every authorization
-        # request. Reported for the same reason the Google servers report their project - it is
-        # the one fact that distinguishes two otherwise identical deployments.
-        "oauth_client_id": os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER") or None,
-        "capabilities_enabled": sorted(active),
-        "capabilities_available": sorted(policy.ALL_CAPABILITIES),
-        "reach_permitted": reach,
-        "reach_note": (
-            "Replies may leave the organisation: ticket.reply is enabled, and a public comment "
-            "is emailed to the requester and cannot be unsent."
-            if reach else
-            "Replies cannot leave the organisation. ticket.reply is off, so reply_publicly is "
-            "not registered at all - set CSA_ZD_ALLOW_REACH to change that."
-        ),
-        "allowlists": {
-            "read": _describe_listing("CSA_ZD_ALLOWLIST_READ"),
-            "write": _describe_listing("CSA_ZD_ALLOWLIST_WRITE"),
-            "admin": _describe_listing("CSA_ZD_ALLOWLIST_ADMIN"),
+    return json.dumps(
+        {
+            "tenant": os.environ.get("CSA_ZENDESK_SUBDOMAIN") or None,
+            # Not a secret: a PKCE public client id is sent in the clear in every authorization
+            # request. Reported for the same reason the Google servers report their project - it is
+            # the one fact that distinguishes two otherwise identical deployments.
+            "oauth_client_id": os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER") or None,
+            "capabilities_enabled": sorted(active),
+            "capabilities_available": sorted(policy.ALL_CAPABILITIES),
+            "reach_permitted": reach,
+            "reach_note": (
+                "Replies may leave the organisation: ticket.reply is enabled, and a public comment "
+                "is emailed to the requester and cannot be unsent."
+                if reach
+                else "Replies cannot leave the organisation. ticket.reply is off, so reply_publicly is "
+                "not registered at all - set CSA_ZD_ALLOW_REACH to change that."
+            ),
+            "allowlists": {
+                "read": _describe_listing("CSA_ZD_ALLOWLIST_READ"),
+                "write": _describe_listing("CSA_ZD_ALLOWLIST_WRITE"),
+                "admin": _describe_listing("CSA_ZD_ALLOWLIST_ADMIN"),
+            },
+            "allowlist_note": (
+                "A blast-radius control, not a security boundary: this server acts as the operating "
+                "user, so nothing here is reachable that they could not already open in Zendesk."
+            ),
+            "registered_tools": sorted(registered),
+            "hidden_tools": sorted({tool.name for tool in REACH_TOOLS} - set(registered)),
+            "token_file": str(_store.token_path()),
         },
-        "allowlist_note": (
-            "A blast-radius control, not a security boundary: this server acts as the operating "
-            "user, so nothing here is reachable that they could not already open in Zendesk."
-        ),
-        "registered_tools": sorted(registered),
-        "hidden_tools": sorted({tool.name for tool in REACH_TOOLS} - set(registered)),
-        "token_file": str(_store.token_path()),
-    }, indent=2)
+        indent=2,
+    )
 
 
 def _cmd_demonstration_plan() -> str:
@@ -957,22 +968,27 @@ def _cmd_demonstration_plan() -> str:
     steps = []
     for tool in _visible_tools():
         gate = policy._GATES.get(tool.name)
-        steps.append({
-            "tool": tool.name,
-            "capability": gate or "none - answers without spending a capability",
-            "permitted": gate is None or gate in active,
-        })
+        steps.append(
+            {
+                "tool": tool.name,
+                "capability": gate or "none - answers without spending a capability",
+                "permitted": gate is None or gate in active,
+            }
+        )
     refused = [s["tool"] for s in steps if not s["permitted"]]
-    return json.dumps({
-        "steps": steps,
-        "will_be_refused": refused,
-        "note": (
-            "This is a plan, not a run: carrying it out means calling these tools, each still "
-            "gated on its own. Tools this deployment does not have are absent rather than "
-            "listed-and-failing, so anything here that reports `permitted: false` is a "
-            "capability decision an operator made, not a defect."
-        ),
-    }, indent=2)
+    return json.dumps(
+        {
+            "steps": steps,
+            "will_be_refused": refused,
+            "note": (
+                "This is a plan, not a run: carrying it out means calling these tools, each still "
+                "gated on its own. Tools this deployment does not have are absent rather than "
+                "listed-and-failing, so anything here that reports `permitted: false` is a "
+                "capability decision an operator made, not a defect."
+            ),
+        },
+        indent=2,
+    )
 
 
 def _cmd_report_a_problem() -> str:
@@ -992,37 +1008,42 @@ def _cmd_report_a_problem() -> str:
     else:
         version_line += "  (could not check PyPI)"
 
-    report = "\n".join([
-        "### Environment",
-        "",
-        "```",
-        f"{'Server version'.ljust(20)}{version_line}",
-        f"{'Installed via'.ljust(20)}{env.installed_via}",
-        f"{'Python'.ljust(20)}{env.python_version} ({env.python_implementation})",
-        f"{'OS'.ljust(20)}{env.os}",
-        f"{'Architecture'.ljust(20)}{env.architecture}",
-        f"{'Reach permitted'.ljust(20)}{reach}",
-        f"{'Authorized'.ljust(20)}{_store.token_path().exists()}",
-        "```",
-        "",
-        *([f"> {note}" for note in env.notes] + [""] if env.notes else []),
-        "### What happened",
-        "",
-        "<!-- What you did, what you expected, what happened instead. Include the tool name.",
-        "     Do not paste ticket ids, subjects, comment text or email addresses. -->",
-    ])
+    report = "\n".join(
+        [
+            "### Environment",
+            "",
+            "```",
+            f"{'Server version'.ljust(20)}{version_line}",
+            f"{'Installed via'.ljust(20)}{env.installed_via}",
+            f"{'Python'.ljust(20)}{env.python_version} ({env.python_implementation})",
+            f"{'OS'.ljust(20)}{env.os}",
+            f"{'Architecture'.ljust(20)}{env.architecture}",
+            f"{'Reach permitted'.ljust(20)}{reach}",
+            f"{'Authorized'.ljust(20)}{_store.token_path().exists()}",
+            "```",
+            "",
+            *([f"> {note}" for note in env.notes] + [""] if env.notes else []),
+            "### What happened",
+            "",
+            "<!-- What you did, what you expected, what happened instead. Include the tool name.",
+            "     Do not paste ticket ids, subjects, comment text or email addresses. -->",
+        ]
+    )
     query = urllib.parse.urlencode({"title": f"[{env.server_version}] ", "body": report})
-    return json.dumps({
-        "report": report,
-        "issues_url": _ISSUES_URL,
-        "new_issue_url": f"{_ISSUES_URL}/new?{query}",
-        "server_version": env.server_version,
-        "latest_version": env.latest_version,
-        "is_outdated": env.is_outdated,
-        "upgrade_command": env.upgrade_command,
-        "installed_via": env.installed_via,
-        "notes": env.notes,
-    }, indent=2)
+    return json.dumps(
+        {
+            "report": report,
+            "issues_url": _ISSUES_URL,
+            "new_issue_url": f"{_ISSUES_URL}/new?{query}",
+            "server_version": env.server_version,
+            "latest_version": env.latest_version,
+            "is_outdated": env.is_outdated,
+            "upgrade_command": env.upgrade_command,
+            "installed_via": env.installed_via,
+            "notes": env.notes,
+        },
+        indent=2,
+    )
 
 
 def _cmd_authenticate() -> str:

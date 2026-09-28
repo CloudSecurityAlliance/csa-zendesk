@@ -8,6 +8,7 @@ so a careful report could be written in detail against something fixed three rel
 **No test here touches the real network.** The one function that can is stubbed at every call
 site, and one test exists purely to prove the default path never reaches for it.
 """
+
 import json
 import urllib.error
 
@@ -22,12 +23,15 @@ class TestInstalledVia:
     an editable checkout may match no release at all. That changes how a maintainer reads the
     report, which is the whole point of carrying it."""
 
-    @pytest.mark.parametrize("path,expected", [
-        ("/Users/x/.local/pipx/venvs/pkg/lib/python3.12/site-packages/pkg", "pipx"),
-        ("/Users/x/.local/share/uv/tools/pkg/lib/python3.12/site-packages/pkg", "uv tool"),
-        ("C:/Users/x/AppData/Roaming/uv/tools/pkg/Lib/site-packages/pkg", "uv tool"),
-        ("/Users/x/project/src/pkg", "editable checkout or source tree"),
-    ])
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            ("/Users/x/.local/pipx/venvs/pkg/lib/python3.12/site-packages/pkg", "pipx"),
+            ("/Users/x/.local/share/uv/tools/pkg/lib/python3.12/site-packages/pkg", "uv tool"),
+            ("C:/Users/x/AppData/Roaming/uv/tools/pkg/Lib/site-packages/pkg", "uv tool"),
+            ("/Users/x/project/src/pkg", "editable checkout or source tree"),
+        ],
+    )
     def test_it_reads_the_route_from_the_path(self, path, expected, monkeypatch):
         monkeypatch.setattr(env.os.path, "abspath", lambda _: path)
         monkeypatch.setattr(env.os.path, "dirname", lambda _: path)
@@ -41,12 +45,14 @@ class TestInstalledVia:
         monkeypatch.setattr(env.os.path, "dirname", lambda _: path)
         assert env._installed_via() != "uv tool"
 
-    @pytest.mark.parametrize("same_prefix,expected", [
-        (True, "pip (shared environment)"),
-        (False, "pip (venv)"),
-    ])
-    def test_a_site_packages_install_distinguishes_shared_from_venv(
-            self, same_prefix, expected, monkeypatch):
+    @pytest.mark.parametrize(
+        "same_prefix,expected",
+        [
+            (True, "pip (shared environment)"),
+            (False, "pip (venv)"),
+        ],
+    )
+    def test_a_site_packages_install_distinguishes_shared_from_venv(self, same_prefix, expected, monkeypatch):
         path = "/usr/lib/python3.12/site-packages/pkg"
         monkeypatch.setattr(env.os.path, "abspath", lambda _: path)
         monkeypatch.setattr(env.os.path, "dirname", lambda _: path)
@@ -56,15 +62,18 @@ class TestInstalledVia:
 
 
 class TestUpgradeCommand:
-    """"You are out of date" is half an answer. The half that saves time is which of four
+    """ "You are out of date" is half an answer. The half that saves time is which of four
     commands to run."""
 
-    @pytest.mark.parametrize("route,fragment", [
-        ("pipx", "pipx upgrade"),
-        ("uv tool", "uv tool upgrade"),
-        ("pip (venv)", "pip install --upgrade"),
-        ("pip (shared environment)", "pip install --upgrade"),
-    ])
+    @pytest.mark.parametrize(
+        "route,fragment",
+        [
+            ("pipx", "pipx upgrade"),
+            ("uv tool", "uv tool upgrade"),
+            ("pip (venv)", "pip install --upgrade"),
+            ("pip (shared environment)", "pip install --upgrade"),
+        ],
+    )
     def test_each_route_gets_its_own_command(self, route, fragment):
         assert fragment in env._upgrade_command(route)
 
@@ -75,10 +84,13 @@ class TestUpgradeCommand:
 
 
 class TestVersionComparison:
-    @pytest.mark.parametrize("value,expected", [
-        ("0.4.0", (0, 4, 0)),
-        ("1.10.2", (1, 10, 2)),
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("0.4.0", (0, 4, 0)),
+            ("1.10.2", (1, 10, 2)),
+        ],
+    )
     def test_it_reads_a_plain_numeric_version(self, value, expected):
         assert env._as_tuple(value) == expected
 
@@ -94,27 +106,30 @@ class TestLatestOnPyPI:
     airgapped machine must lose that line, never the report."""
 
     def test_it_reads_the_version(self, monkeypatch):
-        monkeypatch.setattr(env.urllib.request, "urlopen",
-                            lambda *a, **kw: _FakeResponse({"info": {"version": "9.9.9"}}))
+        monkeypatch.setattr(
+            env.urllib.request, "urlopen", lambda *a, **kw: _FakeResponse({"info": {"version": "9.9.9"}})
+        )
         assert env.latest_on_pypi() == "9.9.9"
 
-    @pytest.mark.parametrize("boom", [
-        urllib.error.URLError("offline"),
-        OSError("connection reset"),
-        ValueError("not json"),
-    ])
+    @pytest.mark.parametrize(
+        "boom",
+        [
+            urllib.error.URLError("offline"),
+            OSError("connection reset"),
+            ValueError("not json"),
+        ],
+    )
     def test_a_failure_is_none_not_an_exception(self, boom, monkeypatch):
         def raise_it(*a, **kw):
             raise boom
+
         monkeypatch.setattr(env.urllib.request, "urlopen", raise_it)
         assert env.latest_on_pypi() is None
 
-    @pytest.mark.parametrize("body", [{}, {"info": {}}, {"info": {"version": ""}},
-                                      {"info": {"version": 3}}])
+    @pytest.mark.parametrize("body", [{}, {"info": {}}, {"info": {"version": ""}}, {"info": {"version": 3}}])
     def test_an_unexpected_shape_is_none(self, body, monkeypatch):
         """The index's JSON is somebody else's contract. A shape change must degrade, not crash."""
-        monkeypatch.setattr(env.urllib.request, "urlopen",
-                            lambda *a, **kw: _FakeResponse(body))
+        monkeypatch.setattr(env.urllib.request, "urlopen", lambda *a, **kw: _FakeResponse(body))
         assert env.latest_on_pypi() is None
 
 
@@ -137,8 +152,10 @@ class TestDescribeEnvironment:
         """The load-bearing invariant. A stdio server must not reach the network because it
         booted, so every caller except `report_a_problem` gets the offline answer - and the
         sentinel below is what stops that becoming true only by accident."""
+
         def boom(*a, **kw):
             raise AssertionError("describe_environment() reached the network by default")
+
         monkeypatch.setattr(env.urllib.request, "urlopen", boom)
 
         got = env.describe_environment()

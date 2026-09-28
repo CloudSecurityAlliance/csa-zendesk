@@ -14,6 +14,7 @@ only caller that passes `check_pypi=True`.
 
 Everything else here is offline and touches nothing outside this package.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -37,8 +38,8 @@ _TIMEOUT_SECONDS = 3.0
 @dataclass
 class Environment:
     server_version: str
-    latest_version: str | None      # None = not checked, or could not be checked
-    is_outdated: bool | None        # None when unknown - NOT False, which would read as "current"
+    latest_version: str | None  # None = not checked, or could not be checked
+    is_outdated: bool | None  # None when unknown - NOT False, which would read as "current"
     python_version: str
     python_implementation: str
     os: str
@@ -150,17 +151,23 @@ def describe_environment(check_pypi: bool = False) -> Environment:
 
     notes: list[str] = []
     if outdated:
-        notes.append(f"This is {__version__}; PyPI has {latest}. Upgrade and retry before "
-                     f"filing - the problem may already be fixed. Run: "
-                     f"{_upgrade_command(installed_via)}")
+        notes.append(
+            f"This is {__version__}; PyPI has {latest}. Upgrade and retry before "
+            f"filing - the problem may already be fixed. Run: "
+            f"{_upgrade_command(installed_via)}"
+        )
     elif check_pypi and latest is None:
         # Said out loud rather than left blank. "Could not check" and "you are current" are
         # different facts, and a reader who sees nothing will assume the second.
-        notes.append("Could not reach PyPI to check for a newer version, so this report may be "
-                     "against an already-fixed release. Worth upgrading before filing.")
+        notes.append(
+            "Could not reach PyPI to check for a newer version, so this report may be "
+            "against an already-fixed release. Worth upgrading before filing."
+        )
     if installed_via.startswith("pip (shared"):
-        notes.append("Installed into a shared environment: another project's pin can hold this "
-                     f"package at an old version. `uv tool install {DIST_NAME}[server]` isolates it.")
+        notes.append(
+            "Installed into a shared environment: another project's pin can hold this "
+            f"package at an old version. `uv tool install {DIST_NAME}[server]` isolates it."
+        )
 
     return Environment(
         server_version=__version__,
