@@ -175,15 +175,17 @@ import base64
 import json
 import os
 import time
+import urllib.parse
 from typing import Any
 
 from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from . import __version__, _untrusted, auth, policy
+from . import __version__, _environment, _scope, _untrusted, auth, policy
 from . import exceptions as exc
 from ._connect import connect
+from .auth import _store
 from .client import ZendeskClient
 from .policy import TICKET_ATTACH, TICKET_NOTE, TICKET_READ, TICKET_REPLY, TICKET_SOLVE, TICKET_WRITE
 
@@ -773,12 +775,80 @@ AUTH_TOOLS: list[mcp_types.Tool] = [
 #: other two, matching the rung order (read, then write, then the
 #: always-available auth-lifecycle tools) rather than being appended at the
 #: end.
-TOOLS: list[mcp_types.Tool] = READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS
+#: The introspection trio the rest of the fleet carries and this server did not:
+#: `describe_configuration`, `demonstration_plan`, `report_a_problem`. Named as its
+#: own collection for the reason the module docstring gives for the other four - a
+#: collection is how a claim about a group stays true when the group changes.
+#:
+#: None of the three touches Zendesk. They read this process's own view of its
+#: configuration, so they answer when every other tool is refusing, which is exactly
+#: when somebody needs them. That is also why they are outside `policy._GATES`: there
+#: is no capability to spend on a question about capabilities.
+CONFIG_TOOLS: list[mcp_types.Tool] = [
+    mcp_types.Tool(
+        name="describe_configuration",
+        description=(
+            "What this server is allowed to reach and why anything refused was refused: the "
+            "Zendesk tenant, the capabilities in force, whether replies may leave the "
+            "organisation, and the three allowlists that decide WHICH tickets may be touched. "
+            "Call this when an operation is refused, or when the user asks what you can do. The "
+            "policy is set in the server's environment and CANNOT be changed from here - relay "
+            "what this returns rather than retrying, because a retry fails identically. Makes no "
+            "call to Zendesk, so it answers even when the credential does not."
+        ),
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            # The one read here that is NOT open-world: it returns this process's own
+            # computed state and no Zendesk-authored content at all.
+            open_world_hint=False,
+        ),
+    ),
+    mcp_types.Tool(
+        name="demonstration_plan",
+        description=(
+            "An ordered walkthrough of every tool this deployment has registered, with the "
+            "capability each one costs and what the current policy will refuse. Use it to show "
+            "somebody what this server does, or to check a deployment end to end. It RETURNS A "
+            "PLAN and calls nothing - carrying it out means calling the tools it names, each "
+            "still gated on its own."
+        ),
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+        ),
+    ),
+    mcp_types.Tool(
+        name="report_a_problem",
+        description=(
+            "Assemble a bug report for this server: version, whether it is the latest on PyPI, "
+            "how it was installed, OS, Python, and the active policy - no ticket ids, no email "
+            "addresses, no credentials. Use this when the user says something is broken or asks "
+            "how to report it. Show them the `report` and `new_issue_url`, and check `notes` "
+            "first: if this copy is out of date it says so, and upgrading is the right first "
+            "move before filing. What went wrong is theirs to describe - a ticket id would make "
+            "the report reproducible only by putting a real customer's ticket in a public tracker."
+        ),
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+        ),
+    ),
+]
+
+
+TOOLS: list[mcp_types.Tool] = READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS + CONFIG_TOOLS
 
 #: Threaded into `build_server()`. The second sentence is the load-bearing
 #: one - see `csa-google-workspace`'s identical precedent in the module
 #: docstring: without it a model burns turns retrying a call that cannot
 #: succeed, or starts grepping the filesystem for a credential file.
+#: Where `report_a_problem` sends somebody. A constant rather than a literal in the handler,
+#: so the two places that reference it cannot drift.
+_ISSUES_URL = "https://github.com/CloudSecurityAlliance/csa-zendesk/issues"
+
 INSTRUCTIONS = (
     "IF A TOOL REPORTS THAT THE SERVER IS NOT AUTHORIZED: call the `authenticate` tool, which "
     "runs the OAuth login flow and opens a browser for the user to sign in. Do not search the "
@@ -786,7 +856,17 @@ INSTRUCTIONS = (
     "completes. Call `auth_status` at any time to see whether a stored credential exists, its "
     "expiry, and its granted scope, with no network call. Call `logout` to revoke the stored "
     "credential; it is safe to call even when already logged out, and the only way back is a "
-    "fresh `authenticate` call."
+    "fresh `authenticate` call.\n\n"
+    "WHAT MAY THIS SERVER DO: call `describe_configuration`. It reports the tenant, the "
+    "capabilities in force, whether replies may leave the organisation, and the three "
+    "allowlists that decide which tickets may be touched. The policy is set in the server's "
+    "environment and cannot be changed from here, so relay what it says rather than retrying - "
+    "a retry fails identically. `demonstration_plan` returns an ordered walkthrough of every "
+    "registered tool and what the current policy will refuse.\n\n"
+    "IF SOMETHING LOOKS LIKE A BUG - a tool missing, an error that makes no sense, a result "
+    "contradicting its own description - call `report_a_problem`. It assembles a filable "
+    "report containing no ticket ids, no addresses and no credentials, and says whether this "
+    "copy is out of date, which is worth fixing before filing."
 )
 
 
@@ -809,6 +889,161 @@ def _human_expiry(expires_at: float) -> str:
     ignore.
     """
     return f"expires in about {(expires_at - time.time()) / 3600:.1f} hours"
+
+
+def _describe_listing(var: str) -> dict[str, object]:
+    """One allowlist, as a shape a reader can act on.
+
+    `unusable` is its own state and not folded into `permits_nothing`: an unset variable and a
+    typo'd one both permit nothing, and only one of them is a mistake. `_scope.read_listing`
+    raises `AllowlistError` on a bad entry, and reporting that as "nothing is permitted" would
+    hide the fix from the only person who can make it.
+    """
+    try:
+        listing = _scope.read_listing(var)
+    except _scope.AllowlistError as e:
+        return {"variable": var, "unusable": True, "detail": str(e)}
+    if listing.all_subjects:
+        return {
+            "variable": var,
+            "all_subjects": True,
+            "ids": [],
+            "detail": "every ticket this credential can already reach",
+        }
+    return {
+        "variable": var,
+        "all_subjects": False,
+        "ids": sorted(listing.ids),
+        "detail": (
+            f"{len(listing.ids)} listed id(s)" if listing.ids else f"nothing is permitted; {var} is unset or empty"
+        ),
+    }
+
+
+def _cmd_describe_configuration() -> str:
+    """This process's own view of what it may do. No Zendesk call, deliberately - it has to
+    answer when the credential does not, which is when somebody most needs it."""
+    reach = policy.reach_permitted()
+    active = _requested_capabilities()
+    registered = [tool.name for tool in _visible_tools()]
+    return json.dumps(
+        {
+            "tenant": os.environ.get("CSA_ZENDESK_SUBDOMAIN") or None,
+            # Not a secret: a PKCE public client id is sent in the clear in every authorization
+            # request. Reported for the same reason the Google servers report their project - it is
+            # the one fact that distinguishes two otherwise identical deployments.
+            "oauth_client_id": os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER") or None,
+            "capabilities_enabled": sorted(active),
+            "capabilities_available": sorted(policy.ALL_CAPABILITIES),
+            "reach_permitted": reach,
+            "reach_note": (
+                "Replies may leave the organisation: ticket.reply is enabled, and a public comment "
+                "is emailed to the requester and cannot be unsent."
+                if reach
+                else "Replies cannot leave the organisation. ticket.reply is off, so reply_publicly is "
+                "not registered at all - set CSA_ZD_ALLOW_REACH to change that."
+            ),
+            "allowlists": {
+                "read": _describe_listing("CSA_ZD_ALLOWLIST_READ"),
+                "write": _describe_listing("CSA_ZD_ALLOWLIST_WRITE"),
+                "admin": _describe_listing("CSA_ZD_ALLOWLIST_ADMIN"),
+            },
+            "allowlist_note": (
+                "A blast-radius control, not a security boundary: this server acts as the operating "
+                "user, so nothing here is reachable that they could not already open in Zendesk."
+            ),
+            "registered_tools": sorted(registered),
+            "hidden_tools": sorted({tool.name for tool in REACH_TOOLS} - set(registered)),
+            "token_file": str(_store.token_path()),
+        },
+        indent=2,
+    )
+
+
+def _cmd_demonstration_plan() -> str:
+    """An ordered walkthrough, computed from what is actually registered rather than written
+    out by hand - a plan that lists a tool this deployment does not have is worse than none,
+    because it sends somebody looking for a bug that is a configuration."""
+    active = _requested_capabilities()
+    steps = []
+    for tool in _visible_tools():
+        gate = policy._GATES.get(tool.name)
+        steps.append(
+            {
+                "tool": tool.name,
+                "capability": gate or "none - answers without spending a capability",
+                "permitted": gate is None or gate in active,
+            }
+        )
+    refused = [s["tool"] for s in steps if not s["permitted"]]
+    return json.dumps(
+        {
+            "steps": steps,
+            "will_be_refused": refused,
+            "note": (
+                "This is a plan, not a run: carrying it out means calling these tools, each still "
+                "gated on its own. Tools this deployment does not have are absent rather than "
+                "listed-and-failing, so anything here that reports `permitted: false` is a "
+                "capability decision an operator made, not a defect."
+            ),
+        },
+        indent=2,
+    )
+
+
+def _cmd_report_a_problem() -> str:
+    """A filable report carrying no ticket ids, no addresses and no credentials.
+
+    Everything about WHAT went wrong is the user's to describe. A ticket id would make the
+    report reproducible only at the cost of putting a real customer's ticket into a public
+    tracker, which is the trade this tool exists to refuse on their behalf.
+    """
+    env = _environment.describe_environment(check_pypi=True)
+    reach = policy.reach_permitted()
+    version_line = env.server_version
+    if env.is_outdated:
+        version_line += f"  ** OUT OF DATE - PyPI has {env.latest_version} **"
+    elif env.latest_version is not None:
+        version_line += "  (latest)"
+    else:
+        version_line += "  (could not check PyPI)"
+
+    report = "\n".join(
+        [
+            "### Environment",
+            "",
+            "```",
+            f"{'Server version'.ljust(20)}{version_line}",
+            f"{'Installed via'.ljust(20)}{env.installed_via}",
+            f"{'Python'.ljust(20)}{env.python_version} ({env.python_implementation})",
+            f"{'OS'.ljust(20)}{env.os}",
+            f"{'Architecture'.ljust(20)}{env.architecture}",
+            f"{'Reach permitted'.ljust(20)}{reach}",
+            f"{'Authorized'.ljust(20)}{_store.token_path().exists()}",
+            "```",
+            "",
+            *([f"> {note}" for note in env.notes] + [""] if env.notes else []),
+            "### What happened",
+            "",
+            "<!-- What you did, what you expected, what happened instead. Include the tool name.",
+            "     Do not paste ticket ids, subjects, comment text or email addresses. -->",
+        ]
+    )
+    query = urllib.parse.urlencode({"title": f"[{env.server_version}] ", "body": report})
+    return json.dumps(
+        {
+            "report": report,
+            "issues_url": _ISSUES_URL,
+            "new_issue_url": f"{_ISSUES_URL}/new?{query}",
+            "server_version": env.server_version,
+            "latest_version": env.latest_version,
+            "is_outdated": env.is_outdated,
+            "upgrade_command": env.upgrade_command,
+            "installed_via": env.installed_via,
+            "notes": env.notes,
+        },
+        indent=2,
+    )
 
 
 def _cmd_authenticate() -> str:
@@ -1077,6 +1312,15 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         return _cmd_whoami()
     if name == "logout":
         return _cmd_logout()
+    # The introspection trio, dispatched with the auth tools and before the unknown-name
+    # refusal for the same reason: none of them needs a credential or a capability, so they
+    # must answer when everything else is refusing.
+    if name == "describe_configuration":
+        return _cmd_describe_configuration()
+    if name == "demonstration_plan":
+        return _cmd_demonstration_plan()
+    if name == "report_a_problem":
+        return _cmd_report_a_problem()
     if name not in {
         "get_ticket",
         "search_tickets",

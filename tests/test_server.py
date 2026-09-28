@@ -562,8 +562,11 @@ def test_whoami_wraps_the_identity_it_reports(monkeypatch):
     assert "<b>" not in out
 
 
-def test_tools_is_read_tools_plus_write_tools_plus_auth_tools():
-    assert srv.TOOLS == srv.READ_TOOLS + srv.WRITE_TOOLS + srv.AUTH_TOOLS
+def test_tools_is_the_concatenation_of_its_four_collections():
+    """CONFIG_TOOLS joined the three when the introspection trio landed. The assertion is the
+    plain concatenation rather than a count, so a collection added later fails here and has to
+    be named - which is the point of keeping them separate at all."""
+    assert srv.TOOLS == srv.READ_TOOLS + srv.WRITE_TOOLS + srv.AUTH_TOOLS + srv.CONFIG_TOOLS
 
 
 def test_logout_is_annotated_as_a_destructive_idempotent_open_world_write():
@@ -1123,7 +1126,14 @@ def test_every_registered_tool_gates_on_the_capability_its_annotation_implies():
     # loudly rather than the test going vacuous.
     from csa_zendesk import policy
 
-    auth_names = {t.name for t in srv.AUTH_TOOLS}
+    # CONFIG_TOOLS are excluded alongside AUTH_TOOLS, and for the same reason stated
+    # explicitly rather than left to be inferred: `describe_configuration`,
+    # `demonstration_plan` and `report_a_problem` answer questions ABOUT capabilities and
+    # touch Zendesk not at all, so there is no capability for them to spend. Gating them would
+    # make the tools that explain a refusal themselves refusable, which is exactly when
+    # somebody needs them.
+    ungated = {t.name for t in srv.AUTH_TOOLS} | {t.name for t in srv.CONFIG_TOOLS}
+    auth_names = ungated
     expected_gate = {
         "get_ticket": policy.TICKET_READ,
         "search_tickets": policy.TICKET_READ,
@@ -1286,9 +1296,15 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
     }
     data_tool_names = {t.name for t in srv.READ_TOOLS} | {t.name for t in srv.WRITE_TOOLS}
     assert data_tool_names == set(args), "a data tool was added without a matching `args` entry"
-    auth_names = {t.name for t in srv.AUTH_TOOLS}
+    # Excluded BY NAME, never by omission, so an exclusion is a decision somebody made rather
+    # than a tool that quietly fell out of the loop. CONFIG_TOOLS join AUTH_TOOLS here for a
+    # reason worth stating: the envelope marks content this server did not write, and these
+    # three return only this process's own computed state - the tenant it is pointed at, the
+    # capabilities in force, its own version. Wrapping that would claim a provenance it does
+    # not have, and would train a reader to see the marker as decoration.
+    not_data = {t.name for t in srv.AUTH_TOOLS} | {t.name for t in srv.CONFIG_TOOLS}
     for t in srv.TOOLS:
-        if t.name in auth_names:
+        if t.name in not_data:
             continue
         assert _untrusted.MARKER_OPEN in srv.call_tool_sync(t.name, args[t.name]), t.name
 
