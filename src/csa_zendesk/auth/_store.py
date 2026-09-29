@@ -12,11 +12,12 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import stat
+import sys
 import tempfile
 from dataclasses import dataclass
 
 from .. import exceptions as exc
+from . import _privacy
 
 
 class TokenFileError(exc.ZendeskError):
@@ -75,15 +76,27 @@ def _ensure_dir(path: pathlib.Path) -> None:
     """
     directory = path.parent
     if directory.exists():
-        mode = stat.S_IMODE(directory.stat().st_mode)
-        if mode & 0o077:
+        private = _privacy.is_private(directory)
+        if private is False:
             raise TokenFileError(
-                f"{directory} exists with mode {mode:04o}, which grants access to group "
-                f"or other. Refusing to write a credential into it - this directory was "
-                f"not created by this tool, so its mode is verified rather than silently "
-                f"corrected out from under whoever does own it. Run `chmod 700 {directory}` "
-                f"yourself, or point CSA_ZENDESK_TOKEN_FILE somewhere this process can own "
-                f"outright."
+                f"{directory} is reachable by someone other than its owner "
+                f"({_privacy.describe(directory)}). Refusing to "
+                f"write a credential into it - this directory was not created by this "
+                f"tool, so it is verified rather than silently corrected out from under "
+                f"whoever does own it. {_privacy.remedy(directory)}, or point "
+                f"CSA_ZENDESK_TOKEN_FILE somewhere this process can own outright."
+            )
+        if private is None:  # pragma: no cover - only when icacls cannot run
+            # UNKNOWN IS NOT SECURE, and it is also not a finding. Refusing here would
+            # mean a machine whose ACL tool is unavailable can never log in, having been
+            # told nothing is wrong with its directory - so the honest response is to say
+            # so and continue, the same asymmetry `_privacy.harden` applies when icacls
+            # fails. The alternative, treating unknown as private, is the one direction
+            # this codebase does not take.
+            print(  # noqa: T201 - stderr, never stdout: stdout is the MCP JSON-RPC channel
+                f"Warning: could not determine whether {directory} is private; "
+                f"continuing. The credential's protection is UNVERIFIED.",
+                file=sys.stderr,
             )
         return
     to_create: list[pathlib.Path] = []
@@ -93,7 +106,10 @@ def _ensure_dir(path: pathlib.Path) -> None:
         current = current.parent
     for created in reversed(to_create):
         created.mkdir(mode=0o700, exist_ok=True)
-        created.chmod(0o700)  # belt-and-braces: mkdir's mode argument is still umask-masked
+        # Belt-and-braces on POSIX, where mkdir's mode argument is still umask-masked; the
+        # ONLY thing that restricts the directory on Windows, where the mode argument is
+        # ignored outright and an inherited ACL is what a new directory otherwise gets.
+        _privacy.harden(created)
 
 
 def write(tokens: Tokens) -> None:
@@ -109,9 +125,19 @@ def write(tokens: Tokens) -> None:
     path = token_path()
     _ensure_dir(path)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tokens-", suffix=".json")
+    # Tracks whether WE still owe a close. `os.fdopen` takes ownership, so this is set
+    # to None the moment it succeeds and the cleanup below knows not to double-close.
+    unclosed: int | None = fd
     try:
-        os.fchmod(fd, 0o600)
+        # Before a byte is written, on both platforms: POSIX fchmods the descriptor,
+        # Windows rewrites the ACL of the (still empty) file. `os.fchmod` DOES NOT EXIST
+        # on Windows, which is what this line used to call unconditionally - it raised
+        # AttributeError before the write, and the cleanup below then failed to unlink a
+        # file whose descriptor was still open, reporting WinError 32 and hiding the
+        # actual cause (#71).
+        _privacy.harden(tmp, fd)
         with os.fdopen(fd, "w") as fh:
+            unclosed = None  # fdopen owns it now; the with-block closes it
             json.dump(
                 {
                     "access_token": tokens.access_token,
@@ -121,8 +147,15 @@ def write(tokens: Tokens) -> None:
                 },
                 fh,
             )
+        # An explicit, non-inherited ACL travels with the file across a same-volume
+        # rename, so the Windows hardening survives this exactly as the POSIX mode does.
         os.replace(tmp, path)
     except BaseException:
+        # Close before unlinking. On POSIX an open descriptor does not prevent unlink, so
+        # this was invisible there; on Windows it is the difference between cleaning up
+        # and raising a second, misleading error on top of the first.
+        if unclosed is not None:
+            os.close(unclosed)
         pathlib.Path(tmp).unlink(missing_ok=True)
         raise
 
@@ -158,14 +191,18 @@ def read() -> Tokens | None:
             )
         return None
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
-        if mode != 0o600:
+        # `is False`, not `not ...`: None means the ACL could not be read, which is
+        # unknown rather than compromised, and refusing to read a credential on unknown
+        # would strand a user whose icacls is unavailable. Only a definite answer is a
+        # finding. See `_privacy` on why unknown is never reported as private.
+        if _privacy.is_private(path) is False:
             raise TokenFileError(
-                f"{path} has mode {mode:04o}, expected 0600. A token file readable by "
-                f"anyone else is a finding, not a preference. Fix it with "
-                f"`chmod 600 {path}` and consider the credential compromised."
+                f"{path} is readable by someone other than its owner "
+                f"({_privacy.describe(path)}). A token file "
+                f"readable by anyone else is a finding, not a preference. "
+                f"{_privacy.remedy(path)} and consider the credential compromised."
             )
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         # `raw["scope"]` (not `raw.get("scope", "")`): a file written before scope
         # was tracked is refused via the same KeyError path as any other missing
         # field, rather than silently treated as "no scope" - an empty grant is

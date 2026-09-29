@@ -160,7 +160,14 @@ def test_every_candidate_port_occupied_names_all_three_in_the_error():
         for port in ports:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sockets.append(s)  # appended before bind so a failed bind still gets closed
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # SO_EXCLUSIVEADDRUSE on Windows, SO_REUSEADDR elsewhere. With SO_REUSEADDR
+            # here, Windows lets the Listener bind straight over these sockets and the
+            # test occupied nothing - it asserted a refusal whose precondition did not
+            # exist. The two flags are not variants of one idea; see `_OneShotServer`.
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("127.0.0.1", port))
             s.listen(1)
         with pytest.raises(_callback.CallbackError) as exc_info:
