@@ -15,6 +15,8 @@ a PATCH bump means a fix with no surface change.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-28
+
 **Block 2 — `html_body` becomes Markdown, and what that deliberately does not cover.**
 Every tool that can return a ticket or comment envelope — the three reads (`get_ticket`,
 `list_comments`, `search_tickets`) and, since the final whole-branch review's fix wave, the four
