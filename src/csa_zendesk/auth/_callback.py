@@ -27,6 +27,7 @@ from __future__ import annotations
 import http.server
 import os
 import socket
+import sys
 from collections.abc import Sequence
 from types import TracebackType
 from typing import TextIO
@@ -58,7 +59,9 @@ class _OneShotServer(http.server.HTTPServer):
     allow_reuse_address = os.name != "nt"
 
     def server_bind(self) -> None:
-        if os.name == "nt":  # pragma: no cover - Windows-only
+        # `sys.platform`, not `os.name`: mypy narrows the first, so the POSIX stubs
+        # (which have no SO_EXCLUSIVEADDRUSE) never see this line.
+        if sys.platform == "win32":  # pragma: no cover - Windows-only
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 

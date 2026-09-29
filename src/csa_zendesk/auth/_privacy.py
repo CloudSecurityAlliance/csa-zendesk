@@ -220,6 +220,27 @@ def _windows_explicitly_hardened(path: str) -> bool | None:  # pragma: no cover 
     return not strays(explicit)
 
 
+def describe(path: str | os.PathLike[str]) -> str:
+    """Say WHAT is wrong, in the vocabulary of the platform that found it.
+
+    The old messages echoed the octal mode - "has mode 0644, expected 0600" - which is the
+    useful half of the diagnostic on POSIX and meaningless on Windows, where every file
+    reads 0o666 whatever its ACL says. Dropping it to make one message fit both platforms
+    would have cost POSIX a real detail; so each platform names its own finding instead,
+    and Windows gains one it never had: WHICH principal should not be there.
+    """
+    path = os.fspath(path)
+    if sys.platform == "win32":  # pragma: no cover - Windows-only
+        acl = _read_acl(path)
+        if acl is None:
+            return "the ACL could not be read"
+        # An empty stray list means "nothing unexpected", which is NOT the same as "could
+        # not tell" - collapsing the two would report a readable-but-clean ACL as unknown.
+        extra = strays([*acl[0], *acl[1]])
+        return "also reachable by " + ", ".join(extra) if extra else "no unexpected principals"
+    return f"mode {stat.S_IMODE(os.stat(path).st_mode):04o}"
+
+
 def remedy(path: str | os.PathLike[str]) -> str:
     r"""The fix-it-yourself instruction, in the form this platform can actually carry out.
 
@@ -248,7 +269,7 @@ def harden(path: str | os.PathLike[str], fd: int | None = None) -> None:
     branch has no such distinction, which is exactly why it is easy to lose here.
     """
     path = os.fspath(path)
-    if _WINDOWS:  # pragma: no cover - Windows-only
+    if sys.platform == "win32":  # pragma: no cover - Windows-only
         result = _icacls(path, "/inheritance:r", "/grant:r", f"{_current_windows_principal()}:F")
         # AND THEN REMOVE WHATEVER ELSE IS THERE. `/inheritance:r` drops only INHERITED
         # ACEs and `/grant:r` replaces only the ACE for the principal named, so anything
@@ -270,11 +291,11 @@ def harden(path: str | os.PathLike[str], fd: int | None = None) -> None:
             )
         return
     if fd is not None:
-        # `type: ignore` because `os.fchmod` does not exist in the Windows stubs, and
-        # mypy resolves stubs for the platform it RUNS on. Unguarded, this file
-        # type-checks on the ubuntu CI job and fails on a maintainer's Windows box -
-        # a diagnostic that depends on where it is run is the same class of problem as
-        # a test that does. The `_WINDOWS` branch above is the real guard.
-        os.fchmod(fd, 0o700 if os.path.isdir(path) else 0o600)  # type: ignore[attr-defined]
+        # Reachable only when the branch above did not fire, and mypy knows that
+        # because the test is on `sys.platform` - which it narrows - rather than on a
+        # module-level bool, which it does not. A `type: ignore` here would be needed
+        # on Windows (no `os.fchmod` in those stubs) and reported UNUSED on ubuntu, so
+        # the diagnostic would depend on where mypy ran. Narrowing avoids both.
+        os.fchmod(fd, 0o700 if os.path.isdir(path) else 0o600)
     else:
         os.chmod(path, 0o700 if os.path.isdir(path) else 0o600)

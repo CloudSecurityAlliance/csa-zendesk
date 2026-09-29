@@ -79,7 +79,8 @@ def _ensure_dir(path: pathlib.Path) -> None:
         private = _privacy.is_private(directory)
         if private is False:
             raise TokenFileError(
-                f"{directory} is reachable by someone other than its owner. Refusing to "
+                f"{directory} is reachable by someone other than its owner "
+                f"({_privacy.describe(directory)}). Refusing to "
                 f"write a credential into it - this directory was not created by this "
                 f"tool, so it is verified rather than silently corrected out from under "
                 f"whoever does own it. {_privacy.remedy(directory)}, or point "
@@ -196,7 +197,8 @@ def read() -> Tokens | None:
         # finding. See `_privacy` on why unknown is never reported as private.
         if _privacy.is_private(path) is False:
             raise TokenFileError(
-                f"{path} is readable by someone other than its owner. A token file "
+                f"{path} is readable by someone other than its owner "
+                f"({_privacy.describe(path)}). A token file "
                 f"readable by anyone else is a finding, not a preference. "
                 f"{_privacy.remedy(path)} and consider the credential compromised."
             )

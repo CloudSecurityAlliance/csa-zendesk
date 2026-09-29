@@ -96,3 +96,18 @@ def test_a_logon_session_sid_is_recognised_case_insensitively(principal, expecte
     failing with 1332 ERROR_NONE_MAPPED.
     """
     assert _privacy._is_own_logon_session(principal) is expected
+
+
+def test_describe_names_the_finding_in_this_platform_s_vocabulary(tmp_path):
+    """The old messages echoed the octal mode, which is the useful half of the diagnostic
+    on POSIX and meaningless on Windows, where every file reads 0o666 whatever its ACL
+    says. Each platform names its own finding rather than one message fitting neither.
+    """
+    f = tmp_path / "token.json"
+    f.write_text("{}", encoding="utf-8")
+    _privacy.harden(f)
+    text = _privacy.describe(f)
+    if os.name == "nt":
+        assert "principal" in text or "ACL" in text
+    else:
+        assert "mode 0600" in text
