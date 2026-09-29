@@ -25,12 +25,43 @@ string a later task can hand to the token endpoint.
 from __future__ import annotations
 
 import http.server
+import os
+import socket
 from collections.abc import Sequence
 from types import TracebackType
 from typing import TextIO
 from urllib.parse import parse_qs, urlparse
 
 from .. import exceptions as exc
+
+
+class _OneShotServer(http.server.HTTPServer):
+    """`HTTPServer`, minus a reuse flag that means the opposite thing on Windows.
+
+    `socketserver.TCPServer` sets `allow_reuse_address = 1`, which on POSIX means "rebind
+    a port still in TIME_WAIT" - harmless and necessary, because a listener that just shut
+    down would otherwise refuse to come back for a minute. On Windows `SO_REUSEADDR` means
+    something else entirely: it permits binding a port ANOTHER SOCKET IS ACTIVELY
+    LISTENING ON, and the later bind wins subsequent connections.
+
+    For a loopback OAuth callback that is not a portability wrinkle, it is a hijack: any
+    local process could bind 8765 and receive the authorization code this listener is
+    waiting for. PKCE and the `state` check are what stop that being a full compromise,
+    which is the reason this is a weakened layer rather than an open door - but the layer
+    is supposed to be there.
+
+    So: reuse on POSIX, `SO_EXCLUSIVEADDRUSE` on Windows, which is the option that actually
+    means "this port is mine". The visible consequence is that binding an occupied port now
+    FAILS on Windows, which is what the candidate-port loop was written expecting all along.
+    """
+
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        if os.name == "nt":  # pragma: no cover - Windows-only
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
 
 __all__ = ["CallbackError", "Listener", "paste_fallback", "PASTE_REDIRECT"]
 
@@ -110,7 +141,7 @@ class Listener:
         server: http.server.HTTPServer | None = None
         for port in ports:
             try:
-                server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+                server = _OneShotServer(("127.0.0.1", port), Handler)
                 break
             except OSError:
                 continue

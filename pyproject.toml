@@ -120,6 +120,11 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `tests` on the path so `tests/auth/*` can import `tests/_platform.py`. Without it
+# pytest only puts each test file's OWN directory on sys.path (there are no
+# `__init__.py` files here), so a shared helper is importable from `tests/` and not
+# from `tests/auth/` - which is where the tests needing it happen to live.
+pythonpath = ["tests"]
 # An unclosed httpx.Client or any other warning becomes a failure instead of
 # silent output a stdio MCP server can't afford to print anyway.
 filterwarnings = ["error"]

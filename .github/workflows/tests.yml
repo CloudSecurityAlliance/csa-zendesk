@@ -35,6 +35,32 @@ jobs:
       - run: ruff format --check src tests
       - run: mypy
 
+  test-windows:
+    name: the suite on Windows
+    runs-on: windows-latest
+    # Required, and deliberately not `continue-on-error`. The first Windows run of this
+    # suite found 51 failures (#71), 41 of them one line: the credential store refused
+    # every write because Windows reports every directory as mode 0o777. A stock install
+    # could not store a token at all, and every job above was green throughout, because
+    # every job above is ubuntu. A job that cannot fail would have reported the same.
+    #
+    # One interpreter, not the four-version matrix: this holds the platform axis honest
+    # and the version axis is already covered above.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[dev,server]"
+      # NO COVERAGE GATE, and it is structural rather than a concession. `_privacy.py`
+      # branches on `_WINDOWS` - an icacls ACL reader on one side, mode bits on the other,
+      # with the Windows half carrying `# pragma: no cover` because ubuntu is where
+      # `fail_under` is enforced and those lines are unreachable there. Each platform
+      # necessarily leaves the other's branch unexecuted, so 100% is reachable by the
+      # UNION and by neither alone (Windows measures 99.26%). A second, lower number is
+      # the thing a gate-below-the-measured-value comment two jobs up refuses by name, so
+      # this is not one: what this job gates is whether the tests pass on Windows.
+      - run: python -m pytest -q
+
   test:
     runs-on: ubuntu-latest
     strategy:

@@ -1,6 +1,7 @@
 import pytest
+from _platform import requires_posix_modes, requires_symlinks
 
-from csa_zendesk.auth import _store
+from csa_zendesk.auth import _privacy, _store
 
 
 def test_explicit_override_wins(monkeypatch, tmp_path):
@@ -18,7 +19,12 @@ def test_xdg_is_used_when_set(monkeypatch, tmp_path):
 def test_home_config_is_the_fallback(monkeypatch, tmp_path):
     monkeypatch.delenv("CSA_ZENDESK_TOKEN_FILE", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    # BOTH, because `pathlib.Path.home()` reads USERPROFILE on Windows and HOME on
+    # POSIX. Setting only HOME left `token_path()` resolving against the real user
+    # directory - so the test asserted nothing about the fallback and would have written
+    # into the developer's actual credential location had it got that far.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert _store.token_path() == tmp_path / ".config" / "csa-zendesk" / "tokens.json"
 
 
@@ -26,10 +32,14 @@ def test_write_creates_0600_in_a_0700_directory(monkeypatch, tmp_path):
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "d" / "tokens.json"))
     _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
     p = _store.token_path()
-    import stat
 
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert stat.S_IMODE(p.parent.stat().st_mode) == 0o700
+    # Asked as a question, not asserted as 0o600/0o700. Those are the POSIX ANSWER, and
+    # on Windows `os.stat` reports 0o666/0o777 for every path however often it is
+    # hardened - so this assertion could only ever hold on one platform while the
+    # property it cares about (nobody else can read the credential) holds on both.
+    # `is True` deliberately: None means unknown, and unknown is not private.
+    assert _privacy.is_private(p) is True
+    assert _privacy.is_private(p.parent) is True
 
 
 def test_the_file_holds_exactly_four_fields(monkeypatch, tmp_path):
@@ -47,6 +57,7 @@ def test_the_file_holds_exactly_four_fields(monkeypatch, tmp_path):
     assert set(raw) == {"access_token", "refresh_token", "expires_at", "scope"}
 
 
+@requires_posix_modes
 def test_a_world_readable_file_is_a_loud_error_not_a_warning(monkeypatch, tmp_path):
     # ADR-009: "a 0644 token file is a finding, not a preference."
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "tokens.json"))
@@ -61,6 +72,7 @@ def test_read_returns_none_when_there_is_no_file(monkeypatch, tmp_path):
     assert _store.read() is None
 
 
+@requires_symlinks
 def test_a_dangling_symlink_is_not_reported_as_no_token_file(monkeypatch, tmp_path):
     # path.exists() is False for a symlink whose target is gone - the same
     # return value as "no token file at all" - which would make `auth status`
@@ -106,6 +118,7 @@ def test_an_existing_directory_we_did_not_create_is_verified_not_chmodded(monkey
     assert directory.stat().st_mode == before
 
 
+@requires_posix_modes
 def test_an_existing_directory_looser_than_0700_is_refused_not_silently_fixed(monkeypatch, tmp_path):
     directory = tmp_path / "loose"
     directory.mkdir()
@@ -121,10 +134,8 @@ def test_intermediate_parents_created_along_the_way_are_also_private(monkeypatch
     # each one created is chmodded too.
     monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "a" / "b" / "tokens.json"))
     _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
-    import stat
-
-    assert stat.S_IMODE((tmp_path / "a").stat().st_mode) == 0o700
-    assert stat.S_IMODE((tmp_path / "a" / "b").stat().st_mode) == 0o700
+    assert _privacy.is_private(tmp_path / "a") is True
+    assert _privacy.is_private(tmp_path / "a" / "b") is True
 
 
 def test_a_credential_never_appears_in_a_repr(monkeypatch, tmp_path):
