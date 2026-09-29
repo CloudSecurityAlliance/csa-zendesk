@@ -235,3 +235,32 @@ def test_write_cleans_up_temp_file_on_exception(monkeypatch, tmp_path):
     # And write()'s own except-block unlinked the temp file it created,
     # rather than leaving an orphan behind.
     assert len(list(tmp_path.glob(".tokens-*"))) == 0
+
+
+def test_a_failure_before_the_write_leaves_no_temp_file_and_reports_its_own_cause(monkeypatch, tmp_path):
+    """The cleanup path, which used to hide the error it was cleaning up after.
+
+    `write()` creates the temp file with `mkstemp`, hardens it, and only then hands the
+    descriptor to `fdopen`. Anything that raises in between leaves a descriptor WE still
+    own - and the original cleanup unlinked without closing it. On POSIX that works, so
+    this was invisible; on Windows the unlink fails with WinError 32 and raises a second
+    exception on top of the first, so the reported cause was "file in use by another
+    process" and the actual cause (`os.fchmod` not existing) never surfaced (#71).
+
+    Asserted as both halves: the real exception propagates, and nothing is left behind.
+    """
+    monkeypatch.setenv("CSA_ZENDESK_TOKEN_FILE", str(tmp_path / "d" / "tokens.json"))
+
+    def _explode(path, fd=None):
+        if fd is not None:  # the post-mkstemp call, with a descriptor we still own
+            raise RuntimeError("the actual cause")
+        _real(path, fd)
+
+    _real = _privacy.harden
+    monkeypatch.setattr(_privacy, "harden", _explode)
+
+    with pytest.raises(RuntimeError, match="the actual cause"):
+        _store.write(_store.Tokens("at", "rt", 1000.0, "read"))
+
+    leftovers = list((tmp_path / "d").glob(".tokens-*"))
+    assert leftovers == [], f"the temp file survived the failure: {leftovers}"
