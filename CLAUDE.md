@@ -9,15 +9,31 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 `csa-zendesk` — a Python library (import name `csa_zendesk`) and local stdio MCP server over
 the Zendesk REST API, targeting 100% coverage of what is in scope and reachable.
 
-**Status: Block 0 complete. Foundations only — one operation, no MCP server, no OAuth.**
-`src/csa_zendesk/` holds `exceptions.py`, `_errors.py`, `_pagination.py`, `_http.py`,
-`backend.py`, `policy.py` and `client.py`; 143 tests at 100% coverage. The repository also
-holds upstream API snapshots, an operation inventory, an anonymised ecosystem survey, live
-experiment results, and the decisions taken so far.
+**Status: Blocks 0–1 shipped (v0.2.0 on PyPI); Block 2 in progress.** This paragraph was
+frozen at "Block 0 complete, no MCP server, no OAuth" while the CHANGELOG recorded Blocks 0b,
+0c, 0e, 1 and 2 — so the one file every session reads first said the opposite of the code.
+Check it against `CHANGELOG.md` when either moves.
 
-**One backend method exists (`get_ticket`) out of 54 designed tools.** There is no MCP server,
-no tool layer, and no OAuth — those are Block 0b and Block 1. **Do not describe any tool as
-working.**
+`src/csa_zendesk/` holds the library (`exceptions.py`, `_errors.py`, `_pagination.py`,
+`_http.py`, `_transport.py`, `backend.py`, `policy.py`, `client.py`), the boundary controls
+(`_untrusted.py`, `_markdown.py`, `_scope.py`), the OAuth PKCE flow (`auth/`), and the MCP
+server (`server.py`, `tools.py`, `cli.py`). **873 tests at 100% coverage, statements and
+branches.** The repository also holds upstream API snapshots, an operation inventory, an
+anonymised ecosystem survey, live experiment results, and the decisions taken so far.
+
+**Seventeen tools are exposed of 54 designed** — `server.TOOLS` is the authority, and it is
+`READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS` plus the three introspection tools:
+
+| collection | n | tools |
+|---|---:|---|
+| `READ_TOOLS` | 4 | `get_ticket`, `search_tickets`, `list_comments`, `get_attachment` |
+| `WRITE_TOOLS` | 6 | `update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload` |
+| `AUTH_TOOLS` | 4 | `whoami`, `authenticate`, `auth_status`, `logout` |
+| introspection | 3 | `describe_configuration`, `demonstration_plan`, `report_a_problem` |
+
+**Do not describe a tool outside that list as working** — the other 37 are designed, not
+built. Read the count from `server.TOOLS` rather than from here; a number in prose is a claim
+that goes stale, which is what this paragraph was.
 
 ### Working on the code
 
@@ -38,6 +54,14 @@ it is reviewable, not an absence from the command line.
 
 The coverage gate is **100%, not 90%** — a gate below the measured state cannot fail.
 `# pragma: no cover` is the explicit hatch, and using it is a decision to write down.
+
+**Both halves of that gate live in `pyproject.toml`, not on the CI command line** (#66). They
+were on the command line, with no `[tool.coverage.run]` section at all, and the two
+consequences were that a developer's `pytest --cov` measured *every imported module including
+the tests* — 6,122 statements against the library's 1,580, reported as 99%, exiting 1 while CI
+was green — and that **branch coverage was off entirely**, so the 100% was statements only.
+A gate nobody can reproduce locally is a gate nobody runs before pushing. Same command both
+places now, and the config decides what it means.
 
 **`FakeBackend` is a first-class implementation of `Backend`, not a mock.** It is what makes
 the offline tier possible, and `tests/test_backend.py` asserts it cannot drift from

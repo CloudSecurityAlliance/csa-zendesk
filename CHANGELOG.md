@@ -58,6 +58,33 @@ a comment actually contained concealed text — rather than silently dropping it
   unconverted (with a library-authored note in `hidden_text`) rather than failing the whole call —
   `body` is untouched by this block, so the comment stays readable.
 
+### Fixed (coverage measurement, independent of Block 2)
+- **The coverage gate lived on the CI command line, so local and CI measured different
+  things.** `pyproject.toml` had no `[tool.coverage.run]` section at all. CI passed
+  `--cov=csa_zendesk --cov-fail-under=100` and saw 100%; a developer running the documented
+  `pytest --cov` measured **every imported module including the tests** — 6,122 statements
+  against the library's 1,580 — reported 99% and **exited 1**. A gate that fails locally and
+  passes in CI, for a reason unrelated to the code, is a gate nobody runs before pushing.
+- **Branch coverage was never measured.** No `--cov-branch` and no `branch = true`, so the
+  100% was statements only. That is not a smaller number than the rest of the fleet reports —
+  it is a different measurement presented as the same one, and
+  `surfaces/mcp/CONFORMANCE.md` puts all four servers in one row.
+- Turning branches on found **two uncovered, both the same ordinary case**: a 429 carrying
+  headers but no `Retry-After`. The existing test passed `{}`, which returns at
+  `if not headers` *before* the loop, so the loop's fall-through had never run — and a real
+  429 always carries headers (`X-Rate-Limit`, `Content-Type`); it is `Retry-After`
+  specifically that goes missing. The default is then reached through `int(str(None))`
+  raising `ValueError`. Correct, and never exercised. Added with it: `Retry-After` found
+  *past* a non-matching header, because every fixture had a single key so the search always
+  matched on the first pass.
+- Both settings now live in the config and CI runs the same `pytest -q --cov` a developer
+  runs, so the two cannot drift apart again. **1,580 statements, 414 branches, 0 missing.**
+  ([#66](https://github.com/CloudSecurityAlliance/csa-zendesk/issues/66))
+
+  Third instance of this identical pair being absent — `csa-google-workspace` and
+  `csa-skilljar` both carried and fixed it — and the last server in the fleet measuring
+  this way.
+
 ### Not done in this block, on purpose
 - **No homoglyph or mixed-script detection.** A rule that flags mixed scripts within a word also
   flags Indigenous orthographies and IPA transcriptions — measured at 6 of 8 false positives
