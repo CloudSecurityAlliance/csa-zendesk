@@ -13,7 +13,48 @@ change, possibly incompatibly, between `0.x` releases. `1.0.0` is the commitment
 have stopped moving. Within `0.x`, a MINOR bump means new capability (tools, operations);
 a PATCH bump means a fix with no surface change.
 
-## [Unreleased]
+## [0.3.1] - 2026-09-29
+### Fixed
+- **The credential store could not write a token on Windows at all.** `_ensure_dir`
+  refused any directory whose `mode & 0o077` was set, and `read()` refused any token
+  file that was not exactly `0o600`. Windows does not map ACLs onto POSIX mode bits -
+  `os.stat` reports `0o777` for every directory - so the check did not merely fail to
+  protect, it **refused every write on every Windows machine**, and `authenticate`
+  could not complete.
+
+  The question is now asked as a question, in new `auth/_privacy.py`: mode bits on
+  POSIX, the ACL via `icacls` on Windows.
+
+- **`os.fchmod` does not exist on Windows**, and `write()` called it unconditionally -
+  raising before a byte was written, after which the cleanup tried to unlink a file
+  whose descriptor was still open, reporting `WinError 32` and hiding the real cause.
+
+- **The OAuth callback listener could be hijacked on Windows.** `HTTPServer` sets
+  `allow_reuse_address`, which on POSIX means "rebind a port in `TIME_WAIT`" and on
+  Windows means "bind a port another socket is **actively listening on**, and win
+  subsequent connections". Any local process could bind `8765` and receive the
+  authorization code. PKCE and the `state` check are why this was a weakened layer
+  rather than an open door. Now `SO_EXCLUSIVEADDRUSE` on Windows.
+
+- Error messages carry a remedy the platform can execute. `chmod 600` is advice a
+  Windows reader cannot act on, and an instruction that cannot work costs them the
+  time to try it before disbelieving the message.
+
+### Changed
+- A required `windows-latest` CI job now runs the suite on every pull request. Every
+  job before it was ubuntu and all of them were green throughout, which is how a
+  server that could not store a credential on Windows shipped three times.
+### Changed
+- **Requires Python 3.14 or later** (`requires-python = ">=3.14"`, was `>=3.10`).
+
+  **This is breaking for anyone installing on 3.10-3.13, despite the patch version
+  number.** It is a policy choice rather than a technical one - the code runs on
+  3.10 - recorded as [DEC-025][dec025] with its costs and the rejected alternative
+  written down. The version number is a patch because nothing about the tool
+  surface changed; the installability change is called out here instead of being
+  implied by a digit.
+
+[dec025]: https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md
 
 ## [0.3.0] — 2026-09-28
 
