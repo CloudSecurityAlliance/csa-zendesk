@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.14" }
       - run: pip install -e ".[dev,server]"
       # `.` not a list of directory names: `ruff check src tests scripts` left
       # experiments/ - tracked, and the live-walkthrough path - silently unlinted,
@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.14" }
       - run: pip install -e ".[dev,server]"
       # NO COVERAGE GATE, and it is structural rather than a concession. `_privacy.py`
       # branches on `_WINDOWS` - an icacls ACL reader on one side, mode bits on the other,
@@ -70,7 +70,12 @@ jobs:
         # the same rule the three sibling servers state. This matrix and those classifiers
         # must move together; nothing enforces that, and the gap is how 3.14 went missing
         # here while the siblings had it. If you add a classifier, add the row.
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # One row, because `requires-python = ">=3.14"` makes the others uninstallable -
+        # a matrix entry that cannot install is not coverage, it is a red job. This is the
+        # cost of the floor being a POLICY choice rather than a technical one: the versions
+        # this code still runs on are no longer tested, because it is no longer offered to
+        # them. Widen it again the moment the floor comes back down.
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -92,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.14" }
       - run: pip install pyyaml
       # The publication gate runs with STRUCTURAL patterns only in CI - the tenant
       # term list is gitignored and absent here. It reports reduced coverage rather
@@ -105,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with: { python-version: "3.12" }
+        with: { python-version: "3.14" }
       # Deliberately unpinned: the point is to observe what a real `pip install
       # csa-zendesk` resolves to today, not what a pinned closure nobody installs
       # resolves to. The same gate runs on the release path, because a CVE disclosed
