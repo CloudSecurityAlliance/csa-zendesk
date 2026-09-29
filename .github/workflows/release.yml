@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       # The controls this release depends on are configured in GitHub and PyPI, not here,
       # so they are checked at the moment they matter rather than only on the weekly

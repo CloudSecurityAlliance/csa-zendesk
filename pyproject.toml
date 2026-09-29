@@ -9,7 +9,7 @@ name = "csa-zendesk"
 description = "Python library and local stdio MCP server over the Zendesk REST API"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dynamic = ["version"]
 authors = [{ name = "Cloud Security Alliance" }]
 keywords = ["zendesk", "mcp", "model-context-protocol", "support", "help-center"]
@@ -20,10 +20,6 @@ classifiers = [
   # target - see the 0.1.0 CHANGELOG entry and README's status banner.
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: Libraries",
 ]
@@ -91,6 +87,12 @@ where = ["src"]
 csa_zendesk = ["py.typed"]
 
 [tool.ruff]
+# Pinned, NOT inferred from requires-python. Inferred, ruff targets 3.14 and the
+# formatter emits PEP 758 unparenthesised `except A, B:` - valid on 3.14 and a
+# SyntaxError on 3.13 and below. That would make the floor a ONE-WAY DOOR: the
+# metadata is reversible, source that older Pythons cannot parse is not. Decoupling
+# the syntax we emit from the version we require keeps DEC-025 revisitable.
+target-version = "py312"
 line-length = 120
 [tool.ruff.lint]
 # T20 (flake8-print) is here for one reason: this is a stdio MCP server, so stdout
@@ -116,7 +118,7 @@ ignore = ["E702"]
 
 [tool.mypy]
 files = ["src"]
-python_version = "3.10"
+python_version = "3.14"
 strict = true
 
 [tool.pytest.ini_options]
