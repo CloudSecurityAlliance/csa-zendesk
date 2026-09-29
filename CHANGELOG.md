@@ -15,6 +15,56 @@ a PATCH bump means a fix with no surface change.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-29
+
+A fix with no surface change: no new tools, no parameter changes, no capability names
+moved. Per the versioning policy above, that is a PATCH - though it is the largest
+behavioural change a patch has carried here, because on Windows the server could not store
+a credential at all.
+
+### Fixed
+- **The credential store refused every write on Windows.** `_ensure_dir` refused any
+  directory whose `mode & 0o077` was set, and `read()` refused any token file whose mode
+  was not exactly `0o600`. Windows does not map ACLs onto POSIX mode bits, so `os.stat`
+  reports `0o777` for every directory and `0o666` for every file - the check did not merely
+  fail to protect, it **refused every write on every Windows machine**, and a stock install
+  could not complete `authenticate`.
+
+  The question is now asked as a question, in new `auth/_privacy.py`: mode bits on POSIX,
+  the ACL via `icacls` on Windows. Ported from `csa-google-workspace`, which had already
+  solved it, with two changes that implementation did not need - a split between "can
+  anyone reach this now" (which counts inherited ACEs, and is what gates a write) and "did
+  we set this ACL" (which does not), and tolerance for `OWNER RIGHTS` and `CREATOR OWNER`,
+  which name the object's own owner and so can never be a third party. Without either, the
+  port would have refused the default token location for a new reason.
+
+- **`os.fchmod` does not exist on Windows**, and `write()` called it unconditionally - so
+  it raised before a byte was written, and the cleanup then tried to unlink a file whose
+  descriptor was still open. That failed with `WinError 32` and **reported "file in use by
+  another process" in place of the real cause**. Both halves fixed; the cleanup path now
+  has a test.
+
+- **The OAuth callback listener could be hijacked on Windows.** `HTTPServer` sets
+  `allow_reuse_address`, which on POSIX means "rebind a port still in `TIME_WAIT`" and on
+  Windows means "bind a port another socket is **actively listening on**, and win
+  subsequent connections". For a loopback callback that is not a portability wrinkle: any
+  local process could bind `8765` and receive the authorization code. PKCE and the `state`
+  check are why this was a weakened layer rather than an open door. The listener now sets
+  `SO_EXCLUSIVEADDRUSE` on Windows, which is the option that means what the code intended.
+
+- Error messages now carry a remedy the platform can execute, and name what is actually
+  wrong. `chmod 600` is advice a Windows reader cannot act on - following it changes
+  nothing and the error returns unchanged - and an instruction that cannot work costs the
+  reader the time to try it before disbelieving the message. Windows also gains a detail it
+  never had: **which principal** should not be there.
+
+### Changed
+- A required `windows-latest` CI job now runs the suite on every pull request. Every job
+  before it was `ubuntu-latest` and all of them were green throughout, which is how a
+  server that could not store a credential on Windows shipped three times: a passing ubuntu
+  job is evidence about ubuntu. The suite went from 51 failures to 0 in the same change
+  (#72, measured in #71).
+
 ## [0.3.0] — 2026-09-28
 
 **Block 2 — `html_body` becomes Markdown, and what that deliberately does not cover.**
