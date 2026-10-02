@@ -28,12 +28,23 @@ import http.server
 import os
 import socket
 import sys
+import time
 from collections.abc import Sequence
 from types import TracebackType
 from typing import TextIO
 from urllib.parse import parse_qs, urlparse
 
 from .. import exceptions as exc
+
+# How long one `select()` may block before `wait()` gets control back. Not a timeout anyone
+# waits for - it only bounds how long a Ctrl-C sits undelivered, because CPython runs signal
+# handlers between bytecodes and cannot while blocked in a C-level socket wait. Measured on
+# Windows with `_thread.interrupt_main()`, the same call the real SIGINT handler makes: with one
+# 8s blocking call the interrupt surfaced after 8.00s; with a 0.5s slice, after 1.03s (#79).
+#
+# 0.5s because it is imperceptible to a person pressing Ctrl-C and costs at most two wakeups a
+# second while a sign-in is pending.
+_POLL_SECONDS = 0.5
 
 
 class _OneShotServer(http.server.HTTPServer):
@@ -172,10 +183,19 @@ class Listener:
     def wait(self, timeout: float) -> str:
         """Block for exactly one callback request, or `timeout` seconds.
 
-        Sets `HTTPServer.timeout` and calls `handle_request()` once, which
-        accepts and fully handles one connection before returning - or, if
-        none arrives, returns having handled none. Either way this method
+        Calls `handle_request()` in `_POLL_SECONDS` slices until one callback
+        has been handled or `timeout` has elapsed. Each call accepts and fully
+        handles one connection before returning - or, if none arrives within
+        the slice, returns having handled none, which is why the loop condition
+        is `_got_request` rather than a call count. Either way this method
         returns; a hung authorization does not hang the caller forever.
+
+        Slices rather than one long call because CPython runs signal handlers
+        between bytecodes and cannot while blocked in a C-level socket wait, so
+        a single `handle_request(timeout=300)` swallowed Ctrl-C for up to five
+        minutes and the only way out of `auth login` was to close the terminal
+        (#79). Measured on Windows with `_thread.interrupt_main()`: 8.00s to
+        surface with one 8s call, 1.03s with a 0.5s slice.
 
         `HTTPServer.timeout` bounds only the `select()` before `accept()` - it
         says nothing about a connection once accepted. `BaseHTTPRequestHandler
@@ -193,17 +213,35 @@ class Listener:
         ends this call the same way "nothing arrived at all" does (`_got_request`
         stays `False`), rather than hanging it forever.
 
-        Bounded by `timeout` itself, the same budget already given to
-        `select()` - not "whatever is left of it": `select()` returning early
-        because a connection arrived is not this call spending less of its
-        budget, it is this call *starting* to spend it on the accepted
-        connection, so re-arming the same `timeout` for the read is what keeps
-        one call to `wait(timeout)` bounded by a small, fixed multiple of
-        `timeout` in the worst case, rather than by nothing at all.
+        The read budget is `timeout`, not the poll slice and not "whatever is
+        left of it". The slice bounds only how long one `select()` may block;
+        it is a responsiveness knob, not a deadline anyone waits for. A
+        connection arriving is not this call spending less of its budget, it is
+        this call *starting* to spend it on the accepted connection - so the
+        handler keeps the full `timeout`, and cutting it to the slice would
+        abandon a real callback that was merely slow to send its request line.
+
+        What bounds the whole thing is the deadline: at most `timeout` of
+        slices, then at most one read budget for a connection accepted just
+        before it expired. So one `wait(timeout)` is still bounded by a small,
+        fixed multiple of `timeout` in the worst case rather than by nothing at
+        all - the same conclusion as before the loop, reached from the deadline
+        rather than from a single call's timeout.
         """
+        # The HANDLER keeps the full budget: once a connection is accepted this is the read
+        # timeout, and cutting it to the poll slice would abandon a real callback that was
+        # merely slow to send its request line.
         self._handler_cls.timeout = timeout
-        self._server.timeout = timeout
-        self._server.handle_request()
+        # The SERVER gets the slice, so each `handle_request()` returns promptly and a pending
+        # KeyboardInterrupt is delivered between calls rather than after `timeout` (#79). Before
+        # this, Ctrl-C during `auth login` did nothing for up to five minutes and the only way
+        # out was to close the terminal.
+        self._server.timeout = _POLL_SECONDS
+        deadline = time.monotonic() + timeout
+        # One-shot is preserved by the `_got_request` condition, not by calling once: a slice
+        # that times out handled nothing, so the loop is still waiting for its single callback.
+        while not self._got_request and time.monotonic() < deadline:
+            self._server.handle_request()
         if not self._got_request:
             # Says the link is DEAD, not merely that we stopped waiting (#48).
             # The listener closes here, so a sign-in completed after this point
