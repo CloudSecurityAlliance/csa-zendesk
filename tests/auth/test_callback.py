@@ -7,6 +7,7 @@ pre-registered redirect array would still reject it. See the controller
 amendment on the task 3 brief.
 """
 
+import _thread
 import io
 import socket
 import threading
@@ -218,3 +219,77 @@ def test_the_paste_fallback_refuses_a_url_with_no_code():
 def test_paste_redirect_is_the_first_registered_uri():
     assert _callback.PASTE_REDIRECT == "http://127.0.0.1:8765/callback"
     assert _callback.PASTE_REDIRECT in _REGISTERED_REDIRECT_URIS
+
+
+def test_a_pending_interrupt_lands_within_a_poll_slice_not_after_the_timeout():
+    """#79: `auth login` could not be abandoned - Ctrl-C did nothing for up to five minutes.
+
+    CPython runs signal handlers between bytecodes and cannot while blocked in a C-level
+    socket wait, so a single `handle_request(timeout=300)` swallowed the interrupt until it
+    returned. `wait()` now polls in `_POLL_SECONDS` slices.
+
+    `_thread.interrupt_main()` is the call CPython's own SIGINT handler makes, so this is the
+    real delivery path. Measured before the fix: 8.00s to surface with one 8s call, 1.03s with
+    a 0.5s slice.
+
+    This test is the regression guard and would fail on the pre-fix code: the timeout below is
+    deliberately far larger than the assertion window.
+    """
+    timeout = 4.0
+    with _callback.Listener(state="st") as listener:
+        timer = threading.Timer(0.3, _thread.interrupt_main)
+        timer.start()
+        start = time.monotonic()
+        try:
+            listener.wait(timeout=timeout)
+        except KeyboardInterrupt:
+            elapsed = time.monotonic() - start
+        except _callback.CallbackError:  # pragma: no cover - only if the interrupt is lost
+            timer.cancel()
+            pytest.fail(
+                f"the interrupt never arrived: wait() ran its full {timeout}s budget, which is "
+                f"the #79 behaviour this test exists to catch"
+            )
+        else:  # pragma: no cover - wait() cannot return without a callback
+            timer.cancel()
+            pytest.fail("wait() returned a code, but no callback was delivered")
+        finally:
+            timer.cancel()
+
+    # A LITERAL bound, not a multiple of `_callback._POLL_SECONDS`. The first version used the
+    # constant, so against the pre-fix code it failed with AttributeError - the constant does
+    # not exist there - rather than on the timing it exists to measure. A test that fails for
+    # the wrong reason still goes red, which is exactly how a guard stops meaning what its name
+    # says. 1.5s is generous for a 0.5s slice on a loaded machine and far below the 4s deadline.
+    assert elapsed < 1.5, (
+        f"interrupt surfaced after {elapsed:.2f}s, not promptly - that is the #79 behaviour: "
+        f"the signal waited for the {timeout}s call to return instead of landing between "
+        f"polls"
+    )
+
+
+def test_the_handler_keeps_the_full_read_budget_not_the_poll_slice():
+    """The slice bounds `select()`, never the read of a connection already accepted.
+
+    Easy to lose while fixing #79, and nothing else here would notice: setting the handler's
+    timeout to the poll slice would abandon a real callback that was merely slow to send its
+    request line, which is exactly the hang the handler timeout was introduced to prevent.
+    """
+    timeout = 7.0
+    with _callback.Listener(state="st") as listener:
+        # wait() assigns both before polling; run it briefly and inspect what it set.
+        timer = threading.Timer(0.2, _thread.interrupt_main)
+        timer.start()
+        try:
+            listener.wait(timeout=timeout)
+        except (KeyboardInterrupt, _callback.CallbackError):
+            pass
+        finally:
+            timer.cancel()
+
+        assert listener._handler_cls.timeout == timeout, (
+            "the handler timeout is the read budget for an accepted connection and must stay the full timeout"
+        )
+        assert listener._server.timeout == _callback._POLL_SECONDS, (
+            "the server timeout is the select() slice, so an interrupt lands promptly"
+        )
