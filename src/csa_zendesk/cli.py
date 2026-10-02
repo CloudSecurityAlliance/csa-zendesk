@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -128,16 +129,31 @@ def _print_mcp_install_command() -> None:
     `CSA_ZENDESK_MCP_SERVER_IDENTIFIER` is a public OAuth client id. Neither
     the access nor the refresh token is ever read here, let alone printed.
     """
-    entry_point = Path(sys.executable).parent / "csa-zendesk-mcp"
-    if not entry_point.exists():
+    # shutil.which, not `/ "csa-zendesk-mcp"` and `.exists()`. The console script is
+    # `csa-zendesk-mcp` on POSIX and `csa-zendesk-mcp.exe` on Windows, and which() honours
+    # PATHEXT, so it finds either and returns the name that is actually there.
+    #
+    # That matters twice, and the second only becomes visible once the first is fixed: the
+    # existence check below, AND the path printed in the `claude mcp add` command further down,
+    # where a suffix-less absolute path would not resolve on Windows. Testing for one name and
+    # printing another would have traded a false warning for a broken command (#80).
+    scripts_dir = Path(sys.executable).parent
+    found = shutil.which("csa-zendesk-mcp", path=str(scripts_dir))
+    if found is None:
         print(  # noqa: T201 - stderr, not stdout
             "\nThe 'server' extra is not installed, so csa-zendesk-mcp is not sitting "
-            f"beside this interpreter ({entry_point}). Install it, then re-run "
+            f"beside this interpreter ({scripts_dir}). Install it, then re-run "
             "`csa-zendesk auth login` to get the ready-to-paste registration command:\n"
-            "    pip install -e '.[server]'",
+            "    uv tool install --python 3.14 'csa-zendesk[server]'\n"
+            "  (or, in a development checkout, `pip install -e '.[server]'`)",
             file=sys.stderr,
         )
         return
+    # .resolve(), because which() returns the name with PATHEXT's casing rather than the
+    # file's. PATHEXT is conventionally uppercase, so which() hands back `csa-zendesk-mcp.EXE`
+    # while the file on disk is `.exe`. Both resolve - Windows paths are case-insensitive - but
+    # the printed command is read by a person, and `.EXE` in it looks like a mistake.
+    entry_point = Path(found).resolve()
     subdomain = os.environ.get("CSA_ZENDESK_SUBDOMAIN", "")
     client_id = os.environ.get("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "")
     print(  # noqa: T201 - stderr, not stdout

@@ -15,11 +15,29 @@ what `tests/auth/*` already covers for the functions this module calls.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
 from csa_zendesk import auth, cli
+
+
+
+def _console_script(directory):
+    """Create the console script the way the platform actually ships it.
+
+    The present-case tests used to `touch("csa-zendesk-mcp")` - a POSIX name - so
+    `Path.exists()` found exactly that file on every platform and the fixture exercised the
+    POSIX path on Windows too. The code and the fixture shared one wrong assumption, which is
+    how 884 tests passed on a Windows box while #80 was live on that same machine.
+
+    Returns the path created, which on Windows carries `.exe`.
+    """
+    name = "csa-zendesk-mcp.exe" if sys.platform == "win32" else "csa-zendesk-mcp"
+    path = directory / name
+    path.touch()
+    return path
 
 
 def _tokens(*, expires_at: float = 0.0, scope: str = "read") -> auth.Tokens:
@@ -198,8 +216,7 @@ def test_login_failure_is_a_message_not_a_traceback(monkeypatch, capsys):
 
 
 def test_login_prints_the_filled_in_mcp_install_command_on_success(monkeypatch, capsys, tmp_path):
-    entry_point = tmp_path / "csa-zendesk-mcp"
-    entry_point.touch()
+    entry_point = _console_script(tmp_path)
     monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
     monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "acme")
     monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "csa-zendesk")
@@ -219,8 +236,15 @@ def test_login_prints_the_filled_in_mcp_install_command_on_success(monkeypatch, 
     assert "-e CSA_ZENDESK_MCP_SERVER_IDENTIFIER=csa-zendesk" in err
     assert "-e CSA_ZD_ALLOWLIST_READ='*'" in err
     assert f"-- {entry_point}" in err
-    assert str(entry_point) == str(tmp_path / "csa-zendesk-mcp")
+    # The path printed must be the one that EXISTS, suffix included. On Windows the console
+    # script is `csa-zendesk-mcp.exe`, and a suffix-less absolute path does not resolve there -
+    # so asserting the POSIX spelling here is what let #80 ship: the fixture created the POSIX
+    # name, this line demanded it, and the code agreed with both. All three were wrong together.
+    assert str(entry_point) == str(_console_script(tmp_path).resolve())
+    assert Path(entry_point).exists()
     assert Path(entry_point).is_absolute()
+    if sys.platform == "win32":
+        assert str(entry_point).lower().endswith(".exe")
     # unset never means unrestricted - the reason for the allowlist line above
     # must be stated somewhere alongside the command, not just asserted here.
     assert "nothing is permitted" in err
@@ -229,7 +253,7 @@ def test_login_prints_the_filled_in_mcp_install_command_on_success(monkeypatch, 
 
 
 def test_login_explains_why_the_allowlist_flag_is_required(monkeypatch, capsys, tmp_path):
-    (tmp_path / "csa-zendesk-mcp").touch()
+    _console_script(tmp_path)
     monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
     monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "acme")
     monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "csa-zendesk")
@@ -261,7 +285,7 @@ def test_login_omits_the_install_command_when_the_server_extra_is_not_installed(
 
 
 def test_login_install_command_never_contains_a_token(monkeypatch, capsys, tmp_path):
-    (tmp_path / "csa-zendesk-mcp").touch()
+    _console_script(tmp_path)
     monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))
     monkeypatch.setenv("CSA_ZENDESK_SUBDOMAIN", "acme")
     monkeypatch.setenv("CSA_ZENDESK_MCP_SERVER_IDENTIFIER", "csa-zendesk")
