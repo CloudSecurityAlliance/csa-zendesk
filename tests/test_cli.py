@@ -15,13 +15,13 @@ what `tests/auth/*` already covers for the functions this module calls.
 
 from __future__ import annotations
 
+import stat
 import sys
 from pathlib import Path
 
 import pytest
 
 from csa_zendesk import auth, cli
-
 
 
 def _console_script(directory):
@@ -37,6 +37,16 @@ def _console_script(directory):
     name = "csa-zendesk-mcp.exe" if sys.platform == "win32" else "csa-zendesk-mcp"
     path = directory / name
     path.touch()
+    if sys.platform != "win32":
+        # The exec bit matters now, and that is the point. `shutil.which` is stricter than
+        # `Path.exists()`: on POSIX it requires the file to be executable, and a `touch()`ed
+        # file satisfies the old check but not which(). CI on ubuntu caught this fixture.
+        #
+        # The stricter behaviour is the correct one, so the fixture gets realistic rather than
+        # the check getting lax: a console script that is present but not executable cannot be
+        # launched by Claude Code either, and reporting it as installed would be the
+        # confidently-wrong answer this function's docstring warns about.
+        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return path
 
 
