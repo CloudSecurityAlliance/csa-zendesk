@@ -1,12 +1,5 @@
 # csa-zendesk
 
-```
-project_tracker_base: CINO Project Tracker:appf7fRQUvY9Iy7sL
-project_tracker_table: Projects:tblchmbxSAavvJKaY
-project_tracker_record: csa-zendesk:recvtmgqPccgLvuXz
-project_source: github:CloudSecurityAlliance-Internal/CINO-Projects/projects/CloudSecurityAlliance/csa-zendesk
-```
-
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
