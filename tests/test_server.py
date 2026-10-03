@@ -1658,5 +1658,13 @@ def test_it_never_puts_the_identity_in_the_status_line(monkeypatch):
         srv.auth, "whoami", lambda: {"id": 7, "name": "Mallory <script>", "email": "m@example.org", "role": "admin"}
     )
     out = srv.call_tool_sync("auth_status", {})
-    for leaked in ("Mallory", "<script>", "m@example.org", "admin"):
+    # Distinctive VALUES for the requester-settable fields - `name` and `email` are the ones
+    # `_cmd_whoami` wraps as untrusted, and these cannot collide with anything else here.
+    for leaked in ("Mallory", "<script>", "m@example.org"):
         assert leaked not in out, f"{leaked!r} reached the status line from whoami"
+    # FIELD FORMS for the rest, not their values. `_cmd_whoami` builds `f"{k}: {v}"`, so this
+    # is what a leak looks like. Asserting the VALUE instead matched the Windows CI runner's
+    # own home directory - it is `runneradmin`, and the token path is in this line - so the
+    # test failed on a path rather than on a leak.
+    for field in ("role:", "name:", "email:", "id:"):
+        assert field not in out, f"{field!r} reached the status line from whoami"
