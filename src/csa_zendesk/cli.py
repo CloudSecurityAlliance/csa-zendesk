@@ -7,7 +7,7 @@ revoke path E15 originally called out as missing:
 
   `auth login`   run the OAuth flow once, persist the result
   `auth whoami`  identity the *stored* credential resolves to, live
-  `auth status`  what is on disk right now - no network call
+  `auth status`  what is on disk, and whether Zendesk still accepts it
   `auth logout`  revoke the stored token server-side, then clear the local file
 
 **Output channel, decided deliberately and applied consistently:** this module
