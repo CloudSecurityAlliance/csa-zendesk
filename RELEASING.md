@@ -85,9 +85,30 @@ python scripts/check_controls.py
 
 3. **Promote `[Unreleased]` in `CHANGELOG.md`** to the version and date.
 
-4. **Check locally before tagging:**
+4. **Check locally before tagging.**
+
+   Two things this list assumes, both of which used to be silent (#74):
+
+   **It is written for a POSIX shell.** On Windows the interpreter is
+   `.venv/Scripts/python.exe`, not `.venv/bin/python`; everything else is identical.
+
+   **Coverage is NOT gated here.** `pyproject.toml` sets `fail_under = 100`, and
+   `--cov-fail-under=0` below overrides it on purpose — *not* `--no-cov`, which disables
+   coverage altogether and makes `--cov-report=term-missing` print a warning instead of a
+   report. `auth/_privacy.py` branches on the platform — an
+   `icacls` ACL reader on one side, mode bits on the other — so **100% is reachable by the
+   union of platforms and by neither one alone.** A Windows run of the gated command fails at
+   99.32% with nothing wrong, and a red line that is always expected stops being read. CI
+   enforces 100 on ubuntu, where the suite runs completely; the `windows-latest` job carries
+   no coverage gate for the same reason and says so in a comment.
+
+   So the local run is for **failures**, which is what a pre-tag check actually needs.
+   Coverage is a property of the whole matrix, not of one laptop. `--cov-report=term-missing`
+   stays, because seeing *which* lines are unexecuted on your platform is useful even when
+   the total is not a gate.
+
    ```bash
-   .venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing
+   .venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing --cov-fail-under=0
    .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check src tests
    .venv/bin/python -m mypy
    .venv/bin/python scripts/check_public_safe.py
