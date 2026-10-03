@@ -111,6 +111,10 @@ the same guarantee an MCP client does.
 | `TODO.md` | **The index of all open work.** Start here for what is unfinished |
 | `DECISIONS-ADR.md` | Decision log index; entries in `DECISIONS-ADR/` |
 | `WAITING-FOR.md` | Conditions with observable triggers; entries in `WAITING-FOR/` |
+| `BACKUP-RESOURCES.md` | The only persistent state is a credential, so the right retention is **zero copies** — and the code guarding it is the least-tested on the platform where its protections are platform-specific |
+| `OPERATIONAL-RESOURCES.md` | Nothing is hosted, so the resources are dependencies — including the gitignored term list that makes half of `check_public_safe.py` run on one machine |
+| `FRICTION.md` | What cost time, so it costs it once — six entries, each naming its issue |
+| `RACI.md` | Who is accountable, and the three things that depend on one person |
 
 Zendesk publishes the OpenAPI specs but links to none of them; all three were found by probing
 URL shapes. They are snapshots of someone else's moving target — re-fetch and diff before
