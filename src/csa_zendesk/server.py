@@ -174,6 +174,7 @@ import asyncio
 import base64
 import json
 import os
+import threading
 import time
 import urllib.parse
 from typing import Any
@@ -657,7 +658,10 @@ _NO_ARGS_SCHEMA: dict[str, Any] = {
 #: design (ADR-017, and see the module docstring). Annotated honestly rather
 #: than by copying a neighbour's annotation: `authenticate` writes a
 #: credential file and talks to Zendesk's OAuth server but destroys nothing;
-#: `auth_status` only reads the local file, with no network call at all;
+#: `auth_status` reads the local file and then asks Zendesk whether the
+#: credential still works, so it is OPEN-WORLD - it was `open_world_hint=False`
+#: while it only read the file, and that had to change with the behaviour. A
+#: hint that lies is worse than an absent one, because a host keys off it;
 #: `logout` is the one destructive, idempotent, open-world write in this
 #: server.
 #: Rung E5, kept OUT of `TOOLS` and surfaced only when reach is granted.
@@ -700,9 +704,9 @@ AUTH_TOOLS: list[mcp_types.Tool] = [
         name="whoami",
         description=(
             "Which Zendesk identity this credential resolves to, and on which tenant - id, name, "
-            "email and role. Makes a live call, unlike auth_status, which reads only what is on "
-            "disk and so cannot say whose credential it is. Ask this before any write if you need "
-            "to know who the action will be attributed to."
+            "email and role. `auth_status` also makes a live call now, but reports only WHETHER "
+            "the credential works - never whose it is, which is this tool. Ask this before any "
+            "write if you need to know who the action will be attributed to."
         ),
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
@@ -740,15 +744,19 @@ AUTH_TOOLS: list[mcp_types.Tool] = [
         name="auth_status",
         description=(
             "Report whether a stored credential exists, the token file's path, a human-readable "
-            "expiry, and the granted scope. Makes no network call and never returns the token "
-            "itself."
+            "expiry, the granted scope, and WHETHER ZENDESK STILL ACCEPTS IT - it asks, with a "
+            "short timeout, rather than predicting from the file. Says plainly when it could "
+            "not ask. Never returns the token itself, and never the identity: use `whoami` for "
+            "that."
         ),
         input_schema=_NO_ARGS_SCHEMA,
         annotations=mcp_types.ToolAnnotations(
             read_only_hint=True,
             destructive_hint=False,
             idempotent_hint=True,
-            open_world_hint=False,
+            # True since it began verifying: it reaches Zendesk. It was False, correctly, while
+            # it only read a local file.
+            open_world_hint=True,
         ),
     ),
     mcp_types.Tool(
@@ -854,7 +862,8 @@ INSTRUCTIONS = (
     "runs the OAuth login flow and opens a browser for the user to sign in. Do not search the "
     "filesystem for a credential file and do not retry other tools until authorization "
     "completes. Call `auth_status` at any time to see whether a stored credential exists, its "
-    "expiry, and its granted scope, with no network call. Call `logout` to revoke the stored "
+    "expiry, its granted scope, and whether Zendesk still accepts it - it asks rather than "
+    "predicting, and says so when it could not ask. Call `logout` to revoke the stored "
     "credential; it is safe to call even when already logged out, and the only way back is a "
     "fresh `authenticate` call.\n\n"
     "WHAT MAY THIS SERVER DO: call `describe_configuration`. It reports the tenant, the "
@@ -1096,8 +1105,60 @@ def _cmd_authenticate() -> str:
     return "\n".join(lines)
 
 
+# Seconds to wait for Zendesk before `auth_status` gives up and says it could not check. Short
+# on purpose: this is the tool somebody calls WHEN THINGS ARE ALREADY FAILING, so it has to
+# answer even when the network is the broken thing.
+_VERIFY_TIMEOUT = 5.0
+
+
+def _verify_credential(timeout: float | None = None) -> tuple[str, str]:
+    """Ask Zendesk whether the stored credential still works. `(outcome, detail)`.
+
+    `ok` - Zendesk answered. `rejected` - it refused the credential. `unverified` - the question
+    could not be asked, and the detail says what stopped it.
+
+    THE CLASSIFICATION IS `auth.whoami`'S, not reinvented here. It already maps a 401/403 to
+    `NotAuthenticated` ("the credential really was rejected") and everything else - transport
+    failure, 429, 503 - to `exc.ApiError` with the explicit note that it must NOT be read as
+    "re-authenticate". So the mapping below is one isinstance check, and the uncertainty bias
+    comes for free: anything that is not `NotAuthenticated` reports `unverified`, never
+    `rejected`, because telling somebody to mint a new credential for a rate limit would be a
+    false instruction.
+
+    Bounded on a THREAD rather than with `signal.alarm`, which is POSIX-only - this server runs
+    on Windows laptops too. A thread that outlives the bound is abandoned as a daemon: the call
+    is a read-only `users/me.json`, so the cost is one wasted request and there is no portable
+    way to kill it.
+
+    No identity is returned. `auth_status` says a credential exists and what it may do, never
+    whose it is - `whoami` is that tool, and it wraps the requester-settable name and email as
+    untrusted, which a status line should not be doing.
+    """
+    timeout = _VERIFY_TIMEOUT if timeout is None else timeout
+    box: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            auth.whoami()
+            box["ok"] = True
+        except BaseException as e:  # noqa: BLE001 - classifying the failure IS the job here
+            box["err"] = e
+
+    worker = threading.Thread(target=run, daemon=True, name="auth_status-verify")
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        return "unverified", (f"Zendesk did not answer within {timeout:g}s, so the credential has not been checked.")
+    err = box.get("err")
+    if err is None:
+        return "ok", ""
+    if isinstance(err, auth.NotAuthenticated):
+        return "rejected", str(err)
+    return "unverified", f"{type(err).__name__}: {err}"
+
+
 def _cmd_auth_status() -> str:
-    """What is on disk right now - no network call, and never the token.
+    """What is on disk, and whether Zendesk still accepts it. Never the token.
 
     THREE states, not two (#47). An earlier version reported the ACCESS token's
     clock and said nothing about the refresh token that silently renews it, so
@@ -1110,32 +1171,57 @@ def _cmd_auth_status() -> str:
     which surfaced much later as a browser connection error with nothing
     connecting it back. A wrong status line was the first domino.
 
-    The honest third state cannot be narrowed further: `Tokens` stores no
-    refresh-token expiry (Zendesk's own ceiling is up to 90 days but the value
-    is not persisted), so whether a refresh will succeed is genuinely unknowable
-    from disk. This says so rather than implying a certainty it does not have -
-    a status tool that overstates its confidence is the same defect one level
-    up.
+    `Tokens` stores no refresh-token expiry (Zendesk's own ceiling is up to 90
+    days but the value is not persisted), so whether a refresh will succeed is
+    genuinely unknowable FROM DISK - which is why this now asks. A bounded
+    `users/me.json` call turns the old third state from "cannot be determined"
+    into one of two answers, and leaves "could not check" only for the case
+    where the question itself could not be put.
+
+    The classification is `auth.whoami`'s and is not re-derived here: a 401/403
+    is the credential being refused, and a transport failure, a 429 or a 503 is
+    NOT - that distinction is documented at `whoami` and was already right.
+
+    Still never the identity. This says a credential exists, what it may do, and
+    whether it works; `whoami` says whose it is, and wraps the
+    requester-settable name and email as untrusted - which a status line should
+    not be carrying.
     """
     tokens = auth.read()
     if tokens is None:
         return "Not authenticated: no token file on disk. Call the `authenticate` tool to log in."
     where = f"Token file: {auth.token_path()}. Scope: {tokens.scope}."
-    if tokens.expires_at - time.time() > 0:
-        return f"Authenticated. {where} Access token {_human_expiry(tokens.expires_at)}."
-    return (
-        f"Authenticated - the access token has expired and will be refreshed automatically on the "
-        f"next call, so no action is needed unless that call fails. {where} Whether the stored "
-        f"refresh token is still valid cannot be determined without a network call (its expiry is "
-        f"not stored), so if the next call reports an authentication failure, run `authenticate`."
+    # #47's wording is preserved deliberately. The access token's clock is not the
+    # credential's clock - an expired access token refreshes silently on the next call - and
+    # reporting the first as if it were the second is the bug that sent somebody to
+    # re-authenticate needlessly, which is how a dead callback link came to exist.
+    clock = (
+        f"Access token {_human_expiry(tokens.expires_at)}."
+        if tokens.expires_at - time.time() > 0
+        else "The access token has expired and will be refreshed automatically on the next call."
     )
+    outcome, why = _verify_credential()
+    if outcome == "rejected":
+        return (
+            f"NOT authenticated - Zendesk refused the stored credential: {why} Run "
+            f"`authenticate` to log in again. {where} {clock}"
+        )
+    if outcome == "unverified":
+        return (
+            f"A credential is stored, and Zendesk could not be asked whether it still "
+            f"works: {why} {where} {clock} No action is needed unless the next call fails; "
+            f"whether the credential is still accepted is unknown, so if that call reports "
+            f"an authentication failure, run `authenticate`."
+        )
+    return f"Authenticated, and verified against Zendesk just now. {where} {clock}"
 
 
 def _cmd_whoami() -> str:
     """Which identity this credential actually resolves to, and on which tenant.
 
-    `auth_status` deliberately makes no network call, so it can say a
-    credential exists and what it may do, but never **whose** it is. A model
+    `auth_status` verifies the credential but deliberately does not report the
+    identity, so it can say a credential exists, what it may do and whether it
+    works - but never **whose** it is. A model
     asked "who am I acting as?" had no way to answer - which matters here more
     than it would elsewhere, because at rung E5 this server can email a
     customer, and the name on that email is this identity.

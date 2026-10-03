@@ -288,7 +288,7 @@ csa-zendesk auth login   # re-run — a wider scope only takes effect on a fresh
 within the OAuth client's registered ceiling (`read tickets:write ticket_attachments:write
 ticket_views:write triggers:write` — see [OAuth client](#oauth-client) above); requesting
 anything outside that ceiling fails closed with `400 invalid_scope` at login, not silently.
-`auth_status` reports the token's granted scope with no network call — check it after
+`auth_status` reports the token's granted scope, and asks Zendesk whether the credential still works — check it after
 re-running login if a write still 403s.
 
 **2. `CSA_ZD_ALLOWLIST_WRITE` must name the ticket ids writes may touch, and unset permits
@@ -393,7 +393,7 @@ acquire a credential must also expose a way to relinquish it, reachable at least
 tool that acquires it.
 
 **Verify the install worked** before relying on it: ask the model to call `auth_status` (confirms
-a token is on disk, with its expiry and granted scope, no network call — check the scope here
+a token is on disk, with its expiry and granted scope, and whether Zendesk still accepts it — check the scope here
 first if a write is about to 403), then `get_ticket` on a ticket id you know exists. A
 `PolicyError` naming `CSA_ZD_ALLOWLIST_READ` or `CSA_ZD_ALLOWLIST_WRITE` at that step, or at a
 write, means the corresponding allowlist above is still unset or too narrow — set it and retry

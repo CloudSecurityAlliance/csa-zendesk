@@ -587,11 +587,18 @@ def test_authenticate_is_annotated_as_a_non_destructive_open_world_write():
     assert t.annotations.open_world_hint is True, t.name
 
 
-def test_auth_status_is_annotated_as_a_read_only_local_only_check():
+def test_auth_status_is_annotated_as_a_read_only_check_that_reaches_zendesk():
+    """Renamed from `..._read_only_local_only_check`, and the change is the point.
+
+    It stays read-only and non-destructive - it reads a file and makes one `users/me.json`
+    call - but it is no longer LOCAL-ONLY, so `open_world_hint` had to flip with the
+    behaviour. This test failing is what caught that: a hint that lies is worse than an
+    absent one, because a host keys behaviour off it.
+    """
     (t,) = [t for t in srv.AUTH_TOOLS if t.name == "auth_status"]
     assert t.annotations.read_only_hint is True, t.name
     assert t.annotations.destructive_hint is False, t.name
-    assert t.annotations.open_world_hint is False, t.name  # no network call
+    assert t.annotations.open_world_hint is True, t.name  # it asks Zendesk
 
 
 def test_logout_never_returns_a_token(monkeypatch):
@@ -739,16 +746,24 @@ def test_auth_status_says_a_working_credential_is_working(monkeypatch):
         lambda: _store.Tokens(access_token="AT", refresh_token="RT", expires_at=0.0, scope="read"),
     )
     out = srv.call_tool_sync("auth_status", {})
-    assert out.startswith("Authenticated"), "a refreshable credential is reported as not working"
-    assert "no action is needed" in out
+    # The PROPERTY, not the prefix. `startswith("Authenticated")` stood in for "is not
+    # reported as broken", and that is now asserted directly: `auth_status` verifies against
+    # Zendesk, so with no reachable tenant here the answer is "could not be asked" rather than
+    # "Authenticated" - and #47's guard is that it still must not read as a fault.
+    assert "NOT authenticated" not in out, "a refreshable credential is reported as not working"
+    assert "no action is needed" in out.lower()
     assert "refreshed automatically" in out
 
 
-def test_auth_status_does_not_claim_to_know_whether_the_refresh_token_is_valid(monkeypatch):
-    """`Tokens` stores no refresh-token expiry, so this is genuinely unknowable.
+def test_auth_status_does_not_overstate_what_it_established(monkeypatch):
+    """`Tokens` stores no refresh-token expiry, so this is unknowable FROM DISK - which is why
+    `auth_status` now asks Zendesk instead. The property is unchanged and is the point: it must
+    not overstate its certainty. When the question could not be put, it says so and gives the
+    remedy, rather than implying either answer.
 
-    Saying so is the point. A status tool that overstates its certainty is the
-    same defect it was just fixed for, one level up.
+    Renamed from `..._does_not_claim_to_know_whether_the_refresh_token_is_valid`, because the
+    old name stated a premise that is no longer true - it can now be asked, and a test name
+    asserting otherwise would be worse than one that fails.
     """
     from csa_zendesk.auth import _store
 
@@ -758,7 +773,8 @@ def test_auth_status_does_not_claim_to_know_whether_the_refresh_token_is_valid(m
         lambda: _store.Tokens(access_token="AT", refresh_token="RT", expires_at=0.0, scope="read"),
     )
     out = srv.call_tool_sync("auth_status", {})
-    assert "cannot be determined without a network call" in out
+    assert "unknown" in out, "it must say it does not know rather than implying either answer"
+    assert "could not be asked" in out
     assert "run `authenticate`" in out, "no remedy given for the case where refresh does fail"
 
 
@@ -1531,3 +1547,124 @@ def test_the_attachment_family_is_labelled_with_its_own_provenance_not_a_ticket(
         text = srv.call_tool_sync(name, args)
         assert f"source={root}" in text, name
         assert "zendesk-ticket" not in text, name
+
+
+# --- auth_status verifies against Zendesk (same change as csa-google-workspace#517) --------
+#
+# The third state used to say "cannot be determined without a network call", which was true
+# FROM DISK. It now asks, and `auth.whoami`'s existing classification is what makes the
+# uncertainty bias correct for free: a 401/403 is the credential being refused, a transport
+# failure or a 429 or a 503 is explicitly NOT.
+
+
+def _stored(monkeypatch, expires_at=4e9):
+    from csa_zendesk.auth import _store
+
+    monkeypatch.setattr(
+        srv.auth,
+        "read",
+        lambda: _store.Tokens(access_token="AT", refresh_token="RT", expires_at=expires_at, scope="read"),
+    )
+
+
+def test_a_working_credential_is_reported_as_verified(monkeypatch):
+    _stored(monkeypatch)
+    monkeypatch.setattr(srv.auth, "whoami", lambda: {"id": 1, "role": "agent"})
+    out = srv.call_tool_sync("auth_status", {})
+    assert out.startswith("Authenticated, and verified against Zendesk"), out
+
+
+def test_zendesk_refusing_the_credential_says_so_and_names_the_remedy(monkeypatch):
+    """Distinct from "no token file": the file IS there, so "you are not logged in, log in"
+    would be a false description of the machine - and distinct from the unverified case,
+    because here Zendesk actually answered."""
+
+    def refuse():
+        raise srv.auth.NotAuthenticated("the credential was rejected (401)")
+
+    _stored(monkeypatch)
+    monkeypatch.setattr(srv.auth, "whoami", refuse)
+    out = srv.call_tool_sync("auth_status", {})
+    assert out.startswith("NOT authenticated"), out
+    assert "rejected" in out
+    assert "run `authenticate`" in out.lower()
+
+
+def test_a_rate_limit_is_not_reported_as_a_dead_credential(monkeypatch):
+    """THE RULE, and `auth.whoami` already documents it: a 429 or a 503 "says Zendesk could not
+    be reached or is rate-limiting - NOT that the operator should re-authenticate, which would
+    be false and would send them to mint a new credential for a problem that is not theirs."
+    This asserts that the mapping here honours that."""
+    from csa_zendesk import exceptions as exc
+
+    def throttled():
+        raise exc.RateLimited("429 from Zendesk; retry after 30s")
+
+    _stored(monkeypatch)
+    monkeypatch.setattr(srv.auth, "whoami", throttled)
+    out = srv.call_tool_sync("auth_status", {})
+    assert "NOT authenticated" not in out, "a rate limit was reported as a dead credential"
+    assert "could not be asked" in out
+    assert "RateLimited" in out, "the cause has to survive to the caller"
+
+
+def test_a_hanging_zendesk_times_out_rather_than_hanging_the_tool(monkeypatch):
+    """`auth_status` is what somebody calls when things are ALREADY failing, so it has to answer
+    when the network is the broken thing. Bounded on a thread, because `signal.alarm` is
+    POSIX-only and this server runs on Windows laptops too."""
+    import time as _time
+
+    def hangs():
+        _time.sleep(30)
+        raise AssertionError("should have been abandoned")
+
+    _stored(monkeypatch)
+    monkeypatch.setattr(srv.auth, "whoami", hangs)
+    monkeypatch.setattr(srv, "_VERIFY_TIMEOUT", 0.05)
+    started = _time.monotonic()
+    out = srv.call_tool_sync("auth_status", {})
+    took = _time.monotonic() - started
+    assert "did not answer within" in out, out
+    assert took < 5, f"the bound did not hold: {took:.1f}s"
+
+
+def test_a_logged_out_state_never_waits_on_the_network(monkeypatch):
+    """Verification is reached only once a token file has been read, so "no token file" must
+    not sit through a timeout before saying so."""
+    import time as _time
+
+    def hangs():
+        _time.sleep(30)
+
+    monkeypatch.setattr(srv.auth, "read", lambda: None)
+    monkeypatch.setattr(srv.auth, "whoami", hangs)
+    started = _time.monotonic()
+    out = srv.call_tool_sync("auth_status", {})
+    assert "no token file" in out
+    assert _time.monotonic() - started < 1, "a local verdict waited on the network"
+
+
+def test_it_never_puts_the_identity_in_the_status_line(monkeypatch):
+    """`auth_status` says a credential exists, what it may do, and whether it works - never
+    WHOSE it is. `whoami` is that tool, and it wraps the name and email in `_untrusted.wrap`
+    because both are requester-settable strings on a Zendesk user record.
+
+    Verification calls `whoami` internally, so without this test nothing stops a later edit
+    folding that identity into the status string and putting untrusted text somewhere nothing
+    wraps it.
+    """
+    _stored(monkeypatch)
+    monkeypatch.setattr(
+        srv.auth, "whoami", lambda: {"id": 7, "name": "Mallory <script>", "email": "m@example.org", "role": "admin"}
+    )
+    out = srv.call_tool_sync("auth_status", {})
+    # Distinctive VALUES for the requester-settable fields - `name` and `email` are the ones
+    # `_cmd_whoami` wraps as untrusted, and these cannot collide with anything else here.
+    for leaked in ("Mallory", "<script>", "m@example.org"):
+        assert leaked not in out, f"{leaked!r} reached the status line from whoami"
+    # FIELD FORMS for the rest, not their values. `_cmd_whoami` builds `f"{k}: {v}"`, so this
+    # is what a leak looks like. Asserting the VALUE instead matched the Windows CI runner's
+    # own home directory - it is `runneradmin`, and the token path is in this line - so the
+    # test failed on a path rather than on a leak.
+    for field in ("role:", "name:", "email:", "id:"):
+        assert field not in out, f"{field!r} reached the status line from whoami"
