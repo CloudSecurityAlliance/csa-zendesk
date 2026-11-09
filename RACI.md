@@ -8,8 +8,8 @@
 | **Informed** | Anyone installing the server; `security@cloudsecurityalliance.org` for anything in [`SECURITY.md`](SECURITY.md)'s scope |
 
 One name in the first two rows is the accurate description, not a placeholder — this is a
-build-for-yourself-first project in the sense CINO-Platform-Engineering
-[`BUILD-FOR-YOURSELF-FIRST.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/BUILD-FOR-YOURSELF-FIRST.md)
+build-for-yourself-first project in the sense CINO-Engineering
+[`BUILD-FOR-YOURSELF-FIRST.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/BUILD-FOR-YOURSELF-FIRST.md)
 means. Naming a committee that does not meet would read as answered, which is worse.
 
 ## What the concentration costs, which is the useful half

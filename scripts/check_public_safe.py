@@ -125,7 +125,7 @@ STRUCTURAL: dict[str, re.Pattern] = {
     "CINO project-record path":
         # A path into the private CINO project-records repo. Narrow on purpose: banning
         # the ORG NAME outright would fire on this repo's own TODO.md, which cites
-        # CINO-Platform-Engineering docs and issues by link. Those 404 for an
+        # CINO-Engineering docs and issues by link. Those 404 for an
         # external reader - a transparency wart - but they disclose nothing beyond
         # the existence of an internal engineering repo. Banning them would force
         # an exemption and leave the pattern meaning nothing.
@@ -168,7 +168,7 @@ def self_test() -> None:
     # rule out.
     assert not hits("CINO project-record path",
                     "https://github.com/CloudSecurityAlliance-Internal/"
-                    "CINO-Platform-Engineering/issues/49")
+                    "CINO-Engineering/issues/49")
 
     # This file is exempt from the walk (see EXEMPT_PATHS), so the exemption is narrowed
     # here: every id-shaped string in this source must be one of the declared fakes. A real
