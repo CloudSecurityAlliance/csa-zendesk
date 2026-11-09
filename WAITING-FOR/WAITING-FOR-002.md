@@ -25,7 +25,7 @@ possible for the first time when Block 0's PR opens.
 
 It was deferred once already, during Block 0, on the reasoning that the contexts did not yet
 exist and that I would check CI by hand at merge time. That is precisely the shape
-[ZERO-DEFECT](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/ZERO-DEFECT.md)
+[ZERO-DEFECT](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/ZERO-DEFECT.md)
 ZD-17 warns about — *if this fired forever, would anyone notice?* A gate enforced by
 somebody remembering to look is not a gate, and the whole point of the four CI checks is
 that nobody has to.

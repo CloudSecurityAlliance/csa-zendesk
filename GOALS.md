@@ -2,7 +2,7 @@
 
 Shared goals for CSA's MCP server fleet — library-first, local stdio, one fail-closed seam at the
 data boundary, offline-testable, published with attestations — are stated once in the fleet roster
-(`surfaces/mcp/ROSTER.md` in the internal CINO-Platform-Engineering repo) and are not restated here.
+(`surfaces/mcp/ROSTER.md` in the internal CINO-Engineering repo) and are not restated here.
 This file records only what is specific to Zendesk.
 
 Ten ADRs were settled before any tool was written. Where a goal below restates one, it links to it

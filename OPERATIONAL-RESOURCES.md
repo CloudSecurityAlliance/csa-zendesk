@@ -49,7 +49,7 @@ maintainer's.
 Reactive, and there is no schedule. Two standing triggers:
 
 1. **Zendesk ships an API change.** Nothing watches upstream here —
-   CINO-Platform-Engineering#49 is the fleet-level version of that gap, and `csa-skilljar` is
+   CINO-Engineering#49 is the fleet-level version of that gap, and `csa-skilljar` is
    the only server with a drift detector.
 2. **A decision this repo cites by number is superseded.** `DECISIONS-INHERITED.md` and
    `DECISIONS-ADR.md` both reference fleet decisions; a superseded one leaves a citation

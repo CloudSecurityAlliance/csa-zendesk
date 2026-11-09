@@ -58,7 +58,7 @@ text in the same way mail does, if less deliberately.
 
 | Gap | Status | Owner |
 |---|---|---|
-| **Nothing watches the three vendored OpenAPI specs for drift** | Open — [CINO-PE #49](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/49) | Kurt Seifried |
+| **Nothing watches the three vendored OpenAPI specs for drift** | Open — [CINO-PE #49](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/issues/49) | Kurt Seifried |
 | **No security audit yet.** Tier-1 requires one before 1.0.0; there is one backend method implemented, so this is not yet overdue | Open — gate before 1.0.0 | Kurt Seifried |
 | **Six families are unimplemented because they cannot be tested** ([ADR-001](DECISIONS-ADR/ADR-001.md), [WAITING-FOR-001](WAITING-FOR/WAITING-FOR-001.md)) | Accepted — untested code reaching a support queue is worse than no code | Kurt Seifried |
 | **`PUBLIC-GITHUB-REPO-STANDARDS.md` not yet applied** | Open — gate before first release | Kurt Seifried |

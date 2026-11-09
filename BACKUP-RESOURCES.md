@@ -57,7 +57,7 @@ execute 26% of the module.** Excluded on one platform, unexecuted on the other, 
 nowhere.
 
 So the file guarding this project's only persistent credential has its platform-specific half
-unverified on both platforms. That is CINO-Platform-Engineering#172, where the numbers above are
+unverified on both platforms. That is CINO-Engineering#172, where the numbers above are
 recorded, and it is the reason this file is not a formality.
 
 Not a claim that the protection is wrong — reviewing it, it is better than most. A claim that
@@ -71,4 +71,4 @@ Not a claim that the protection is wrong — reviewing it, it is better than mos
 - What the repo must never contain, and the guard that enforces it:
   [`OPERATIONAL-RESOURCES.md`](OPERATIONAL-RESOURCES.md).
 - `os.chmod` honouring only the read-only bit, and the other calls that run and lie:
-  [`POSIX-AND-WINDOWS.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/POSIX-AND-WINDOWS.md).
+  [`POSIX-AND-WINDOWS.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/POSIX-AND-WINDOWS.md).

@@ -272,7 +272,7 @@ product. Nothing in the field addresses this except one surveyed server; see `TO
 
 ## Zero defect — surface failures, never suppress them
 
-Follows [ZERO-DEFECT.md](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/ZERO-DEFECT.md).
+Follows [ZERO-DEFECT.md](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/ZERO-DEFECT.md).
 The principles that have already earned their place here:
 
 - **ZD-2, generate errors aggressively.** A 200 that looks wrong is an error. Four of the
