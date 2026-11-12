@@ -9,9 +9,9 @@ that applies to a single tool with that tool's name
 
 `csa-zendesk` (import name `csa_zendesk`): a Python library and local stdio MCP server over the
 Zendesk REST API, targeting 100% coverage of what is in scope and reachable. Status lives in
-`CHANGELOG.md` and the README's status banner, not here. Which fleet decisions this server adopts,
-and the two it deviates from: [DECISIONS-INHERITED.md](DECISIONS-INHERITED.md); check it before
-assuming a fleet default applies.
+`CHANGELOG.md`, and what is built in `server.TOOLS`, not here. Which fleet decisions this server
+adopts, and the two it deviates from: [DECISIONS-INHERITED.md](DECISIONS-INHERITED.md); check it
+before assuming a fleet default applies.
 
 ## Rules
 
@@ -150,8 +150,10 @@ no 12).
   (`context`, `tickets`, `help_center`, `people`, `queues`, `reporting`, `export`, `admin`;
   default `context` + `tickets`) decide whether a tool exists; capabilities decide whether it may
   act. A registered tool without its capability is visible and refuses, a better failure than an
-  absent one. **`context` is always registered:** required fields vary per form. Instructions are
-  per-toolset and compose. **Nothing enables a toolset at runtime.**
+  absent one. **The exception is reach:** `server.py`'s `REACH_TOOLS` (`reply_publicly`) are not
+  registered at all unless `CSA_ZD_ALLOW_REACH=true`. **`context` is always registered:** required
+  fields vary per form. Instructions are per-toolset and compose. **Nothing enables a toolset at
+  runtime.**
 - **The escape hatch** ([ADR-008](DECISIONS-ADR/ADR-008.md)): `zendesk_read` (GET,
   `read_only_hint`) and `zendesk_request` (any verb, `destructive_hint`), off by default
   (`raw.read`/`raw.write`, granted by no profile). **Both refuse any path a curated tool covers**,
@@ -164,9 +166,9 @@ no 12).
   success. Our own aggregation has no handles.
 - **Bulk reads aggregate and never persist** ([ADR-005](DECISIONS-ADR/ADR-005.md)): `summarise_*`
   folds pages and discards them, so rows never reach the model or disk; `export_*` writes a file
-  for a person to an operator-configured directory, and the model does not query it. **Nothing is
-  cached** except the OAuth token file (ADR-009). **Scope is mandatory**, and an answer **reports
-  how much it sampled**.
+  for a person to an operator-configured directory, and the model does not query it: **there is no
+  query tool over exports.** **Nothing is cached** except the OAuth token file (ADR-009). **Scope
+  is mandatory**, and an answer **reports how much it sampled**.
 - **Three testing tiers** ([ADR-004](DECISIONS-ADR/ADR-004.md)): unit (every path, `FakeBackend`,
   offline, gates CI); integration (reads and reversible writes, live, opt-in); observational
   (irreversible operations, verified read-only from the platform's own instances). No observable
