@@ -211,7 +211,7 @@ def test_an_empty_token_fails_at_request_time_rather_than_silently_unauthenticat
     # The provider is only consulted per request, so emptiness cannot be caught
     # at construction. It must still never produce a bare "Bearer " header - an
     # unauthenticated request to Zendesk answers 200 with an "Anonymous user"
-    # object (CLAUDE.md invariant 1), which is the silent failure this guards.
+    # object (AGENTS.md invariant 1), which is the silent failure this guards.
     def handler(request):  # pragma: no cover - must never be reached
         raise AssertionError("a request was sent with an empty access token")
 
@@ -542,7 +542,7 @@ def test_a_fragment_embedded_in_path_is_also_refused():
 
 
 def test_the_built_url_is_verified_against_the_tenant_host_not_just_the_pattern():
-    # Belt-and-braces (CLAUDE.md invariant-style reasoning): no path shape has been
+    # Belt-and-braces (AGENTS.md invariant-style reasoning): no path shape has been
     # found that passes _validate_path's patterns and still resolves to a
     # different host under this client's construction, so this exercises the
     # second, independent check directly by making the two disagree - the failure

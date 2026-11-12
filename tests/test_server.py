@@ -21,7 +21,7 @@ def test_the_read_tools_are_exactly_the_four_read_tools():
     # it belongs in this set rather than among the tools that actually
     # write. A three-element pin here would go stale the moment
     # get_attachment was registered; the fourth element is the set
-    # genuinely changing, not the test going vacuous (CLAUDE.md's own
+    # genuinely changing, not the test going vacuous (AGENTS.md's own
     # distinction, and the amendment's).
     names = {t.name for t in srv.READ_TOOLS}
     assert names == {"search_tickets", "get_ticket", "list_comments", "get_attachment"}

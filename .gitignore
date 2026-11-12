@@ -74,3 +74,11 @@ htmlcov/
 # write-up; the raw material stays local.
 experiments/**/attachment.json
 experiments/**/steps-*.json
+
+# --- personal agent-instruction overrides ----------------------------------
+# AGENTS.md is the shared instruction file; CLAUDE.md and GEMINI.md point at it.
+# A personal override would replace or bypass it for one tool, so it stays local
+# (CINO-Engineering DEC-033).
+CLAUDE.local.md
+AGENTS.override.md
+AGENTS.local.md

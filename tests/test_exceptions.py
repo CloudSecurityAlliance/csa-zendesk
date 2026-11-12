@@ -34,7 +34,7 @@ def test_errors_declare_only_approved_parameters():
     # This is an ALLOWLIST, not a denylist. A denylist only catches the names someone
     # thought of - `api_key`, `bearer`, `auth` and `cookie` all sail past a list built
     # around `token` and `password`. This repo has paid for that shape once already
-    # (CLAUDE.md, "the denylist is the disclosure"), so an unrecognised parameter name
+    # (AGENTS.md, "the denylist is the disclosure"), so an unrecognised parameter name
     # fails here and the remedy is a deliberate edit to this set. That edit is the
     # review checkpoint: it is where you notice you are about to put a credential on an
     # object embedders log.

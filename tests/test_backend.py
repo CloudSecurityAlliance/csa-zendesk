@@ -246,7 +246,7 @@ def test_search_composing_type_ticket_cannot_be_widened_by_a_callers_own_type():
     # Zendesk's search grammar ANDs repeated occurrences of a single-valued
     # field, so the composed query can only ever narrow, never broaden, what
     # this tool returns. This does not send a live request against Zendesk
-    # (CLAUDE.md); it pins the request THIS client builds.
+    # (AGENTS.md); it pins the request THIS client builds.
     seen = {}
 
     def handler(request):

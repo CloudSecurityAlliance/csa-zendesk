@@ -139,7 +139,7 @@ PROFILES: dict[str, frozenset[str]] = {
             HC_READ,
             PEOPLE_READ,
             REPORTING_READ,
-            # A form's required fields vary per ticket_form_id (CLAUDE.md: "context is
+            # A form's required fields vary per ticket_form_id (AGENTS.md: "context is
             # always registered"), and GET /api/v2/ticket_forms{,/…} is classified
             # admin.read in analysis/operation-classification.csv - so the one profile
             # that can solve must also be able to discover what solving requires.
