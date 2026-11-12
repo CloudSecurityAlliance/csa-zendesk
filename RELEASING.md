@@ -61,8 +61,9 @@ one principal agreeing with itself. Claim the first three; do not claim the four
 
 ### 3. Branch protection on `main`
 
-Required status checks: `lint`, `test (3.10)`, `test (3.11)`, `test (3.12)`, `test (3.13)`,
-`gates`, `security`.
+Required status checks: `lint`, `gates`, `security`, `test (3.14)`, `the suite on Windows`
+(the live setting, read 2026-11-12 with
+`gh api repos/CloudSecurityAlliance/csa-zendesk/branches/main/protection`).
 
 `scripts/check_controls.py` asserts all three of the above and reports `OK` / `VIOLATED` /
 `UNVERIFIABLE`, never collapsing the third into the first. It runs on the release path

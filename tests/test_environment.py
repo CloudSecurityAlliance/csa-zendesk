@@ -193,3 +193,23 @@ class TestDescribeEnvironment:
         monkeypatch.setattr(env, "latest_on_pypi", lambda: None)
         got = env.describe_environment(check_pypi=True)
         assert any("another project's pin" in n for n in got.notes)
+
+    def test_the_shared_environment_hint_is_the_command_the_cli_prints(self, monkeypatch, capsys, tmp_path):
+        # Two places tell a user how to install in isolation: this note, and `csa-zendesk auth
+        # login` when the server extra is missing (cli.py). The second source is what the CLI
+        # actually prints at runtime, not its source text. Both must name the same command, and
+        # it must pin CSA's Python standard: without `--python 3.14`, uv takes any interpreter
+        # >=3.14, which is 3.15 on a machine whose default is 3.15 (#94).
+        from csa_zendesk import cli
+
+        monkeypatch.setattr(cli.sys, "executable", str(tmp_path / "python"))  # no server extra here
+        cli._print_mcp_install_command()
+        printed = [
+            line.strip() for line in capsys.readouterr().err.splitlines() if line.strip().startswith("uv tool install")
+        ]
+        assert printed == ["uv tool install --python 3.14 'csa-zendesk[server]'"]
+
+        monkeypatch.setattr(env, "_installed_via", lambda: "pip (shared environment)")
+        monkeypatch.setattr(env, "latest_on_pypi", lambda: None)
+        notes = env.describe_environment(check_pypi=True).notes
+        assert any(f"`{printed[0]}`" in n for n in notes)
