@@ -1,427 +1,238 @@
 # AGENTS.md
 
+Tightened for modern AI: 2026-11-12.
+
 Instructions for every AI agent working in this repository. `CLAUDE.md` and `GEMINI.md` are
 one-line pointers to this file: **do not edit them.** Put every instruction here, and label one
 that applies to a single tool with that tool's name
 ([DEC-033](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md#dec-033-agentsmd-is-the-instruction-file-claudemd-and-geminimd-are-one-line-pointers-never-full-files)).
 
-**Fleet decisions**: [DECISIONS-INHERITED.md](DECISIONS-INHERITED.md) records which cross-project decisions this server adopted, and the two it deliberately deviates from. Check it before assuming a fleet default applies here.
-## What this repository is
+`csa-zendesk` (import name `csa_zendesk`): a Python library and local stdio MCP server over the
+Zendesk REST API, targeting 100% coverage of what is in scope and reachable. Status lives in
+`CHANGELOG.md` and the README's status banner, not here. Which fleet decisions this server adopts,
+and the two it deviates from: [DECISIONS-INHERITED.md](DECISIONS-INHERITED.md); check it before
+assuming a fleet default applies.
 
-`csa-zendesk` — a Python library (import name `csa_zendesk`) and local stdio MCP server over
-the Zendesk REST API, targeting 100% coverage of what is in scope and reachable.
+## Rules
 
-**Status: Blocks 0–1 shipped (v0.2.0 on PyPI); Block 2 in progress.** This paragraph was
-frozen at "Block 0 complete, no MCP server, no OAuth" while the CHANGELOG recorded Blocks 0b,
-0c, 0e, 1 and 2 — so the one file every session reads first said the opposite of the code.
-Check it against `CHANGELOG.md` when either moves.
+- **Branch + PR for every change; never commit to `main`.** Prefixes `feat/`, `fix/`, `docs/`,
+  `chore/`, `test:`, `security:`.
+- **Do not describe unimplemented things as working.** What is built is `server.TOOLS`
+  (`READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS + CONFIG_TOOLS`), plus `REACH_TOOLS` only when
+  `CSA_ZD_ALLOW_REACH=true`; the rest of the design is not built. Read counts from the code: a
+  number in prose is a claim that goes stale.
+- **GET only against the live API** unless the user has authorised a specific write. **Never infer
+  a field value to satisfy a validator;** that fabricates audit evidence.
+- **Probe before asking:** if a free, read-only, side-effect-free call answers the question, make
+  it. **Probe beats docs:** where the spec and a probe disagree, the probe wins and the finding is
+  written down.
+- **Read paths from `analysis/operation-inventory.csv`, never from memory** (invariant 11).
+- **ADR-001** (do not build what cannot be tested) and **ADR-002** (build from scratch) are
+  load-bearing: do not contradict them without a superseding ADR.
+- **Always work inside a virtual environment.** Never `pip install` into a system Python.
 
-`src/csa_zendesk/` holds the library (`exceptions.py`, `_errors.py`, `_pagination.py`,
-`_http.py`, `_transport.py`, `backend.py`, `policy.py`, `client.py`), the boundary controls
-(`_untrusted.py`, `_markdown.py`, `_scope.py`), the OAuth PKCE flow (`auth/`), and the MCP
-server (`server.py`, `tools.py`, `cli.py`). **873 tests at 100% coverage, statements and
-branches.** The repository also holds upstream API snapshots, an operation inventory, an
-anonymised ecosystem survey, live experiment results, and the decisions taken so far.
-
-**Seventeen tools are exposed of 54 designed** — `server.TOOLS` is the authority, and it is
-`READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS` plus the three introspection tools:
-
-| collection | n | tools |
-|---|---:|---|
-| `READ_TOOLS` | 4 | `get_ticket`, `search_tickets`, `list_comments`, `get_attachment` |
-| `WRITE_TOOLS` | 6 | `update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload` |
-| `AUTH_TOOLS` | 4 | `whoami`, `authenticate`, `auth_status`, `logout` |
-| introspection | 3 | `describe_configuration`, `demonstration_plan`, `report_a_problem` |
-
-**Do not describe a tool outside that list as working** — the other 37 are designed, not
-built. Read the count from `server.TOOLS` rather than from here; a number in prose is a claim
-that goes stale, which is what this paragraph was.
-
-### Working on the code
-
-Everything runs from a venv; CI gates four things and so should you:
+## Gates: CI runs these, so run them before pushing
 
 ```bash
-.venv/bin/python -m pytest -q --cov=csa_zendesk --cov-report=term-missing   # 100% required
-.venv/bin/ruff check .                        # `.`, not a directory list - see below
+.venv/bin/python -m pytest -q --cov --cov-report=term-missing   # 100%, statements and branches
+.venv/bin/ruff check .                        # `.`, never a directory list
 .venv/bin/ruff format --check src tests       # scripts/ is exempt from format, not from lint
 .venv/bin/mypy                                # strict, over src
+python3 scripts/check_public_safe.py          # the publication gate; run before every push
 ```
 
-**Lint the whole tree, not a directory list.** `ruff check src tests scripts` once left
-tracked-but-unnamed `experiments/` unlinted, hiding a `NameError` in all three scripts that
-write to a live ticket (Block 1, Task 4/CI fix). CI runs `ruff check .`; anything that needs
-to be skipped is an exclusion in `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`, where
-it is reviewable, not an absence from the command line.
+- **Lint the whole tree.** A directory list once left `experiments/` unlinted (see the comment in
+  `.github/workflows/tests.yml`). Anything to skip is an exclusion in `pyproject.toml`'s
+  `[tool.ruff.lint.per-file-ignores]`, where it is reviewable.
+- **Coverage is 100%, not 90%:** a gate below the measured state cannot fail. `# pragma: no cover`
+  is the one hatch, and using it is a decision to write down. Scope and threshold live in
+  `pyproject.toml`'s `[tool.coverage.*]`, never on a command line (#66). CI enforces it on ubuntu;
+  on Windows 100% is reachable only as the union of both platforms ([FRICTION.md](FRICTION.md) F5).
+- **`FakeBackend` is a first-class `Backend`, not a mock.** `tests/test_backend.py` keeps it from
+  drifting from `ApiBackend` by comparing the **union** of public methods across the Protocol and
+  both implementations.
+- **Every guard needs an independent second source; name it.** A guard comparing a source against
+  itself cannot fail, and four here did.
+- **Mutation-test every guard once:** break what it protects, watch it fail, restore.
+- **A test that passes for the wrong reason is worse than no test** (`TODO.md` C1).
+- **Where you find a guard, test the routes that do not go through it.** Three verification passes
+  checked `__setattr__` for immutability while `__init__` re-invocation re-wrote the same state.
+- **Zero defect** ([ZERO-DEFECT.md](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/ZERO-DEFECT.md)):
+  ZD-2, a 200 that looks wrong is an error; ZD-17, silence is not health. Ask of any branch that
+  concludes there is no work: *if this fired forever, would anyone notice?*
 
-The coverage gate is **100%, not 90%** — a gate below the measured state cannot fail.
-`# pragma: no cover` is the explicit hatch, and using it is a decision to write down.
+## Credentials, the public line, and customer data
 
-**Both halves of that gate live in `pyproject.toml`, not on the CI command line** (#66). They
-were on the command line, with no `[tool.coverage.run]` section at all, and the two
-consequences were that a developer's `pytest --cov` measured *every imported module including
-the tests* — 6,122 statements against the library's 1,580, reported as 99%, exiting 1 while CI
-was green — and that **branch coverage was off entirely**, so the 100% was statements only.
-A gate nobody can reproduce locally is a gate nobody runs before pushing. Same command both
-places now, and the config decides what it means.
+- **The environment carries no credential.** Tokens live in the one token file
+  ([ADR-009](DECISIONS-ADR/ADR-009.md)), written once per operator by `csa-zendesk auth login`
+  (also `auth whoami|status|logout`; `src/csa_zendesk/cli.py`).
+- **OAuth only; no API-token path and no fallback anywhere** ([ADR-015](DECISIONS-ADR/ADR-015.md)).
+  `./.env` is not a credential source. The scripts (`zd.py`, `ui_actions.py`, `probe_families.py`,
+  `probe_access.py`) use the same token file and `CSA_ZENDESK_SUBDOMAIN` via `zd.authorize()`. If
+  you reach for `CINO_CSA_ZENDESK`, stop: that is the deleted model. An old API token in an
+  operator's local `./.env` is read by nothing here, and removing it is the operator's call.
+- **Facts about Zendesk are public; facts about a tenant are not**, nor are facts about CSA's
+  internal infrastructure (`scripts/check_public_safe.py`'s docstring). The line is whose facts
+  they are, not "is it a credential".
+- **A survey names no individuals:** `analysis/PRIOR-ART.md` aliases its servers A–L.
+- **`scripts/check_public_safe.py` enforces both.** Structural patterns live in the script; literal
+  terms live in gitignored `tenant-config/private-terms.txt`, because **the denylist is the
+  disclosure** (FRICTION F3). `STRUCTURAL ONLY` means the private list was absent, not a clean
+  bill. `.githooks/pre-commit` runs it; enable with `git config core.hooksPath .githooks`.
+  **Mutation-test it after changing its patterns.**
+- **Never commit** `.env`, the tenant-config extract, probe output containing rows, or clones of
+  other people's repositories. `.gitignore` covers the known shapes; the judgement calls are yours.
+- **Ticket bodies are customer correspondence** (names, addresses, whatever a requester pasted),
+  and on the reference tenant can be audit evidence. **Probe artifacts record counts and shapes,
+  never rows.**
+- **Prompt injection through ticket content is the named primary risk:** a ticket body is written
+  by a stranger with an interest in the outcome ([SECURITY.md](SECURITY.md)).
 
-**`FakeBackend` is a first-class implementation of `Backend`, not a mock.** It is what makes
-the offline tier possible, and `tests/test_backend.py` asserts it cannot drift from
-`ApiBackend`: the guard compares the **union** of public methods across the Protocol and both
-implementations, because a guard that walks only the Protocol checks the one set that cannot
-drift. Four guards in this repo were caught comparing a source against itself. When you write
-one, name its independent second source.
+## Invariants that fail silently: check these when editing
 
-Third in the line after [`csa-google-workspace`](https://github.com/CloudSecurityAlliance/csa-google-workspace)
-and [`csa-skilljar`](https://github.com/CloudSecurityAlliance/csa-skilljar), and intended to
-share their architecture.
+Each returns a success or a plausible answer while being wrong. Evidence:
+`analysis/API-SURFACE.md` §5. **Code and tests cite these numbers: never renumber** (there is
+no 12).
 
-## Where things live
-
-- **`TODO.md`** — the index of ALL open work, per the CINO todo-index convention. Sweep this
-  plus open Issues and you have found everything. It also carries a **consideration pile** of
-  things deliberately not committed to — read it before proposing a "missing" feature.
-- **`analysis/API-SURFACE.md`** — start here. What the API is, what this credential reaches,
-  and the probe-verified behaviours that constrain the design.
-- **`analysis/UI-ACTION-MAP.md`** — the tool surface derived from what the agent web interface
-  actually offers, rather than from the API's own shape.
-- **`analysis/PRIOR-ART.md`** — twelve MCP servers, read from source, **anonymised on purpose**.
-- **`analysis/OFFICIAL-CLIENTS.md`** — what Zendesk's own Ruby and PHP clients know, including
-  several things the spec does not say. §7 is the list of behaviours to take.
-- **`analysis/CLIENT-LIBRARIES.md`** — the build-vs-adopt assessment.
-- **`analysis/operation-inventory.csv`** — 882 operations. **The authoritative path list.**
-- **`specs/`** — three upstream OpenAPI snapshots with provenance and sha256s. Snapshots of
-  someone else's moving target.
-- **`DECISIONS-ADR.md`** + **`DECISIONS-ADR/`** — ADR-001 (do not build what cannot be tested)
-  and ADR-002 (build from scratch) are both load-bearing. Do not contradict them without a
-  superseding ADR.
-- **`WAITING-FOR.md`** + **`WAITING-FOR/`** — conditions with observable triggers.
-- **`experiments/`** — runnable probes with a dated `RESULTS.md`. Probe beats docs.
-- **`scripts/`** — everything in `analysis/` is regenerable. Nothing there is hand-maintained.
-
-## Critical architectural facts
-
-1. **The seam returns raw envelopes.** `Backend` hands back upstream JSON unshaped; the MCP tool
-   layer turns it into `TypedDict`s. This is why one uniform `PolicyBackend` wrapper can gate
-   every method, and it is why ADR-002 rejects every object-mapping library.
-2. **Enforcement wraps the seam; it is not a check in the tools.** A library embedder gets the
-   same guarantee an MCP client does.
-3. **The gate table fails closed.** A `Backend` method with no declared capability is *refused*,
-   not delegated — so forgetting to declare one turns a feature off rather than leaving a hole.
-4. **Tool names are bare `verb_noun`**, never `zendesk_`-prefixed. The client namespaces by
-   server already, and the survey settled it.
-5. **Six names are fixed by the field** and must not be renamed: `get_ticket`, `create_ticket`,
-   `update_ticket`, `get_user`, `get_organization`, `get_ticket_comments`.
-6. **A tool is `(operation × constrained arguments)`, and `update_ticket` is NOT broad**
-   ([ADR-016](DECISIONS-ADR/ADR-016.md)). `PUT /tickets/{id}` is five different impact levels
-   depending on its body — field edit, internal note, public reply, solve, close — so one tool
-   matching the operation cannot be gated or annotated honestly. Several narrow tools back that
-   one operation instead, each refusing the body keys that would change its bucket:
-   `update_ticket` refuses `comment` and `status`; `add_internal_note` sends a comment with
-   `public` forced false; `reply_publicly` forces it true; `solve_ticket` sets only the status.
-   **The constraint on the body is what makes the tool bucket-pure.** Annotations are per-tool,
-   so one tool cannot honestly advertise both a routine field edit and an irreversible email —
-   which is why this is enforced rather than documented.
-   **Tools are atomic and there are no composites.** Sequencing belongs to a workflow plugin, not
-   to the server: required fields are tenant-specific and the API already 422s naming what is
-   missing. The server states what is *true*; a plugin states what to *do*.
-7. **Authority is ordered by reversibility** (ADR-003): `ticket.read` < `ticket.note` <
-   `ticket.write` < `ticket.reply` < `ticket.solve` < `ticket.close` < `ticket.merge`. The default
-   profile is everything that can be undone — read, note, write. Reply, solve, close and merge are
-   opt-in, and no profile grants close or merge. Solving is not itself terminal but it is the
-   **on-ramp** to terminal: a tenant automation closes solved tickets after a fixed period, and
-   solving also removes the ticket from active views, which is why nobody notices before the timer
-   expires. `ticket.merge` sits last, not merely alongside `ticket.close`: a merge is irreversible
-   and terminal for the source ticket like a close, *and* it can email the requester
-   (`source_comment_is_public` / `target_comment_is_public`) the way `ticket.reply` does — it is the
-   one capability that combines both properties, so it is also, with `ticket.reply`, in
-   `REACH_CAPABILITIES` and requires `CSA_ZD_ALLOW_REACH` in addition to being granted.
-   `ticket.attach` (Task 4) sits off this chain entirely rather than slotting in below `ticket.note`:
-   `upload_file` reaches nobody and touches no existing ticket at all — it stages bytes on Zendesk's
-   side, invisible until a later `ticket.note`/`ticket.write` call carries the token onto one — so it
-   is not comparable to the others by reversibility the way they are to each other. It carries no
-   `subject_var`, the same as `ticket.read`'s `search_tickets`, for the same reason: there is no
-   ticket yet to scope against.
-
-## Invariants that fail silently — check these when editing
-
-Every one is probe-verified against the live API, and every one returns a success or a
-plausible answer while being wrong.
-
-1. **`users/me.json` answers HTTP 200 with an "Anonymous user" object when wholly
-   unauthenticated.** It serves anonymous Help Center visitors. It is also the endpoint every
-   client reaches for as a credential health check. **Validate credentials against a resource
-   endpoint and assert a non-null `user.id`** — never against `users/me`.
-2. **Search reports a `count` far larger than it will return.** Offset-only, and it refuses past
-   1000 results. A tool that surfaces `count` as if the caller could page to it is lying;
-   `search/export` is the cursor-paginated alternative.
-3. **Never emit both pagination styles on one request.** With a cursor page parameter present,
-   `sort_by`/`sort_order` are **silently discarded** and you get default order with a 200.
-   Zendesk's own PHP client strips them; so must we. Refuse rather than trust the caller.
-4. **Cursor paging restricts sorting** to `updated_at`, `id`, `status`. `created_at` is *not*
-   cursor-sortable, so "newest tickets" has no direct expression — `sort=-id` is the proxy and
-   translating it is the tool layer's job.
+1. **`users/me.json` answers 200 with an "Anonymous user" object when unauthenticated.** Validate
+   credentials against a resource endpoint and assert a non-null `user.id`; never `users/me`.
+2. **Search reports a `count` far larger than it returns:** offset only, refused past 1000
+   results. Never surface `count` as pageable; `search/export` is the cursor alternative.
+3. **Never emit both pagination styles on one request.** With a cursor page parameter,
+   `sort_by`/`sort_order` are silently discarded (200, default order). Refuse; don't trust the
+   caller.
+4. **Cursor paging sorts only by `updated_at`, `id`, `status`.** `created_at` is not
+   cursor-sortable; "newest" is `sort=-id`, and translating it is the tool layer's job.
 5. **Offset paging dies at 10,000 records** with a typed `InvalidPaginationDepth`.
-6. **Errors arrive in four incompatible envelopes**, and on a validation refusal everything
-   useful is in `details` — which is a **map from field name to a list of problems**, not a
-   fixed shape. Whole-record problems land under `base`; field-scoped ones land under the field
-   (`details.status[]`). **Iterate the keys of `details`; never index one** — a parser hardcoded
-   to `details.base` finds nothing on a field-scoped error. A parser reading only `error` and
-   `description` gets "RecordInvalid / Record validation errors" and discards the diagnosis
-   entirely. Zendesk's own Ruby client reads `details` first, then falls back across four keys.
-13. **Never omit `comment.public`.** It has no fixed default — it *inherits from the ticket's
-   first comment*, so on the common email-originated ticket it is **public**, which emails the
-   requester and every collaborator irreversibly. Require it explicitly, or set `false` and make
-   publishing opt-in. A tool tested on an internal ticket will look safe and then email a
-   customer in production.
-14. **`status: "closed"` is accepted by the API and is terminal.** A closed ticket refuses every
-   further write, including reopening, and the web UI does not offer Closed in its status picker
-   at all. It must be gated separately from both writes and `solve`, and its tool description
-   must say it cannot be undone.
-7. **`404` means two different things.** `InvalidEndpoint` is "not on this account";
-   `RecordNotFound` is "wrong id". Collapsing them loses the plan-versus-id distinction.
-   Similarly a `403` is a plan boundary, not an outage — the official clients get this wrong.
+6. **Errors arrive in four incompatible envelopes.** On a validation refusal `details` is a map
+   from field name to a list of problems (`base` for whole-record ones). **Iterate the keys of
+   `details`; never index one**, and read it before `error`/`description`.
+7. **`404` means two things:** `InvalidEndpoint` is "not on this account", `RecordNotFound` is
+   "wrong id". A `403` is a plan boundary, not an outage.
 8. **`503` is retryable** alongside `429`. Honour `Retry-After`; default to 10s when absent.
-9. **Rate limits are layered.** An account limit plus much tighter per-endpoint buckets
-   (incremental exports is an order of magnitude tighter). A limiter watching only the account
-   header will trip a bucket long before it expects to.
-10. **Pagination cannot be generated from the specs.** The Help Center spec declares it on 0 of
-    96 GETs that demonstrably paginate. Detect the style from the response — `meta` + `links` —
-    and never read silence as "unpaginated".
-11. **A 404 from a guessed path is not evidence of anything.** This was violated twice, both
-    times reporting a family as absent when it was plan-gated or available at a different path.
-    `analysis/operation-inventory.csv` is the authoritative path list; generate probes from it.
+9. **Rate limits are layered:** an account limit plus far tighter per-endpoint buckets
+   (incremental exports). Watch both header families, not just the account one.
+10. **Pagination cannot be generated from the specs** (Help Center declares it on 0 of 96 paginating
+    GETs). Detect it from the response, `meta` + `links`; never read silence as "unpaginated".
+11. **A 404 from a guessed path is not evidence of anything.** Generate probes from
+    `analysis/operation-inventory.csv` (§3, "Correction").
+13. **Never omit `comment.public`.** It inherits from the ticket's first comment, so on an
+    email-originated ticket it is **public** and irreversibly emails the requester and every
+    collaborator. Require it explicitly, or send `false` and make publishing opt-in.
+14. **`status: "closed"` is accepted and terminal.** A closed ticket refuses every further write,
+    including reopening, and the web UI does not offer it. Gate it separately from both writes and
+    `solve`; its tool description must say it cannot be undone.
 
-Plus the MCP SDK traps inherited from the sibling projects, all verified against `mcp` 2.1.0:
-nothing may touch **stdout** under stdio; raise the SDK's **`ToolError`** or your message is
-discarded; **never `Field(alias=…)`** on a tool parameter; **`mcp.server.fastmcp` does not
-exist** (it is `from mcp.server import MCPServer`); sync handlers run on **worker threads**, so
-any non-thread-safe client must be thread-local; **`TypedDict` from `typing_extensions`** below
-Python 3.12; and do not block `initialize` on a network call.
+## Design rules: read the ADR before changing its area
 
-## Python semantics that bit this repo — all verified, all counter-intuitive
+- **The seam returns raw envelopes.** `Backend` hands back upstream JSON unshaped; the MCP tool
+  layer makes `TypedDict`s. That is why one `PolicyBackend` wrapper gates every method, and why
+  ADR-002 rejects every object-mapping library.
+- **Enforcement wraps the seam, not the tools,** so a library embedder gets the same guarantee as
+  an MCP client. **The gate table fails closed:** a `Backend` method with no declared capability
+  is refused, not delegated.
+- **Tool names are bare `verb_noun`**, never `zendesk_`-prefixed. **Six names are fixed by the
+  field:** `get_ticket`, `create_ticket`, `update_ticket`, `get_user`, `get_organization`,
+  `get_ticket_comments`.
+- **A tool is (operation × constrained arguments), bucket-pure**
+  ([ADR-016](DECISIONS-ADR/ADR-016.md)): `update_ticket` refuses `comment` and `status`;
+  `add_internal_note` forces `public` false; `reply_publicly` forces it true; `solve_ticket` sets
+  only the status. Tools are atomic, with no composites; sequencing belongs to a workflow plugin.
+  The server states what is *true*; a plugin states what to *do*.
+- **Authority is ordered by reversibility** ([ADR-003](DECISIONS-ADR/ADR-003.md)): `ticket.read` <
+  `ticket.note` < `ticket.write` < `ticket.reply` < `ticket.solve` < `ticket.close` <
+  `ticket.merge`. The default profile is read, note, write. Reply, solve, close and merge are
+  opt-in, and **no profile grants close or merge**. Solving is the on-ramp to terminal: a tenant
+  automation closes solved tickets. `ticket.reply` and `ticket.merge` are `REACH_CAPABILITIES`
+  and also need `CSA_ZD_ALLOW_REACH`. `ticket.attach` (`upload_file`, `delete_upload`) is off the
+  chain and, like `search_tickets`, has no `subject_var`. Reasoning: `src/csa_zendesk/policy.py`.
+- **Surface and authority are separate** ([ADR-006](DECISIONS-ADR/ADR-006.md)). Toolsets
+  (`context`, `tickets`, `help_center`, `people`, `queues`, `reporting`, `export`, `admin`;
+  default `context` + `tickets`) decide whether a tool exists; capabilities decide whether it may
+  act. A registered tool without its capability is visible and refuses, a better failure than an
+  absent one. **`context` is always registered:** required fields vary per form. Instructions are
+  per-toolset and compose. **Nothing enables a toolset at runtime.**
+- **The escape hatch** ([ADR-008](DECISIONS-ADR/ADR-008.md)): `zendesk_read` (GET,
+  `read_only_hint`) and `zendesk_request` (any verb, `destructive_hint`), off by default
+  (`raw.read`/`raw.write`, granted by no profile). **Both refuse any path a curated tool covers**,
+  naming that tool. Every refusal names its remedy; refusals are logged by method and path, never
+  the body. It skips nothing else: injection wrapping, the pagination refusal, rate limiting, the
+  error taxonomy.
+- **Async** ([ADR-007](DECISIONS-ADR/ADR-007.md)): a bulk tool submits, polls briefly, and returns
+  the outcome or the job id (`get_job_status` reads it later); at most 30 jobs account-wide before
+  `TooManyJobs`. **Always report per-record outcomes**: a half-succeeded job never reads as
+  success. Our own aggregation has no handles.
+- **Bulk reads aggregate and never persist** ([ADR-005](DECISIONS-ADR/ADR-005.md)): `summarise_*`
+  folds pages and discards them, so rows never reach the model or disk; `export_*` writes a file
+  for a person to an operator-configured directory, and the model does not query it. **Nothing is
+  cached** except the OAuth token file (ADR-009). **Scope is mandatory**, and an answer **reports
+  how much it sampled**.
+- **Three testing tiers** ([ADR-004](DECISIONS-ADR/ADR-004.md)): unit (every path, `FakeBackend`,
+  offline, gates CI); integration (reads and reversible writes, live, opt-in); observational
+  (irreversible operations, verified read-only from the platform's own instances). No observable
+  instances and no safe test means excluded under ADR-001. Observational reports *insufficient
+  evidence* distinctly from *pass*.
 
-Each of these was written into a fix and turned out to be wrong; an implementer caught it by
-running the code. They are recorded because the same instinct will produce the same mistake.
+## Traps: MCP SDK and Python (all verified)
 
-1. **`inspect.signature(cls)` raises `ValueError` on a bare `Exception` subclass** — "no
-   signature found for builtin type". `Exception.__init__` is a C slot wrapper. So a guard
-   that inspects exception constructors must skip classes declaring no `__init__` of their
-   own, and `'__init__' in vars(Exception)` is `True` while
-   `Exception.__init__ is BaseException.__init__` is `False`.
-2. **`raise X from None` does not sever exception chaining.** It sets `__cause__ = None` and
-   `__suppress_context__ = True`, but **`__context__` still points at the original** —
-   `__suppress_context__` only affects *display*. An error tracker that walks `__context__`
-   still reaches it. To truly detach, raise after the `except` block has exited. This mattered
-   here because an httpx exception carries `.request.headers`, i.e. the `Authorization` header.
-3. **`vars(obj)` raises `TypeError` on a `__slots__` class** — there is no `__dict__`. Use
-   `hasattr` for a construct-once sentinel.
-4. **Python 3.12 changed `runtime_checkable` protocol `isinstance` to use
-   `inspect.getattr_static`**, which does not consult `__getattr__`. A class providing methods
-   dynamically satisfies `hasattr` and **fails `isinstance`** — and answers differently on
-   3.10/3.11 than on 3.12/3.13, so it splits a CI matrix. Materialise the methods onto the
-   class if the protocol identity matters.
-5. **`from __future__ import annotations` binds the name `annotations` in the module
-   namespace.** It is neither underscore-prefixed nor a module, so it leaks into any
-   `dir()`-based public-surface check.
-6. **`base64` is not obfuscation.** A credential-leak check that greps for the plaintext and
-   inspects `repr()` will pass while `vars(client)` hands over the same secret one
-   `b64decode` away. Redacting `__repr__` is what makes such a leak invisible to the check
-   most people run.
+The MCP SDK, against `mcp` 2.1.0:
+- Nothing may touch **stdout** under stdio.
+- Raise the SDK's **`ToolError`**, or your message is discarded.
+- **Never `Field(alias=…)`** on a tool parameter.
+- **`mcp.server.fastmcp` does not exist:** it is `from mcp.server import MCPServer`.
+- Sync handlers run on **worker threads**, so a non-thread-safe client must be thread-local.
+- **`TypedDict` from `typing_extensions`** below Python 3.12.
+- Do not block `initialize` on a network call.
 
-**And the meta-lesson, which cost the most:** *where you find a guard, test the routes that do
-not go through it.* Four guards here were caught comparing a source against itself, and three
-separate verification passes — mine included — checked `__setattr__` for immutability while
-`__init__` re-invocation silently re-wrote the same state. A protected surface is evidence
-someone anticipated attack there, which makes it the least likely place to find a live one.
-
-## The public/private line — enforced, not remembered
-
-**Facts about Zendesk are public. Facts about a tenant are not.** Vendor API behaviour helps
-whoever hits it next; an organisation's process fields, group names, volumes and macro estate
-are its own business. The distinction is *not* "is it a credential".
-
-A survey of an ecosystem also **names no individuals**. `analysis/PRIOR-ART.md` aliases twelve
-servers A–L; most are individual side projects given away for free, and ranking them by name in
-a corporate repository would be unkind and beside the point.
-
-`scripts/check_public_safe.py` enforces both, in two tiers:
-
-- **Structural patterns** live in the script and name nobody — shapes like an email address, a
-  real tenant subdomain, `<number> macros`, an `/agent/tickets/<id>` URL.
-- **Literal terms** live in `tenant-config/private-terms.txt`, gitignored and loaded at
-  runtime — because an earlier version hardcoded the literals and thereby became a compact,
-  searchable index of exactly what it existed to hide. **The denylist is the disclosure.**
-
-With the private list absent it reports `STRUCTURAL ONLY` rather than a clean bill of health it
-cannot support. `.githooks/pre-commit` runs it; enable with
-`git config core.hooksPath .githooks`. Mutation-test it after changing the patterns.
-
-**Never commit:** `.env`, the tenant-config extract, probe output containing rows, or clones of
-other people's repositories. `.gitignore` covers the known shapes; the judgement calls are
-yours.
-
-## Data hygiene
-
-Ticket bodies are **customer correspondence** — real names, addresses, and whatever a requester
-pasted in. Probe artifacts record **counts and shapes, never rows**. The reference tenant runs
-quality-management and incident-response workflows on Zendesk, so ticket content can include
-audit evidence.
-
-**Prompt injection through ticket content is the named primary risk.** A ticket body is text
-written by a stranger with an interest in the outcome, and reading it is the entire point of the
-product. Nothing in the field addresses this except one surveyed server; see `TODO.md` A4.
-
-## Zero defect — surface failures, never suppress them
-
-Follows [ZERO-DEFECT.md](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/ZERO-DEFECT.md).
-The principles that have already earned their place here:
-
-- **ZD-2, generate errors aggressively.** A 200 that looks wrong is an error. Four of the
-  invariants above are 200s that were wrong.
-- **ZD-17, silence is not health.** Ask of any branch that concludes there is no work: *if this
-  fired forever, would anyone notice?* The `users/me` health check is exactly that shape.
-- **Every guard gets mutation-tested once.** Break the thing it protects, watch it fail, restore.
-  `check_public_safe.py` was mutation-tested three ways, and the third revealed it reported full
-  coverage when its private term list was missing.
-- **A test that passes for the wrong reason is worse than no test.** The requirements model
-  matched a live 422 exactly — on a form with zero conditional rules, so the match validated only
-  the trivial half. See `TODO.md` C1.
-
-## Surface vs authority
-
-Two orthogonal dimensions (ADR-006), and the field conflates them:
-
-- **Toolset** — does the tool *exist*? Operator config at launch. `context`, `tickets`,
-  `help_center`, `people`, `queues`, `reporting`, `export`, `admin`. Default `context` + `tickets`.
-  **`context` is always registered** — a model that has not called `describe_ticket_form` is
-  guessing at which fields are required to solve, and that varies per form.
-- **Capability** — may an existing tool *act*? The fail-closed `PolicyBackend` (ADR-003).
-
-So a deployment can register `tickets` while granting only `ticket.read`: the write tools are
-visible and described, and refuse. That is a better failure than an absent tool, because the model
-can see the capability exists and say what an operator would have to change.
-
-**Instructions are per-toolset and compose** based on what else is enabled, so a deployment
-without `reporting` never spends context on aggregation guidance. **Nothing enables a toolset at
-runtime** — surface breadth is an operator decision, and a model that can turn on `admin` because
-it decided it needed to has inverted who is in charge.
-
-## The escape hatch
-
-ADR-008. `zendesk_read` (GET, `read_only_hint`) and `zendesk_request` (any verb,
-`destructive_hint`) exist so an unanticipated task has a route. Both are **off by default**
-(`raw.read` / `raw.write`, granted by no profile).
-
-**Both refuse any path a curated tool already covers**, naming the tool to use instead. That is
-the load-bearing constraint: without it a model prefers one flexible tool over choosing among
-forty, and thereby routes around every warning this design exists to carry — that closing is
-terminal, that `comment.public` inherits, that mixing pagination styles silently drops the sort.
-The hatch is for surface we do **not** cover.
-
-**Every refusal names its own remedy** — the missing capability and what an operator changes to
-grant it. That is the point rather than a nicety: the model attempts, is refused informatively,
-and reports what to enable. Refusals are logged (method and path, never the body) so the
-operations people actually reach for become visible and can inform later curation.
-
-It skips nothing else: injection wrapping, the both-pagination-styles refusal, rate limiting and
-the error taxonomy all still apply.
-
-## Async: surface Zendesk's, bound ours
-
-ADR-007. Two different problems, one answer each.
-
-**Zendesk's jobs are durable.** Bulk writes return a job id, not a result; the outcome comes from
-`/job_statuses/{id}`, and up to 30 jobs may be in flight account-wide before `TooManyJobs`. A bulk
-tool submits, **polls briefly**, and returns the outcome if it finished or the job id if not.
-`get_job_status` retrieves it later. **Always report per-record outcomes** — a job that half
-succeeded must never read as success.
-
-**Our aggregation is a loop in our process.** No handles: it is bounded work that reports its own
-limits. A handle would be a key into memory a stdio server loses on restart, and persisting it is
-what ADR-005 declined.
-
-## Bulk reads: aggregate, never persist
-
-ADR-005. The questions this tool exists to answer are aggregate ones, and the volumes do not fit
-in a context window — search caps at 1000 results while reporting far more, and incremental
-export runs at ten requests a minute.
-
-- **`summarise_*`** streams pages, folds each into an aggregate, and **discards it**. Rows never
-  reach the model and never touch disk. The answer is a small table, which is what was wanted —
-  nobody wants ten thousand tickets, they want the distribution.
-- **`export_*`** writes a file for a *person*, to an operator-configured directory. The model
-  gets a summary and a path and **does not query the file**. There is no query tool over exports.
-- **Nothing is cached.** No response persistence, no attachment cache, no token file for
-  `client_credentials`. The one exception is the OAuth token file — a credential, not customer
-  data — which ADR-005's no-persistence position was amended to admit
-  ([ADR-009](DECISIONS-ADR/ADR-009.md)).
-
-Two rules the aggregation path must keep: **scope is mandatory** — an unbounded `summarise_*` is
-refused, not silently run for an hour — and it **reports how much it sampled**, so a truncated
-answer is never presented as a complete one.
-
-Aggregation is also the strongest available prompt-injection mitigation on the bulk path:
-untrusted ticket bodies are counted, not read aloud.
-
-## Testing tiers
-
-Three, not two (ADR-004):
-
-- **unit** — every path, against `FakeBackend`, offline, gates CI.
-- **integration** — reads and reversible writes, live, opt-in.
-- **observational** — irreversible operations, verified by measuring **the platform's own
-  instances** of them, read-only. An operation qualifies when the platform performs it routinely
-  under its own rules and leaves evidence we can read.
-
-Observational verification answers a different question from a write-test. A write-test asks
-*did my call work?*; observation asks *how does this behave here, including through paths I did
-not know about?* Its first run established that the closure automation works as configured **and**
-that a large share of closures come from somewhere else entirely — most likely merges, which
-close the source ticket.
-
-An operation with **no observable instances and no safe test** is excluded under ADR-001 rather
-than shipped untested. The observational suite must report *insufficient evidence* distinctly
-from *pass*; a check that cannot fail is theatre.
+Python; each was written into a fix here and was wrong:
+- **`inspect.signature(cls)` raises `ValueError`** on an `Exception` subclass with no `__init__` of
+  its own, so skip those. `'__init__' in vars(Exception)` is `True`, yet
+  `Exception.__init__ is BaseException.__init__` is `False`.
+- **`raise X from None` does not sever chaining:** `__context__` still holds the original. To
+  detach, raise after the `except` block exits. An httpx exception's `.request.headers` holds the
+  `Authorization` header.
+- **`vars(obj)` raises `TypeError` on a `__slots__` class**; use `hasattr` for a construct-once
+  sentinel.
+- **Since 3.12, `isinstance` against a `runtime_checkable` protocol uses
+  `inspect.getattr_static`**, ignoring `__getattr__`. Materialise the methods onto the class if
+  protocol identity matters.
+- **`from __future__ import annotations` binds `annotations`** in the module namespace, which leaks
+  into `dir()`-based public-surface checks.
+- **`base64` is not obfuscation.** A leak check on plaintext and `repr()` passes while
+  `vars(client)` hands over the secret one `b64decode` away, and a redacted `__repr__` hides it.
 
 ## Commands
-
-**Always work inside a virtual environment.** Never `pip install` into a system Python.
 
 ```bash
 export CSA_ZENDESK_SUBDOMAIN=<subdomain>               # no default, deliberately
 export CSA_ZENDESK_MCP_SERVER_IDENTIFIER=<client-id>   # the OAuth client's Identifier
 # optional: CSA_ZENDESK_SCOPES, space-separated, defaults to `read`
 
-python3 scripts/check_public_safe.py   # the publication gate; run before every push
 python3 scripts/inventory.py           # regenerate the operation inventory from specs/
 python3 scripts/probe_access.py        # what this credential reaches, GET only
 python3 scripts/survey_tools.py        # re-run the ecosystem survey from the clones
 python3 scripts/extract_config.py      # tenant configuration -> gitignored tenant-config/
 ```
 
-The environment above carries **no credential** — the tokens live in the token file
-([ADR-009](DECISIONS-ADR/ADR-009.md)), populated once per operator by `csa-zendesk auth login`
-(the console script; `src/csa_zendesk/cli.py`). `csa-zendesk auth status` reports whether a token
-file exists, its expiry and its granted scope, without a network call; `csa-zendesk auth whoami`
-confirms the identity it resolves to, live. `./.env` is not a credential source for anything in
-this repo ([ADR-015](DECISIONS-ADR/ADR-015.md)): the **scripts** under `scripts/` —
-`zd.py`, `ui_actions.py`, `probe_families.py`, `probe_access.py` — authenticate through the same
-token file and the same `CSA_ZENDESK_SUBDOMAIN`, via `zd.authorize()`. There is no API-token path
-and no fallback anywhere. If you are adding auth to library or script code and reach for
-`CINO_CSA_ZENDESK`, stop — that is the deleted model. An operator's old API token may still
-physically sit in their local `./.env`; nothing in this repo reads it, and removing it is the
-operator's own call.
+## Where things live
 
-## Working in this repo
-
-- **Branch + PR for every change**; never commit to `main`. Conventional prefixes
-  (`feat/`, `fix/`, `docs/`, `chore/`, `test:`, `security:`).
-- **Probe before asking.** If a question can be answered by a free, read-only, side-effect-free
-  call, make the call. Most of `analysis/` came from doing this.
-- **Probe beats docs.** Where the spec and a probe disagree, the probe wins and the finding is
-  written down. This has happened repeatedly — pagination, error shapes, missing families.
-- **Read paths from the inventory, not from memory.** See invariant 11.
-- **GET only against the live API** unless the user has authorised a specific write. Never
-  infer a field value to satisfy a validator; that fabricates audit evidence.
-- **Do not describe unimplemented things as working.** The README carries a status banner.
+- **`TODO.md`:** the index of all open work; with open Issues, that is everything. Its
+  **consideration pile** is what was deliberately not committed to: read it before proposing a
+  "missing" feature.
+- **`analysis/API-SURFACE.md`:** start here. The API, what this credential reaches, and the
+  probe-verified behaviours (§5).
+- **`analysis/UI-ACTION-MAP.md`:** the tool surface derived from the agent web interface.
+- **`analysis/PRIOR-ART.md`:** the ecosystem survey, anonymised on purpose.
+- **`analysis/OFFICIAL-CLIENTS.md`:** what Zendesk's Ruby and PHP clients know; §7 is what we take.
+- **`analysis/CLIENT-LIBRARIES.md`:** the build-vs-adopt assessment.
+- **`analysis/operation-inventory.csv`:** the authoritative path list.
+- **`specs/`:** upstream OpenAPI snapshots with provenance and sha256s; someone else's moving
+  target.
+- **`scripts/`:** everything in `analysis/` is regenerable from here; nothing there is
+  hand-maintained.
+- **`experiments/`:** runnable probes, each with a dated `RESULTS.md`.
+- **`DECISIONS-ADR.md`** + `DECISIONS-ADR/`; **`WAITING-FOR.md`** + `WAITING-FOR/` (conditions with
+  observable triggers); **`SECURITY.md`**; **`FRICTION.md`**; **`RELEASING.md`**.
+- **Siblings sharing this architecture:**
+  [`csa-google-workspace`](https://github.com/CloudSecurityAlliance/csa-google-workspace) and
+  [`csa-skilljar`](https://github.com/CloudSecurityAlliance/csa-skilljar).
