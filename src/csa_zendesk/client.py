@@ -181,3 +181,18 @@ class ZendeskClient:
         """
         # See get_ticket's comment above on why this needs an explicit cast.
         return cast(Envelope, self._backend.get_attachment(attachment_id=attachment_id))
+
+    def search_articles(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
+        """Search Help Center articles, as the raw upstream envelope: `{"results": [...], "count": ...}`.
+
+        Offset paging only (`page`/`per_page`), the same ceiling `search_tickets`
+        enforces (API-SURFACE.md §5.2): Zendesk stops answering reliably past
+        1000 results.
+        """
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.search_articles(query=query, page=page, per_page=per_page))
+
+    def get_article(self, *, article_id: int) -> Envelope:
+        """One Help Center article, as the raw upstream envelope: `{"article": {...}}`."""
+        # See get_ticket's comment above on why this needs an explicit cast.
+        return cast(Envelope, self._backend.get_article(article_id=article_id))

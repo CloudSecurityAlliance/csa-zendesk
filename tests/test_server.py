@@ -6,7 +6,7 @@ from csa_zendesk import server as srv
 from csa_zendesk.policy import TICKET_REPLY
 
 
-def test_the_read_tools_are_exactly_the_four_read_tools():
+def test_the_read_tools_are_exactly_the_six_read_tools():
     # Asserts on READ_TOOLS, not TOOLS - TOOLS grows to include the
     # auth-lifecycle tools and (this task) the write tools, and this property
     # must stay true regardless. (The `TOOLS == READ_TOOLS` equality this
@@ -22,9 +22,19 @@ def test_the_read_tools_are_exactly_the_four_read_tools():
     # write. A three-element pin here would go stale the moment
     # get_attachment was registered; the fourth element is the set
     # genuinely changing, not the test going vacuous (CLAUDE.md's own
-    # distinction, and the amendment's).
+    # distinction, and the amendment's). `search_articles`/`get_article` make
+    # it six: they gate on HC_READ rather than TICKET_READ, but the same
+    # read_only_hint=True/destructive_hint=False shape puts them in this
+    # collection rather than a new one of their own.
     names = {t.name for t in srv.READ_TOOLS}
-    assert names == {"search_tickets", "get_ticket", "list_comments", "get_attachment"}
+    assert names == {
+        "search_tickets",
+        "get_ticket",
+        "list_comments",
+        "get_attachment",
+        "search_articles",
+        "get_article",
+    }
 
 
 def test_every_read_tool_is_annotated_read_only_and_non_destructive():
@@ -127,6 +137,12 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
         def get_attachment(self, *, attachment_id):
             return {"attachment": {"id": attachment_id, "file_name": "r.pdf", "content_url": "https://x/y"}}
 
+        def search_articles(self, *, query, page=1, per_page=25):
+            return {"results": [{"id": 1, "result_type": "article", "title": "How to reset"}], "count": 1}
+
+        def get_article(self, *, article_id):
+            return {"article": {"id": article_id, "title": "How to reset", "body": "<p>steps</p>"}}
+
     monkeypatch.setattr(srv, "_client", lambda: _Client())
 
     def _assert_wrapped_or_machine_set(node: object, *, path: str) -> None:
@@ -163,6 +179,8 @@ def test_every_remaining_string_in_a_wrapped_response_is_marked_or_machine_set(m
         "upload_file": {"filename": "r.pdf", "content_base64": "SGk=", "content_type": "text/plain"},
         "delete_upload": {"token": "t"},
         "get_attachment": {"attachment_id": 9},
+        "search_articles": {"query": "x"},
+        "get_article": {"article_id": 1},
     }
     # The completeness assertion this test lacked while its sibling
     # (`test_no_tool_path_returns_an_unwrapped_envelope`) had one. Without it
@@ -1155,6 +1173,8 @@ def test_every_registered_tool_gates_on_the_capability_its_annotation_implies():
         "search_tickets": policy.TICKET_READ,
         "list_comments": policy.TICKET_READ,
         "get_attachment": policy.TICKET_READ,
+        "search_articles": policy.HC_READ,
+        "get_article": policy.HC_READ,
         "update_ticket": policy.TICKET_WRITE,
         "assign_ticket": policy.TICKET_WRITE,
         "add_internal_note": policy.TICKET_NOTE,
@@ -1279,6 +1299,12 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
         def get_attachment(self, *, attachment_id):
             return {"attachment": {"id": attachment_id, "file_name": "evidence.log"}}
 
+        def search_articles(self, *, query, page=1, per_page=25):
+            return {"results": [{"id": 1, "title": "t"}], "count": 1}
+
+        def get_article(self, *, article_id):
+            return {"article": {"id": article_id, "title": "t"}}
+
         def update_ticket(self, *, ticket_id, fields):
             return {"ticket": {"id": ticket_id, "subject": "s"}}
 
@@ -1303,6 +1329,8 @@ def test_no_tool_path_returns_an_unwrapped_envelope(monkeypatch):
         "search_tickets": {"query": "x"},
         "list_comments": {"ticket_id": 1},
         "get_attachment": {"attachment_id": 1},
+        "search_articles": {"query": "x"},
+        "get_article": {"article_id": 1},
         "update_ticket": {"ticket_id": 1, "fields": {"subject": "new"}},
         "assign_ticket": {"ticket_id": 1, "assignee_id": 2},
         "add_internal_note": {"ticket_id": 1, "body": "note"},

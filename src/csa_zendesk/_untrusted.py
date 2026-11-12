@@ -402,3 +402,26 @@ def wrap_search(envelope: Envelope) -> Envelope:
     in practice.
     """
     return _walk_dict(envelope, path="zendesk-search")
+
+
+def wrap_article(envelope: Envelope) -> Envelope:
+    """Wrap every string anywhere in a `{"article": {...}}` envelope - `get_article`.
+
+    A sibling of `wrap_ticket`, for the reason `wrap_upload`/`wrap_attachment`
+    give for not reusing it: the function name is the provenance root, and
+    labelling an article `source=zendesk-ticket...` would state something
+    false about what kind of record it is.
+    """
+    article = envelope.get("article")
+    article_id = article.get("id") if isinstance(article, dict) else None
+    root = f"zendesk-article-{article_id}" if article_id is not None else "zendesk-article"
+    return _walk_dict(envelope, path=root)
+
+
+def wrap_article_search(envelope: Envelope) -> Envelope:
+    """Wrap every string anywhere in a `{"results": [...]}` Help Center search envelope.
+
+    `search_articles`'s sibling of `wrap_search`, not a reuse of it, for the
+    same reason `wrap_article` above is not a reuse of `wrap_ticket`.
+    """
+    return _walk_dict(envelope, path="zendesk-article-search")

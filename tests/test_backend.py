@@ -72,6 +72,12 @@ def test_isinstance_check_proves_method_names_only_not_signatures():
         def get_attachment(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
             return {}
 
+        def search_articles(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
+        def get_article(self, *args: object, **kwargs: object) -> dict:  # wrong shape entirely
+            return {}
+
     assert isinstance(NameOnlyImpostor(), Backend)
 
 
@@ -869,6 +875,94 @@ def test_get_attachment_calls_the_documented_path():
 def test_fake_backend_get_attachment_returns_a_canned_envelope():
     # Canned: no per-attachment store exists to look attachment_id up in.
     assert FakeBackend().get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+
+
+# --- search_articles / get_article: Help Center reads, hc.read ---------------
+
+
+def test_search_articles_uses_the_documented_path_and_offset_paging():
+    # Path from analysis/operation-inventory.csv row: help_center,Help Center
+    # Search,GET,/api/v2/help_center/articles/search,ArticleSearch,Search
+    # Articles,,, - the older of the two Help Center search endpoints
+    # (API-SURFACE.md §4b / TODO.md A3); `/api/v2/guide/search` is NOT this
+    # path, since it 400s without a filter object this backend does not send.
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"results": [], "count": 0})
+
+    b = ApiBackend(_client(handler))
+    b.search_articles(query="password reset", page=2, per_page=10)
+    assert seen["path"] == "/api/v2/help_center/articles/search"
+    assert "password" in seen["url"]
+    assert "page=2" in seen["url"]
+    assert "per_page=10" in seen["url"]
+
+
+def test_search_articles_is_refused_past_the_thousand_result_ceiling():
+    # Same ceiling check search_tickets enforces (_refuse_past_search_ceiling),
+    # reused rather than reimplemented.
+    called = {"n": 0}
+
+    def handler(request):  # pragma: no cover - must never run
+        called["n"] += 1
+        return httpx.Response(200, json={})
+
+    b = ApiBackend(_client(handler))
+    with pytest.raises(exc.ZendeskError, match="1000"):
+        b.search_articles(query="x", page=101, per_page=10)
+    assert called["n"] == 0
+
+
+def test_search_articles_returns_the_raw_envelope_unshaped():
+    body = {"results": [{"id": 1, "title": "How to reset your password"}], "count": 1, "page": 1}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).search_articles(query="x") == body
+
+
+def test_fake_backend_search_articles_returns_a_canned_envelope():
+    assert FakeBackend().search_articles(query="x") == {"results": [], "count": 0}
+
+
+def test_fake_backend_search_articles_enforces_the_same_ceiling_as_search_tickets():
+    with pytest.raises(exc.ZendeskError, match="1000"):
+        FakeBackend().search_articles(query="x", page=101, per_page=10)
+
+
+def test_get_article_calls_the_documented_path():
+    # Path from analysis/operation-inventory.csv row: help_center,Articles,GET,
+    # /api/v2/help_center/articles/{article_id},ShowArticleNoLocale,Show
+    # Article,,, - no .json suffix, the inventory's own convention.
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["method"] = request.method
+        return httpx.Response(200, json={"article": {"id": 99, "title": "t"}})
+
+    assert ApiBackend(_client(handler)).get_article(article_id=99) == {"article": {"id": 99, "title": "t"}}
+    assert seen["method"] == "GET"
+    assert seen["path"] == "/api/v2/help_center/articles/99"
+
+
+def test_get_article_returns_the_envelope_unshaped():
+    body = {"article": {"id": 99, "title": "t", "body": "<p>steps</p>", "draft": False}}
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    assert ApiBackend(_client(handler)).get_article(article_id=99) == body
+
+
+def test_fake_backend_get_article_returns_a_canned_envelope():
+    # Canned: no per-article store exists to look article_id up in, same as
+    # get_attachment.
+    assert FakeBackend().get_article(article_id=99) == {"article": {"id": 99}}
 
 
 def test_upload_refuses_empty_content_before_the_call():

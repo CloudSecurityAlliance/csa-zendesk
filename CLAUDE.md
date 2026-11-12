@@ -21,19 +21,25 @@ server (`server.py`, `tools.py`, `cli.py`). **873 tests at 100% coverage, statem
 branches.** The repository also holds upstream API snapshots, an operation inventory, an
 anonymised ecosystem survey, live experiment results, and the decisions taken so far.
 
-**Seventeen tools are exposed of 54 designed** — `server.TOOLS` is the authority, and it is
+**Nineteen tools are exposed** — `server.TOOLS` is the authority, and it is
 `READ_TOOLS + WRITE_TOOLS + AUTH_TOOLS` plus the three introspection tools:
 
 | collection | n | tools |
 |---|---:|---|
-| `READ_TOOLS` | 4 | `get_ticket`, `search_tickets`, `list_comments`, `get_attachment` |
+| `READ_TOOLS` | 6 | `get_ticket`, `search_tickets`, `list_comments`, `get_attachment`, `search_articles`, `get_article` |
 | `WRITE_TOOLS` | 6 | `update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload` |
 | `AUTH_TOOLS` | 4 | `whoami`, `authenticate`, `auth_status`, `logout` |
 | introspection | 3 | `describe_configuration`, `demonstration_plan`, `report_a_problem` |
 
-**Do not describe a tool outside that list as working** — the other 37 are designed, not
-built. Read the count from `server.TOOLS` rather than from here; a number in prose is a claim
-that goes stale, which is what this paragraph was.
+Seventeen of those nineteen are the original 54-tool design's
+(`docs/superpowers/specs/2026-09-17-csa-zendesk-whole-project-design.md`) - the other 37 of
+that 54 are designed, not built. `search_articles`/`get_article` are the other two: Help
+Center reads gated on `hc.read`, a capability `policy.py` reserved from the start (ADR-006
+names `help_center` as its own toolset) but that had no tool to back it until now - they are
+not in that spec's 54-tool enumeration (it never named any Help Center tool at all), so they
+are a design extension, not an implementation of something already written down. Read the
+count from `server.TOOLS` rather than from here; a number in prose is a claim that goes stale,
+which is what this paragraph was.
 
 ### Working on the code
 

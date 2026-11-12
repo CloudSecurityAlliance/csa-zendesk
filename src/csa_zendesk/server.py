@@ -9,17 +9,23 @@ directly, go to stderr - `tests/test_public_api.py`'s import-time guard and
 `ruff`'s `T20` selection both police this, and `test_server.py` adds a
 registration-time check neither of those two can perform.
 
-**Four read tools, six write tools, both honestly annotated.** `get_ticket`,
-`search_tickets`, `list_comments` and `get_attachment` are `READ_TOOLS`:
-`read_only_hint=True`, `destructive_hint=False` on every one, because that is
-what they actually are. `get_attachment` sits here rather than among the
-write tools even though it is registered in the same task that adds them
-(orchestrator amendment to the task brief, before dispatch): it gates on
-`TICKET_READ` (`policy._GATES["get_attachment"]`), the same capability
-`E1_CAPABILITIES` already grants, so a server that never reaches E2 can
-still read an attachment already on a ticket - putting it in `WRITE_TOOLS`
-instead would have made its gate, its annotation and its collection
-disagree with each other for no reason but which list a name landed in.
+**Six read tools, six write tools, both honestly annotated.** `get_ticket`,
+`search_tickets`, `list_comments`, `get_attachment`, `search_articles` and
+`get_article` are `READ_TOOLS`: `read_only_hint=True`, `destructive_hint=False`
+on every one, because that is what they actually are. `get_attachment` sits
+here rather than among the write tools even though it is registered in the
+same task that adds them (orchestrator amendment to the task brief, before
+dispatch): it gates on `TICKET_READ` (`policy._GATES["get_attachment"]`), the
+same capability `E1_CAPABILITIES` already grants, so a server that never
+reaches E2 can still read an attachment already on a ticket - putting it in
+`WRITE_TOOLS` instead would have made its gate, its annotation and its
+collection disagree with each other for no reason but which list a name
+landed in. `search_articles` and `get_article` gate on `HC_READ` instead of
+`TICKET_READ` - Help Center is its own toolset (ADR-006), orthogonal to the
+ticket-centric E1-E5 ladder - and `E1_CAPABILITIES` grants `HC_READ`
+alongside `TICKET_READ` for the same reason it grants the latter: both are
+exactly what this file's unconditionally-registered read tools need, no
+more.
 
 `update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`,
 `upload_file` and `delete_upload` are `WRITE_TOOLS`: every one is
@@ -188,7 +194,7 @@ from . import exceptions as exc
 from ._connect import connect
 from .auth import _store
 from .client import ZendeskClient
-from .policy import TICKET_ATTACH, TICKET_NOTE, TICKET_READ, TICKET_REPLY, TICKET_SOLVE, TICKET_WRITE
+from .policy import HC_READ, TICKET_ATTACH, TICKET_NOTE, TICKET_READ, TICKET_REPLY, TICKET_SOLVE, TICKET_WRITE
 
 __all__ = [
     "AUTH_TOOLS",
@@ -222,24 +228,28 @@ _TRUNCATION_WARNING = (
 )
 
 #: Rung E1 (whole-project design §5): "triage the live queue; propose
-#: everything, change nothing." `TICKET_READ` alone - not
-#: `policy.PROFILES["readonly"]`, which also grants `HC_READ`/`PEOPLE_READ`/
-#: `REPORTING_READ`/`ADMIN_READ` that none of `get_ticket`/`search_tickets`/
-#: `list_comments`/`get_attachment` exercises - is the minimum authority
-#: this file's read tools actually need, matching their honest
-#: `read_only_hint=True` annotation exactly rather than "at least as much."
-#: No capability here ends in anything but `.read`, and none names
-#: `write`/`reply`/`close`/`solve` - `test_the_server_requests_only_read_
-#: capabilities` pins both properties. A write tool registered here by
+#: everything, change nothing." `TICKET_READ` plus `HC_READ` - not
+#: `policy.PROFILES["readonly"]`, which also grants `PEOPLE_READ`/
+#: `REPORTING_READ`/`ADMIN_READ` that nothing registered here exercises - is
+#: the minimum authority this file's read tools actually need, matching
+#: their honest `read_only_hint=True` annotation exactly rather than "at
+#: least as much." `HC_READ` joined this set once `search_articles`/
+#: `get_article` were registered below: Help Center is its own toolset
+#: (ADR-006), orthogonal to the ticket-centric rung ladder, but the same
+#: "exactly what the registered read tools need" rule applies to it as to
+#: `TICKET_READ`. No capability here ends in anything but `.read`, and none
+#: names `write`/`reply`/`close`/`solve` - `test_the_server_requests_only_
+#: read_capabilities` pins both properties. A write tool registered here by
 #: mistake still could not be reached: the gate in `policy.py` refuses any
 #: capability this set does not grant, independent of what `TOOLS` happens
-#: to list. Built from `policy.TICKET_READ` rather than the literal
-#: `"ticket.read"` so the two can never drift apart. Still exported and kept
-#: exactly as it was at E1 (not folded into `E2_CAPABILITIES`'s definition as
-#: a literal set) - `E2_CAPABILITIES` is built as `E1_CAPABILITIES | {...}`,
-#: below, so the read rung's own definition stays the single source of truth
-#: for what it grants regardless of which rung the running server requests.
-E1_CAPABILITIES: frozenset[str] = frozenset({TICKET_READ})
+#: to list. Built from `policy.TICKET_READ`/`policy.HC_READ` rather than the
+#: literal `"ticket.read"`/`"hc.read"` so the two can never drift apart.
+#: Still exported and kept exactly as it was at E1 (not folded into
+#: `E2_CAPABILITIES`'s definition as a literal set) - `E2_CAPABILITIES` is
+#: built as `E1_CAPABILITIES | {...}`, below, so the read rung's own
+#: definition stays the single source of truth for what it grants
+#: regardless of which rung the running server requests.
+E1_CAPABILITIES: frozenset[str] = frozenset({TICKET_READ, HC_READ})
 
 #: Rung E2 (whole-project design §5): "work tickets for real: + note,
 #: write." Adds exactly the four capabilities `WRITE_TOOLS`' six tools need -
@@ -387,6 +397,57 @@ _ATTACHMENT_ID_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_ARTICLE_ID_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "article_id": {
+            "type": "integer",
+            "description": "The numeric Zendesk Help Center article id.",
+        },
+    },
+    "required": ["article_id"],
+    "additionalProperties": False,
+}
+
+_ARTICLE_SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "Free-text search over Help Center article titles and bodies.",
+        },
+        "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page number for offset paging. Defaults to 1.",
+        },
+        "per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Results per page for offset paging. Defaults to 25.",
+        },
+    },
+    "required": ["query"],
+    "additionalProperties": False,
+}
+
+#: Appended to `get_article`/`search_articles`' descriptions. Deliberately NOT
+#: `_HTML_BODY_NOTE`: a Help Center article's HTML field is named `body`, not
+#: `html_body`, so `backend._defang_bodies` never reaches its markdown-
+#: conversion or hidden-text branches for it - only `_PLAIN_BODY_KEYS`'
+#: codepoint stripping applies, because `"body"` is already a member of that
+#: tuple. Claiming the same protection `_HTML_BODY_NOTE` describes for ticket
+#: content would overstate what this path actually does; this note says the
+#: narrower, honest thing instead - the project's own standard (CLAUDE.md:
+#: "do not describe unimplemented things as working") applies to a tool
+#: description's claims about its own output just as much as to a README.
+_ARTICLE_BODY_NOTE = (
+    " `body` is Zendesk's raw HTML, with suspicious codepoints (e.g. bidi overrides) stripped - "
+    "unlike a ticket's `html_body`, it is NOT converted to Markdown and carries no `hidden_text` "
+    "detection, since Zendesk's own hidden-text concealment path (CSS display:none and similar) "
+    "was built for ticket/comment HTML, not Help Center articles."
+)
+
 #: Appended to every tool description whose result can carry a ticket/comment
 #: envelope with an `html_body` field (Important 4, final whole-branch
 #: review). `grep -i "html\|markdown\|hidden_text"` over this module, `tools.py`
@@ -411,12 +472,14 @@ _HTML_BODY_NOTE = (
     "changed, so its absence is a claim that the content is as Zendesk returned it."
 )
 
-#: The four read tools this server exposes. Scoped by tests independently of
+#: The six read tools this server exposes. Scoped by tests independently of
 #: `TOOLS` below - see the module docstring's note on why the two names exist.
 #: `get_attachment` lives here, not in `WRITE_TOOLS`, per the orchestrator
 #: amendment to this task's brief: it gates on `TICKET_READ`
 #: (`policy._GATES["get_attachment"]`), so its collection matches its gate
-#: and its annotation with no special case.
+#: and its annotation with no special case. `search_articles`/`get_article`
+#: gate on `HC_READ` instead, the same read-only, non-destructive shape as
+#: every other member here.
 READ_TOOLS: list[mcp_types.Tool] = [
     mcp_types.Tool(
         name="get_ticket",
@@ -451,6 +514,22 @@ READ_TOOLS: list[mcp_types.Tool] = [
             "part of the upload/attach workflow - it does not create, change or delete anything."
         ),
         input_schema=_ATTACHMENT_ID_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="search_articles",
+        description=(
+            "Search Zendesk Help Center articles by free-text query, as the raw upstream "
+            "envelope. Covers published knowledge-base content, not ticket data - use "
+            "search_tickets for that." + _ARTICLE_BODY_NOTE
+        ),
+        input_schema=_ARTICLE_SEARCH_SCHEMA,
+        annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False),
+    ),
+    mcp_types.Tool(
+        name="get_article",
+        description="Fetch one Help Center article by id, as the full raw article envelope." + _ARTICLE_BODY_NOTE,
+        input_schema=_ARTICLE_ID_SCHEMA,
         annotations=mcp_types.ToolAnnotations(read_only_hint=True, destructive_hint=False),
     ),
 ]
@@ -1412,6 +1491,8 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
         "search_tickets",
         "list_comments",
         "get_attachment",
+        "search_articles",
+        "get_article",
         "update_ticket",
         "assign_ticket",
         "add_internal_note",
@@ -1441,6 +1522,14 @@ def call_tool_sync(name: str, arguments: dict[str, Any]) -> str:
     if name == "get_attachment":
         envelope = client.get_attachment(attachment_id=arguments["attachment_id"])
         return json.dumps(_untrusted.wrap_attachment(envelope), indent=2)
+    if name == "search_articles":
+        page = arguments.get("page", 1)
+        per_page = arguments.get("per_page", 25)
+        envelope = client.search_articles(query=arguments["query"], page=page, per_page=per_page)
+        return json.dumps(_untrusted.wrap_article_search(envelope), indent=2)
+    if name == "get_article":
+        envelope = client.get_article(article_id=arguments["article_id"])
+        return json.dumps(_untrusted.wrap_article(envelope), indent=2)
     if name == "update_ticket":
         envelope = client.update_ticket(ticket_id=arguments["ticket_id"], fields=arguments["fields"])
         return json.dumps(_untrusted.wrap_ticket(envelope), indent=2)

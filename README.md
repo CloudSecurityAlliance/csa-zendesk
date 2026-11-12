@@ -10,13 +10,16 @@ coverage**.
 > policy, and a thin `ZendeskClient`.
 >
 > **What exists: `csa-zendesk-mcp`, a stdio MCP server at rung E2** — "work tickets for real:
-> + note, write" — see [Using the MCP server](#using-the-mcp-server) below. Ten tools:
-> four reads (`get_ticket`, `search_tickets`, `list_comments`, `get_attachment`), six writes
-> (`update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`,
-> `delete_upload`), plus three auth-lifecycle tools (`authenticate`, `auth_status`, `logout`)
-> that sit outside the capability model by design (ADR-017) so a user never has to leave the
-> session to sign in or out. `reply_publicly`, `merge_tickets` and `close_ticket` are
-> deliberately **not** registered — see "What does not exist" below.
+> + note, write" — see [Using the MCP server](#using-the-mcp-server) below. Twelve tools:
+> six reads (`get_ticket`, `search_tickets`, `list_comments`, `get_attachment`,
+> `search_articles`, `get_article`), six writes (`update_ticket`, `assign_ticket`,
+> `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload`), plus three
+> auth-lifecycle tools (`authenticate`, `auth_status`, `logout`) that sit outside the
+> capability model by design (ADR-017) so a user never has to leave the session to sign in or
+> out. `search_articles`/`get_article` gate on `hc.read`, not `ticket.read` — Help Center is
+> its own toolset (ADR-006) — and read published Help Center articles, not ticket content.
+> `reply_publicly`, `merge_tickets` and `close_ticket` are deliberately **not** registered —
+> see "What does not exist" below.
 >
 > **What has not been verified: any write, against a live ticket.** The read path — OAuth,
 > the MCP handshake, the allowlist failing closed, ticket text wrapped as untrusted data — was
@@ -188,6 +191,13 @@ admin-configuration tool needs it. `impersonate` is deliberately absent — it i
 would break the invariant that this tool can do nothing in Zendesk that its operator could not
 already do.
 
+**`search_articles`/`get_article` need no new scope and no client re-registration.** Zendesk's
+`read` scope is documented as *"Read all data. Gives access to GET endpoints"* — not scoped to
+Ticketing specifically — and it is already both on the registered ceiling above and the default
+`CSA_ZENDESK_SCOPES` requests. A token already granted `read` (confirm with `csa-zendesk auth
+status`) already carries everything these two tools need; re-authenticating is only required if
+your stored token somehow carries a narrower scope than `read`.
+
 ### Getting a token
 
 **OAuth needs a browser, and that is not a limitation to engineer around.** The consent screen is
@@ -245,22 +255,32 @@ python3 scripts/probe_families.py    # 43/49 families reachable (as last measure
 ## Using the MCP server
 
 **This rung is E2 — "work tickets for real: + note, write."** `csa-zendesk-mcp` (the console
-script `src/csa_zendesk/server.py` registers) exposes thirteen tools — ten that touch ticket
-data, plus the three auth-lifecycle tools (`authenticate`, `auth_status`, `logout`). The ten:
-four reads — `get_ticket`,
-`search_tickets`, `list_comments`, `get_attachment` — and six writes — `update_ticket`,
-`assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`, `delete_upload` — and
-connects with `TICKET_READ`, `TICKET_WRITE`, `TICKET_NOTE`, `TICKET_SOLVE` and `TICKET_ATTACH`
-(`server.E2_CAPABILITIES`), nothing more. `reply_publicly`, `merge_tickets` and `close_ticket`
-are not registered at all — a tool the model can see but must not use is worse than one that is
-simply absent — so no capability grant here can reach them. `policy.py`'s gate refuses any
-capability `E2_CAPABILITIES` does not grant, independent of what the tool table lists.
+script `src/csa_zendesk/server.py` registers) exposes fifteen tools — twelve that touch ticket
+or Help Center data, plus the three auth-lifecycle tools (`authenticate`, `auth_status`,
+`logout`). The twelve: six reads — `get_ticket`,
+`search_tickets`, `list_comments`, `get_attachment`, `search_articles`, `get_article` — and six
+writes — `update_ticket`, `assign_ticket`, `add_internal_note`, `solve_ticket`, `upload_file`,
+`delete_upload` — and connects with `TICKET_READ`, `HC_READ`, `TICKET_WRITE`, `TICKET_NOTE`,
+`TICKET_SOLVE` and `TICKET_ATTACH` (`server.E2_CAPABILITIES`), nothing more. `reply_publicly`,
+`merge_tickets` and `close_ticket` are not registered at all — a tool the model can see but
+must not use is worse than one that is simply absent — so no capability grant here can reach
+them. `policy.py`'s gate refuses any capability `E2_CAPABILITIES` does not grant, independent
+of what the tool table lists.
 
 **`get_attachment` is a read, not a write**, even though it is documented here and not above: it
 gates on `TICKET_READ`, the same capability rung E1 already grants, so it works at E1 too —
 reading a ticket's attachments is no more privileged than reading the ticket itself. It is also
 scoped by *neither* allowlist: an attachment is named by `attachment_id`, not `ticket_id`, so
 there is no ticket for `CSA_ZD_ALLOWLIST_READ` to check against — only the capability gates it.
+
+**`search_articles`/`get_article` read Zendesk Help Center articles, not tickets**, and gate on
+`HC_READ` — its own capability (ADR-006 names `help_center` as its own toolset), granted at E1
+already alongside `TICKET_READ`, not something E2 adds. They are also unscoped by either
+allowlist, for a different reason than `get_attachment`'s: a Help Center article is published
+knowledge-base content, not customer correspondence, so the blast-radius concern
+`CSA_ZD_ALLOWLIST_READ` exists for (narrowing which *tickets* a credential may act on) has no
+equivalent here — there is nothing more sensitive to narrow access to than what is already on
+the public or sign-in-gated Help Center site.
 
 **The `server` extra is not installed by default** — the library itself has no dependency on the
 MCP SDK, so a consumer who only wants the typed `ZendeskClient` never pulls it in:

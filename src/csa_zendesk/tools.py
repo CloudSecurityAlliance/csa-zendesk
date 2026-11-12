@@ -382,4 +382,13 @@ TOOLS: dict[str, ToolSpec] = {
     # attachment itself, not a ticket, so there is no ticket_id on this call
     # for CSA_ZD_ALLOWLIST_READ to check against.
     "get_attachment": ToolSpec("ticket.read"),
+    # hc.read, not ticket.read: Help Center articles are published knowledge-base
+    # content, not customer correspondence - the blast-radius concern
+    # CSA_ZD_ALLOWLIST_READ exists for (narrowing which TICKETS a credential may
+    # act on) has no analogue here, so neither tool carries a subject_var. There
+    # is also no existing allowlist variable to scope one against: adding a new
+    # CSA_ZD_ALLOWLIST_HELP_CENTER for two read-only tools over already-public
+    # content would be machinery with nothing to protect.
+    "search_articles": ToolSpec("hc.read"),
+    "get_article": ToolSpec("hc.read"),
 }

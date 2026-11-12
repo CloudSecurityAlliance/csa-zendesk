@@ -13,6 +13,32 @@ change, possibly incompatibly, between `0.x` releases. `1.0.0` is the commitment
 have stopped moving. Within `0.x`, a MINOR bump means new capability (tools, operations);
 a PATCH bump means a fix with no surface change.
 
+## [Unreleased]
+
+**Help Center reads.** `search_articles`/`get_article` give this server its first Help Center
+tools, gated on `hc.read` — a capability `policy.py` reserved from the start (ADR-006 names
+`help_center` as its own toolset, orthogonal to the ticket-centric E1-E5 ladder) but that had
+no tool to back it until now. Both read-only, granted at E1 alongside `TICKET_READ` rather than
+requiring any write-capable rung.
+
+### Added
+- `search_articles(query, page=1, per_page=25)` — `GET /api/v2/help_center/articles/search`,
+  the older of Zendesk's two Help Center search endpoints (API-SURFACE.md §4b / TODO.md A3):
+  `/api/v2/guide/search` 400s without a `filter` object and then again without
+  `filter[locales]`, a contract nobody has established yet, so this is deliberately not that
+  one. Same offset-paging ceiling `search_tickets` enforces (`_refuse_past_search_ceiling`,
+  reused rather than reimplemented).
+- `get_article(article_id)` — `GET /api/v2/help_center/articles/{article_id}`.
+- Neither tool carries a `subject_var`: a Help Center article is published knowledge-base
+  content, not customer correspondence, so the per-ticket blast-radius concern
+  `CSA_ZD_ALLOWLIST_READ` exists for has no equivalent here, and there is no existing allowlist
+  variable to scope one against.
+- Both tools' envelopes pass through `_defang_bodies` for codepoint stripping (an article's
+  `body` key is already a member of `_PLAIN_BODY_KEYS`) but **not** the `html_body`
+  markdown-conversion or `hidden_text` detection paths — those key on `html_body` specifically,
+  which Help Center articles do not carry (their HTML field is named `body`). Each tool's
+  description says this plainly rather than reusing `_HTML_BODY_NOTE`'s stronger claim.
+
 ## [0.3.1] - 2026-09-29
 ### Fixed
 - **The credential store could not write a token on Windows at all.** `_ensure_dir`

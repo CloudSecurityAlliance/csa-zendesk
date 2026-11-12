@@ -249,6 +249,8 @@ _GATES: dict[str, Gate] = {
     # Reading an attachment already on a ticket is a read, not the act of
     # creating an orphaned upload - see Backend.get_attachment's own comment.
     "get_attachment": TICKET_READ,
+    "search_articles": HC_READ,
+    "get_article": HC_READ,
 }
 
 

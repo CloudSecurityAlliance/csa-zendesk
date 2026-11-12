@@ -128,3 +128,13 @@ def test_the_client_passes_delete_upload_envelopes_through_unshaped():
 def test_the_client_passes_get_attachment_envelopes_through_unshaped():
     c = ZendeskClient(FakeBackend())
     assert c.get_attachment(attachment_id=42) == {"attachment": {"id": 42}}
+
+
+def test_the_client_passes_search_articles_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.search_articles(query="password reset") == {"results": [], "count": 0}
+
+
+def test_the_client_passes_get_article_envelopes_through_unshaped():
+    c = ZendeskClient(FakeBackend())
+    assert c.get_article(article_id=99) == {"article": {"id": 99}}

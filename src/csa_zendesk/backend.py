@@ -436,6 +436,10 @@ class Backend(Protocol):
 
     def get_attachment(self, *, attachment_id: int) -> Envelope: ...
 
+    def search_articles(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope: ...
+
+    def get_article(self, *, article_id: int) -> Envelope: ...
+
 
 class ApiBackend:
     """The real thing."""
@@ -838,6 +842,34 @@ class ApiBackend:
         # already reached somewhere.
         return self._http.get(f"/api/v2/attachments/{_path_id(attachment_id, name='attachment_id')}")
 
+    def search_articles(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
+        # analysis/operation-inventory.csv row: help_center,Help Center Search,GET,
+        # /api/v2/help_center/articles/search,ArticleSearch,Search Articles,,,
+        #
+        # There are two Help Center search endpoints (API-SURFACE.md §4b /
+        # TODO.md A3), and this is deliberately the older one, not
+        # `/api/v2/guide/search`: the newer endpoint 400s without a `filter`
+        # object, then again without `filter[locales]` - a contract nobody has
+        # established yet - while this one is confirmed working, offset-paginated
+        # (`count`, `page`, `page_count`, `per_page`, `next_page`, `results`).
+        # Same ceiling as search_tickets (API-SURFACE.md §5.2): unconfirmed for
+        # Help Center specifically, but refusing early is the same bet
+        # search_tickets already makes rather than letting an opaque 422 reach
+        # the caller.
+        _refuse_past_search_ceiling(page=page, per_page=per_page)
+        return _defang_bodies(
+            self._http.get(
+                "/api/v2/help_center/articles/search", params={"query": query, "page": page, "per_page": per_page}
+            )
+        )
+
+    def get_article(self, *, article_id: int) -> Envelope:
+        # analysis/operation-inventory.csv row: help_center,Articles,GET,
+        # /api/v2/help_center/articles/{article_id},ShowArticleNoLocale,Show
+        # Article,,, - no .json suffix, the same convention get_ticket follows
+        # and for the same reason: the inventory's path column omits it.
+        return _defang_bodies(self._http.get(f"/api/v2/help_center/articles/{_path_id(article_id, name='article_id')}"))
+
 
 class FakeBackend:
     """In-memory double, faithful to the shapes observed live.
@@ -1018,3 +1050,16 @@ class FakeBackend:
         # Canned: no per-attachment store exists to look `attachment_id` up
         # in, same reasoning as upload_file/delete_upload above.
         return {"attachment": {"id": attachment_id}}
+
+    def search_articles(self, *, query: str, page: int = 1, per_page: int = 25) -> Envelope:
+        # Canned, like search_tickets: this fake does not implement Zendesk's
+        # query language against a store. Still enforces the same 1000-result
+        # ceiling ApiBackend does, so a fake that let this through would not
+        # pass a test the real API rejects.
+        _refuse_past_search_ceiling(page=page, per_page=per_page)
+        return {"results": [], "count": 0}
+
+    def get_article(self, *, article_id: int) -> Envelope:
+        # Canned: no per-article store exists to look `article_id` up in,
+        # same reasoning as get_attachment above.
+        return {"article": {"id": article_id}}

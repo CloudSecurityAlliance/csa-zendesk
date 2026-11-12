@@ -14,3 +14,5 @@ update_trigger,PUT,/api/v2/triggers/{trigger_id},none,write,reversible,internal,
 upload_file,POST,/api/v2/uploads,none,attach,reversible,internal,ticket.attach
 delete_upload,DELETE,/api/v2/uploads/{token},none,delete,recoverable-with-effort,internal,ticket.attach
 get_attachment,GET,/api/v2/attachments/{attachment_id},none,read,n/a,internal,ticket.read
+search_articles,GET,/api/v2/help_center/articles/search,none,read,n/a,internal,hc.read
+get_article,GET,/api/v2/help_center/articles/{article_id},none,read,n/a,internal,hc.read

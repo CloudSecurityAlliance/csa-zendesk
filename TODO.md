@@ -209,6 +209,21 @@ checked against a live tenant's real HTML shapes.
 
 ---
 
+## I. Help Center read tools debts — owed before any Help Center write tool
+
+`search_articles`/`get_article` shipped as this server's first Help Center tools, gated on
+`hc.read` (a capability `policy.py` reserved since ADR-006 but had no tool to back until now).
+Both are reads only; nothing here grants `hc.write`/`hc.delete`.
+
+| | Item | Status | Notes |
+|---|---|---|---|
+| I1 | **A3's `guide/search` filter contract is still not established.** `search_articles` deliberately uses the older, confirmed-working `/api/v2/help_center/articles/search`, not `/api/v2/guide/search` — A3 itself remains open and is not resolved by this addition. | open | See A3 above; this just picks the endpoint that already works rather than solving the newer one's contract. |
+| I2 | **Only `search_articles`/`get_article` exist — `list_articles`, `list_categories`, `list_sections`, and the per-category/per-section article listings (analysis/operation-inventory.csv's `help_center,Articles`/`Categories`/`Sections` families) are not built.** Deliberately narrow: these two cover "find an article by keyword" and "fetch one by id," the shape a support workflow actually needs; browsing a category tree is a different, unasked-for use case. | open | Revisit if a ticket workflow actually needs category/section browsing rather than keyword search. |
+| I3 | **Locale is not supported.** Every path used is the `NoLocale` variant (`ShowArticleNoLocale`, the no-locale `ArticleSearch`) — A6's "is Help Center localisation real work here" is still unanswered, and these two tools do not answer it either way. | open | |
+| I4 | **No tenant-config setting has been checked for article visibility.** Whether a restricted (sign-in-required, or user-segment-restricted) article is visible through these tools depends on the authorising agent's own Zendesk permissions (API-SURFACE.md §7.2c: the token's authority is the intersection of scope, the person, and the tool surface) — unverified against a live restricted article. | open | Probe before relying on these tools to confirm a restricted article is or is not reachable by a given credential. |
+
+---
+
 ## Consideration pile — deliberately not committed to
 
 Recorded so they are not re-proposed as oversights.
