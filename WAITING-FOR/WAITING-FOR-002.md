@@ -39,8 +39,9 @@ gh api -X PUT repos/CloudSecurityAlliance/csa-zendesk/branches/main/protection/r
   -f strict=true -f 'contexts[]=lint' -f 'contexts[]=test' -f 'contexts[]=gates'
 ```
 
-Note `test` is a matrix job across Python 3.10–3.13, so confirm whether the reported
-contexts are one name or four before setting them; require all of whatever it reports.
+Note `test` is a matrix job (Python 3.10–3.13 when this was written; one row, 3.14, since the
+floor moved to `>=3.14`), so confirm whether the reported contexts are one name or several
+before setting them; require all of whatever it reports.
 
 ## Resolution
 

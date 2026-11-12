@@ -482,7 +482,7 @@ it deliberately **deviates** — with the reasoning and what would bring it back
 ## Development
 
 ```bash
-python3 -m venv .venv
+python3.14 -m venv .venv    # 3.14, the standard (GIL) build: CSA's Python standard (DEC-025)
 ./.venv/bin/pip install -e '.[dev,server]'
 ```
 

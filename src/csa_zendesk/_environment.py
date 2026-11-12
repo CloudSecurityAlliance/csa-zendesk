@@ -166,7 +166,7 @@ def describe_environment(check_pypi: bool = False) -> Environment:
     if installed_via.startswith("pip (shared"):
         notes.append(
             "Installed into a shared environment: another project's pin can hold this "
-            f"package at an old version. `uv tool install {DIST_NAME}[server]` isolates it."
+            f"package at an old version. `uv tool install --python 3.14 '{DIST_NAME}[server]'` isolates it."
         )
 
     return Environment(
