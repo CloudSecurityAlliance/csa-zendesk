@@ -36,7 +36,7 @@ def _authorised(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
 
 
 def test_an_anonymous_user_object_is_treated_as_unauthenticated(monkeypatch, tmp_path):
-    # CLAUDE.md / API-SURFACE.md §5.1 invariant: users/me.json answers HTTP 200
+    # AGENTS.md / API-SURFACE.md §5.1 invariant: users/me.json answers HTTP 200
     # with an "Anonymous user" object when wholly unauthenticated. A naive
     # whoami reports success for a credential that authenticates nothing.
     _authorised(monkeypatch, tmp_path)

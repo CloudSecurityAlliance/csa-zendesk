@@ -1701,7 +1701,7 @@ def main() -> int:
     and printed here: this module never touches stdout (see the module
     docstring), and inventing a stderr message for a case no test exercises
     is exactly the kind of behaviour-to-fill-a-branch this project's
-    coverage gate exists to refuse (CLAUDE.md). An operator diagnosing a dead
+    coverage gate exists to refuse (AGENTS.md). An operator diagnosing a dead
     server reads the client's own logs or the interpreter's traceback on
     stderr, same as any other Python process.
     """

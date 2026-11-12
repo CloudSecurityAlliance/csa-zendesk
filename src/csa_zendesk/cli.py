@@ -11,7 +11,7 @@ revoke path E15 originally called out as missing:
   `auth logout`  revoke the stored token server-side, then clear the local file
 
 **Output channel, decided deliberately and applied consistently:** this module
-lives inside the package, so the same stdout prohibition CLAUDE.md states for
+lives inside the package, so the same stdout prohibition AGENTS.md states for
 the library applies here too - a stray byte on stdout under stdio MCP corrupts
 the JSON-RPC channel, and `tests/test_public_api.py`'s import-time guard walks
 every module in the package looking for exactly that. All prompts, narration
