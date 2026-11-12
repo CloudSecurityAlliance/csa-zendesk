@@ -456,8 +456,8 @@ class PolicyBackend:
     Python 3.12+, `typing.Protocol`'s `isinstance` check uses
     `inspect.getattr_static()`, which does not consult `__getattr__`, so a
     method that existed only dynamically would satisfy `hasattr` but fail
-    `isinstance` (and would do so inconsistently across the 3.10-3.13 floor,
-    since `getattr_static` is the 3.12 change). `__getattr__` remains the
+    `isinstance` (and would have done so inconsistently across the 3.10-3.13
+    floor this package once had, since `getattr_static` is the 3.12 change). `__getattr__` remains the
     fail-closed catch-all for every name absent from `_GATES`: the generation
     loop covers what is declared, `__getattr__` covers what is not, and a
     forgotten `_GATES` entry still turns a method off rather than leaving it
