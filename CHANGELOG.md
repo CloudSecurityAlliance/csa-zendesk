@@ -13,6 +13,13 @@ change, possibly incompatibly, between `0.x` releases. `1.0.0` is the commitment
 have stopped moving. Within `0.x`, a MINOR bump means new capability (tools, operations);
 a PATCH bump means a fix with no surface change.
 
+## [Unreleased]
+### Changed
+- **The README and the package summary say this project is not affiliated with or endorsed
+  by Zendesk.** The name carries Zendesk's, so the README now states that near the top, with a
+  trademark notice, and the PyPI summary ends with it. Documentation and package metadata
+  only: no code, tool or behaviour changed.
+
 ## [0.3.1] - 2026-09-29
 ### Fixed
 - **The credential store could not write a token on Windows at all.** `_ensure_dir`

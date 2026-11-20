@@ -3,6 +3,8 @@
 A Python library and local stdio MCP server over the Zendesk REST API, targeting **100% API
 coverage**.
 
+Not affiliated with or endorsed by Zendesk. Zendesk is a trademark of its owner.
+
 > **Status: Block 0 (foundations), Block 0b (OAuth), Block 0e (a read-only MCP server) and
 > Block 1 (the write surface and attachments) are complete.** `src/` holds the typed error
 > hierarchy, the error parser, the pagination guard, a transport with OAuth end to end
