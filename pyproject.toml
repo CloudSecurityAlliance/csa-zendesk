@@ -47,7 +47,7 @@ csa-zendesk-mcp = "csa_zendesk.server:main"
 # mcp is NOT optional in the sibling project csa-skilljar - it was demoted to a
 # required dependency there because an optional extra meant users installed the
 # package and found no server. Revisit when the server module exists.
-dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "pyyaml>=6"]
+dev = ["pytest>=9.2.0", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "pyyaml>=6"]
 # server.py imports `mcp` at module scope, so the library stays importable
 # without it (`dependencies` above has no MCP SDK) while the server extra pulls
 # it in. tests/test_public_api.py's import-time stdout guard imports every
